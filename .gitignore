@@ -1,0 +1,22 @@
+# Build products
+ais-api/build/
+ais-api/.gradle/
+ais-api/config/
+ais-api/data/
+ais-api/logs/
+ais-api/uploads/
+ais-web/dist/
+ais-web/node_modules/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env.local

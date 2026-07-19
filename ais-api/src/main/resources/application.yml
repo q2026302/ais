@@ -1,0 +1,85 @@
+server:
+  port: ${SERVER_PORT:11111}
+  servlet:
+    context-path: ${APP_CONTEXT_PATH:/ais}
+spring:
+  application:
+    name: ais
+  profiles:
+    default: sqlite
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 50MB
+
+llm:
+  # Enable only while diagnosing provider requests. Request/response bodies are
+  # logged in full; authentication headers are always masked.
+  debug-logging:
+    enabled: ${LLM_DEBUG_LOGGING_ENABLED:false}
+    max-records: ${LLM_DEBUG_LOGGING_MAX_RECORDS:20}
+  model:
+    chat: ${LLM_DEFAULT_CHAT_MODEL:}
+    image: ${LLM_DEFAULT_IMAGE_MODEL:}
+  providers:
+    chat: []
+    image: []
+
+logging:
+  file:
+    name: ${APP_LOG_FILE:${APP_LOG_DIR:./logs}/application.log}
+
+# One-time historical data migration and explicitly enabled orphan-file maintenance.
+maintenance:
+  history-migration:
+    enabled: true
+  orphan-cleanup:
+    enabled: false
+    dry-run: true
+    upload-root: ${APP_UPLOAD_DIR:}
+
+# Access control for browser and Feishu H5 embeds.
+# When the user table is empty, APP_INITIAL_ADMIN_PASSWORD_MD5 seeds the first admin;
+# when omitted, the temporary default password is admin and a warning is printed.
+# Relocatable application directories. Relative paths are resolved below app.base-dir.
+app:
+  base-dir: ${APP_BASE_DIR:.}
+  config-dir: ${APP_CONFIG_DIR:}
+  data-dir: ${APP_DATA_DIR:}
+  log-dir: ${APP_LOG_DIR:}
+  upload-dir: ${APP_UPLOAD_DIR:}
+  security:
+    enabled: ${APP_SECURITY_ENABLED:true}
+    session-ttl: ${APP_SESSION_TTL:12h}
+    token-secret: ${APP_TOKEN_SECRET:}
+    cors-allowed-origins: ${APP_CORS_ORIGINS:*}
+    initial-admin-username: ${APP_INITIAL_ADMIN_USERNAME:admin}
+    initial-admin-password-md5: ${APP_INITIAL_ADMIN_PASSWORD_MD5:}
+    # Defaults for login protection; can be changed later in Admin UI.
+    max-failures: ${APP_LOGIN_MAX_FAILURES:5}
+    failure-window-minutes: ${APP_LOGIN_FAILURE_WINDOW_MINUTES:15}
+    lock-duration-minutes: ${APP_LOGIN_LOCK_DURATION_MINUTES:30}
+    captcha-enabled: ${APP_LOGIN_CAPTCHA_ENABLED:true}
+
+# 飞书机器人配置：生产环境请用环境变量覆盖密钥。
+# FEISHU_ENABLED、FEISHU_APP_ID、FEISHU_APP_SECRET、FEISHU_VERIFICATION_TOKEN、
+# FEISHU_ENCRYPT_KEY、FEISHU_API_BASE_URL、FEISHU_TRANSPORT。
+# 默认 websocket：在飞书后台选择“使用长连接接收事件”，无需配置公网回调地址。
+# 如需使用传统回调，可设置 transport: http，此时回调地址为 POST /api/feishu/events。
+feishu:
+  # 可选 websocket（默认） / http
+  transport: ${FEISHU_TRANSPORT:websocket}
+  enabled: ${FEISHU_ENABLED:false}
+  app-id: ${FEISHU_APP_ID:}
+  app-secret: ${FEISHU_APP_SECRET:}
+  verification-token: ${FEISHU_VERIFICATION_TOKEN:}
+  # 仅当飞书后台启用 Encrypt Key 时填写。
+  encrypt-key: ${FEISHU_ENCRYPT_KEY:}
+  api-base-url: ${FEISHU_API_BASE_URL:https://open.feishu.cn/open-apis}

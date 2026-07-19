@@ -1,0 +1,41 @@
+# Test profile keeps the sqlite Spring profile so dialect-specific beans
+# (e.g. HistoricalMigrationExecutor) resolve, while using H2 for stable
+# Hibernate integration tests.
+spring:
+  profiles:
+    active: sqlite
+  datasource:
+    url: jdbc:h2:mem:ais;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+    hikari:
+      maximum-pool-size: 5
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+app:
+  security:
+    enabled: false
+    token-secret: test-secret-for-unit-tests-only
+    initial-admin-username: admin
+    initial-admin-password-md5: 5ebe2294ecd0e0f08eab7690d2a6ee69
+    max-failures: 5
+    failure-window-minutes: 15
+    lock-duration-minutes: 30
+    captcha-enabled: true
+
+feishu:
+  enabled: false
+
+maintenance:
+  history-migration:
+    enabled: false
+  orphan-cleanup:
+    enabled: false

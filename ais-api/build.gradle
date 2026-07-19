@@ -1,0 +1,71 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '4.1.0'
+	id 'io.spring.dependency-management' version '1.1.7'
+	id 'org.graalvm.buildtools.native' version '0.10.6'
+}
+
+group = 'com.gs'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+def frontendDirectory = file('../ais-web')
+def frontendDistDirectory = file('../ais-web/dist')
+
+tasks.register('buildFrontend', Exec) {
+	workingDir frontendDirectory
+	commandLine 'yarn', 'build'
+	inputs.files(fileTree(frontendDirectory) {
+		exclude 'node_modules', 'dist'
+	})
+	outputs.dir frontendDistDirectory
+}
+
+tasks.named('processResources') {
+	dependsOn tasks.named('buildFrontend')
+	from(frontendDistDirectory) {
+		into 'static'
+	}
+}
+
+graalvmNative {
+	binaries {
+		main {
+			imageName = 'ais'
+			buildArgs.add('--no-fallback')
+			buildArgs.add('--initialize-at-run-time=org.hibernate.boot.model.internal.DialectOverridesAnnotationHelper')
+		}
+	}
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.security:spring-security-crypto'
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
+	implementation 'com.larksuite.oapi:oapi-sdk:2.8.4'
+	runtimeOnly 'com.mysql:mysql-connector-j'
+	runtimeOnly 'org.xerial:sqlite-jdbc'
+	implementation 'org.hibernate.orm:hibernate-community-dialects'
+	implementation 'org.hibernate.orm:hibernate-graalvm'
+	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	testRuntimeOnly 'com.h2database:h2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

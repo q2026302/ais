@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: ${APP_MYSQL_URL:jdbc:mysql://127.0.0.1:3306/ais?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${APP_MYSQL_USER:ais}
+    password: ${APP_MYSQL_PASSWORD:ais}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect

@@ -1,0 +1,14 @@
+# Override main application-sqlite.yml during tests so the real SQLite file
+# datasource is not used. Integration tests run on H2 (see application.yml).
+spring:
+  datasource:
+    url: jdbc:h2:mem:ais;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect

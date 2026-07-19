@@ -1,0 +1,11 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:${APP_SQLITE_PATH:${APP_DATA_DIR:./data}/ais.db}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      connection-init-sql: PRAGMA foreign_keys=ON
+  jpa:
+    properties:
+      hibernate:
+        dialect: org.hibernate.community.dialect.SQLiteDialect
