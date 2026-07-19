@@ -100,6 +100,12 @@ public class ModelProvider {
     @Column(name = "price_description", length = 255)
     private String priceDescription;
 
+    @Column(name = "billing_mode", length = 32)
+    private String billingMode;
+
+    @Column(name = "price_per_unit", precision = 10, scale = 6)
+    private BigDecimal pricePerUnit;
+
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -236,6 +242,10 @@ public class ModelProvider {
     public void setPriceCnyMax(BigDecimal value) { this.priceCnyMax = value; }
     public String getPriceDescription() { return priceDescription; }
     public void setPriceDescription(String value) { this.priceDescription = value; }
+    public String getBillingMode() { return billingMode; }
+    public void setBillingMode(String value) { this.billingMode = value; }
+    public BigDecimal getPricePerUnit() { return pricePerUnit; }
+    public void setPricePerUnit(BigDecimal value) { this.pricePerUnit = value; }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;

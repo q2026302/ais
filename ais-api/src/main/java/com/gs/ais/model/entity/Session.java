@@ -40,6 +40,9 @@ public class Session {
     @Column(name = "external_chat_id", length = 255)
     private String externalChatId;
 
+    @Column(name = "user_id")
+    private Long userId;
+
     /** Whether this session may still receive its automatic LLM-generated title. */
     @JsonIgnore
     @Column(name = "auto_title_enabled", nullable = false)
@@ -83,4 +86,6 @@ public class Session {
     public void setExternalChatId(String externalChatId) { this.externalChatId = externalChatId; }
     public boolean isAutoTitleEnabled() { return autoTitleEnabled; }
     public void setAutoTitleEnabled(boolean autoTitleEnabled) { this.autoTitleEnabled = autoTitleEnabled; }
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
 }

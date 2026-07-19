@@ -3,6 +3,7 @@ export interface Session {
   title: string
   chatProviderId: number | null
   imageProviderId: number | null
+  userId?: number | null
   createdAt: string
   updatedAt: string
 }
@@ -54,7 +55,7 @@ export interface ModelProvider {
   type: 'CHAT' | 'IMAGE'
   modelName: string
   baseUrl: string
-  apiKey: string
+  apiKey: ***
   active: boolean
   createdAt: string
   updatedAt: string
@@ -73,6 +74,8 @@ export interface ModelProvider {
   priceCnyMin?: number | null
   priceCnyMax?: number | null
   priceDescription?: string | null
+  billingMode?: string | null
+  pricePerUnit?: number | null
 }
 
 export interface ModelProviderRequest {
@@ -98,6 +101,8 @@ export interface ModelProviderRequest {
   priceCnyMin?: number | null
   priceCnyMax?: number | null
   priceDescription?: string | null
+  billingMode?: string | null
+  pricePerUnit?: number | null
 }
 
 
@@ -120,6 +125,8 @@ export interface ProviderModelRequest {
   priceCnyMin?: number | null
   priceCnyMax?: number | null
   priceDescription?: string | null
+  billingMode?: string | null
+  pricePerUnit?: number | null
 }
 
 
@@ -141,7 +148,7 @@ export interface ProviderAccount {
   providerKey: string
   name: string
   baseUrl: string
-  apiKey: string
+  apiKey: ***
   models: ModelProvider[]
   createdAt: string
   updatedAt: string
@@ -254,4 +261,44 @@ export interface LlmDebugExchange extends LlmDebugExchangeSummary {
   responseHeaders: Record<string, string[]>
   responseBodyEncoding: string | null
   responseBody: string | null
+}
+
+// Billing types
+export interface BillingRecord {
+  id: number
+  userId: number
+  providerId: number | null
+  providerName: string | null
+  modelName: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  billingMode: string | null
+  unitPrice: number | null
+  amount: number | null
+  description: string | null
+  sessionId: number | null
+  messageId: number | null
+  createdAt: string
+}
+
+export interface PageResponse<T> {
+  content: T[]
+  totalElements: number
+  totalPages: number
+  number: number
+  size: number
+}
+
+export interface MessageStatusResponse {
+  messageId: number
+  status: MessageStatus
+  imageUrl: string | null
+  content: string
+  errorMessage: string | null
+}
+
+export interface UserDefaults {
+  defaultChatProviderId: number | null
+  defaultImageProviderId: number | null
 }

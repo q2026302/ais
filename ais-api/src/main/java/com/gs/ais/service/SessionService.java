@@ -39,20 +39,33 @@ public class SessionService {
     }
 
     @Transactional(readOnly = true)
+    public List<Session> getSessionsByUserId(Long userId) {
+        if (userId == null) {
+            return sessionRepository.findAllByOrderByUpdatedAtDesc();
+        }
+        return sessionRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+    }
+
+    @Transactional(readOnly = true)
     public Session getSession(Long id) {
         return sessionRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Session not found: " + id));
     }
 
     public Session createSession() {
-        return createSession(null);
+        return createSession(null, null);
     }
 
     public Session createSession(String title) {
+        return createSession(title, null);
+    }
+
+    public Session createSession(String title, Long userId) {
         Session session = new Session();
         boolean hasCustomTitle = title != null && !title.isBlank();
         session.setTitle(normalizeTitle(title));
         session.setAutoTitleEnabled(!hasCustomTitle);
+        session.setUserId(userId);
         return sessionRepository.save(session);
     }
 

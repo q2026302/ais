@@ -21,6 +21,10 @@ export const useSessionStore = defineStore('session', () => {
   const imageProviders = ref<ModelProvider[]>([])
   const editingMessageId = ref<number | null>(null)
 
+  // Polling state for draw generation
+  const pollingIntervals = ref<Map<number, ReturnType<typeof setInterval>>>(new Map())
+  const polledMessageStatuses = ref<Map<number, { status: string; stage: string }>>(new Map())
+
   function beginOperation(
     sessionId: number,
     type: 'CHAT' | 'DRAW' | 'REGENERATE',
@@ -72,7 +76,6 @@ export const useSessionStore = defineStore('session', () => {
     if (sessionId != null) {
       const cancelOnServer = () => sessionApi.cancelPending(sessionId).catch(() => undefined)
       void cancelOnServer().then((result) => {
-        // 用户可能在后端创建 PENDING 占位消息之前就点击了终止，短暂等待后补偿一次。
         if (!result?.cancelled) {
           window.setTimeout(() => void cancelOnServer(), 350)
         }
@@ -125,8 +128,15 @@ export const useSessionStore = defineStore('session', () => {
   async function selectSession(id: number) {
     activeSessionId.value = id
     const selectedMessages = await sessionApi.getMessages(id)
-    // 防止快速切换会话时，较慢的旧请求覆盖当前会话消息。
-    if (activeSessionId.value === id) messages.value = selectedMessages
+    if (activeSessionId.value === id) {
+      messages.value = selectedMessages
+      // Resume polling for any PENDING draw messages
+      for (const msg of selectedMessages) {
+        if (msg.status === 'PENDING' && msg.messageType === 'DRAW_RESPONSE') {
+          startPolling(id, msg.id)
+        }
+      }
+    }
   }
 
   async function generate(
@@ -213,7 +223,6 @@ export const useSessionStore = defineStore('session', () => {
       return result
     } catch (e) {
       if (!isCancelled(controller, e)) markPendingChatFailed(tempAssistantId, e)
-      // Reload messages from backend to replace temp IDs with real DB IDs.
       if (activeSessionId.value === sessionId) {
         try { await selectSession(sessionId) } catch { /* ignore reload errors */ }
       }
@@ -289,6 +298,43 @@ export const useSessionStore = defineStore('session', () => {
     return tempBase - 1
   }
 
+  // Polling for draw generation status
+  function startPolling(sessionId: number, messageId: number) {
+    stopPolling(messageId)
+    const interval = setInterval(async () => {
+      try {
+        const status = await sessionApi.getMessageStatus(sessionId, messageId)
+        polledMessageStatuses.value.set(messageId, { status: status.status, stage: '' })
+
+        if (status.status === 'SUCCESS' || status.status === 'FAILED') {
+          stopPolling(messageId)
+          // Reload messages to get the final state
+          if (activeSessionId.value === sessionId) {
+            await selectSession(sessionId)
+          }
+        }
+      } catch {
+        stopPolling(messageId)
+      }
+    }, 3000)
+    pollingIntervals.value.set(messageId, interval)
+  }
+
+  function stopPolling(messageId: number) {
+    const interval = pollingIntervals.value.get(messageId)
+    if (interval) {
+      clearInterval(interval)
+      pollingIntervals.value.delete(messageId)
+    }
+    polledMessageStatuses.value.delete(messageId)
+  }
+
+  function stopAllPolling() {
+    pollingIntervals.value.forEach((interval) => clearInterval(interval))
+    pollingIntervals.value.clear()
+    polledMessageStatuses.value.clear()
+  }
+
   async function draw(request: DrawRequest, referenceFiles: UploadResponse[] = []) {
     const sessionId = activeSessionId.value
     if (sessionId == null) return
@@ -302,6 +348,10 @@ export const useSessionStore = defineStore('session', () => {
     )
     try {
       const result = await sessionApi.draw(sessionId, request, { signal: controller.signal })
+      // Start polling if the backend returned PENDING (queue-based)
+      if (result.status === 'PENDING' && result.assistantMessageId) {
+        startPolling(sessionId, result.assistantMessageId)
+      }
       if (activeSessionId.value === sessionId) await selectSession(sessionId)
       await fetchSessions()
       return result
@@ -314,9 +364,6 @@ export const useSessionStore = defineStore('session', () => {
           pending.errorMessage = e instanceof Error ? e.message : String(e)
           pending.drawPlaceholder = undefined
         }
-        // Reload messages from backend to replace temp IDs with real DB IDs.
-        // The backend's draw() method saves messages to DB before generating,
-        // so real messages exist even on failure.
         if (activeSessionId.value === sessionId) {
           try { await selectSession(sessionId) } catch { /* ignore reload errors */ }
         }
@@ -324,6 +371,26 @@ export const useSessionStore = defineStore('session', () => {
       throw e
     } finally {
       if (finishOperation(controller)) loading.value = false
+    }
+  }
+
+  // Manual refresh for a message that's still PENDING
+  async function manualRefreshMessage(messageId: number) {
+    const sessionId = activeSessionId.value
+    if (sessionId == null) return
+    try {
+      const status = await sessionApi.getMessageStatus(sessionId, messageId)
+      if (status.status === 'SUCCESS' || status.status === 'FAILED') {
+        stopPolling(messageId)
+        await selectSession(sessionId)
+        return true
+      } else {
+        // Still pending, resume polling
+        startPolling(sessionId, messageId)
+        return false
+      }
+    } catch {
+      return false
     }
   }
 
@@ -511,6 +578,8 @@ export const useSessionStore = defineStore('session', () => {
     chatProviders,
     imageProviders,
     editingMessageId,
+    pollingIntervals,
+    polledMessageStatuses,
     fetchSessions,
     fetchProviders,
     createSession,
@@ -529,5 +598,9 @@ export const useSessionStore = defineStore('session', () => {
     startEditing,
     cancelEditing,
     cancelActiveRequest,
+    startPolling,
+    stopPolling,
+    stopAllPolling,
+    manualRefreshMessage,
   }
 })

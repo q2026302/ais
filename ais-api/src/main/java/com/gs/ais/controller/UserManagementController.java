@@ -2,32 +2,33 @@ package com.gs.ais.controller;
 
 import com.gs.ais.dto.request.CreateUserRequest;
 import com.gs.ais.dto.request.ResetUserPasswordRequest;
+import com.gs.ais.dto.request.UpdateUserDefaultsRequest;
 import com.gs.ais.dto.request.UpdateUserRequest;
 import com.gs.ais.dto.response.UserResponse;
+import com.gs.ais.model.entity.AppUser;
+import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.service.UserManagementService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin/users")
 public class UserManagementController {
 
     private final UserManagementService userManagementService;
+    private final AppUserRepository appUserRepository;
 
-    public UserManagementController(UserManagementService userManagementService) {
+    public UserManagementController(UserManagementService userManagementService,
+                                    AppUserRepository appUserRepository) {
         this.userManagementService = userManagementService;
+        this.appUserRepository = appUserRepository;
     }
 
     @GetMapping
@@ -57,5 +58,42 @@ public class UserManagementController {
                                               @Valid @RequestBody ResetUserPasswordRequest request) {
         userManagementService.resetPassword(id, request);
         return ResponseEntity.noContent().build();
+    }
+
+    // User default model settings
+    @GetMapping("/defaults")
+    public ResponseEntity<Map<String, Object>> getDefaults() {
+        var principal = AuthContext.get();
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "未登录"));
+        }
+        AppUser user = appUserRepository.findByUsernameIgnoreCase(principal.subject())
+                .orElseThrow(() -> new RuntimeException("用户不存在"));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("defaultChatProviderId", user.getDefaultChatProviderId());
+        body.put("defaultImageProviderId", user.getDefaultImageProviderId());
+        return ResponseEntity.ok(body);
+    }
+
+    @PutMapping("/defaults")
+    public ResponseEntity<Map<String, Object>> updateDefaults(
+            @Valid @RequestBody UpdateUserDefaultsRequest request) {
+        var principal = AuthContext.get();
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "未登录"));
+        }
+        AppUser user = appUserRepository.findByUsernameIgnoreCase(principal.subject())
+                .orElseThrow(() -> new RuntimeException("用户不存在"));
+        if (request.getDefaultChatProviderId() != null) {
+            user.setDefaultChatProviderId(request.getDefaultChatProviderId());
+        }
+        if (request.getDefaultImageProviderId() != null) {
+            user.setDefaultImageProviderId(request.getDefaultImageProviderId());
+        }
+        appUserRepository.save(user);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("defaultChatProviderId", user.getDefaultChatProviderId());
+        body.put("defaultImageProviderId", user.getDefaultImageProviderId());
+        return ResponseEntity.ok(body);
     }
 }

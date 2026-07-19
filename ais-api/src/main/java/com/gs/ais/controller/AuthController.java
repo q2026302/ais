@@ -146,6 +146,8 @@ public class AuthController {
                 body.put("enabled", user.enabled());
                 body.put("createdAt", user.createdAt());
                 body.put("updatedAt", user.updatedAt());
+                body.put("defaultChatProviderId", user.defaultChatProviderId());
+                body.put("defaultImageProviderId", user.defaultImageProviderId());
                 return ResponseEntity.ok(body);
             } catch (AuthException ignored) {
                 return ResponseEntity.ok(Map.of(
@@ -170,6 +172,8 @@ public class AuthController {
             body.put("enabled", user.enabled());
             body.put("createdAt", user.createdAt());
             body.put("updatedAt", user.updatedAt());
+            body.put("defaultChatProviderId", user.defaultChatProviderId());
+            body.put("defaultImageProviderId", user.defaultImageProviderId());
             return ResponseEntity.ok(body);
         } catch (AuthException ex) {
             return ResponseEntity.status(401).body(Map.of(

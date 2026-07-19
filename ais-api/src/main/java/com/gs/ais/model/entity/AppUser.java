@@ -45,6 +45,12 @@ public class AppUser {
     @Column(name = "enabled", nullable = false)
     private boolean enabled = true;
 
+    @Column(name = "default_chat_provider_id")
+    private Long defaultChatProviderId;
+
+    @Column(name = "default_image_provider_id")
+    private Long defaultImageProviderId;
+
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -108,6 +114,11 @@ public class AppUser {
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
     }
+
+    public Long getDefaultChatProviderId() { return defaultChatProviderId; }
+    public void setDefaultChatProviderId(Long id) { this.defaultChatProviderId = id; }
+    public Long getDefaultImageProviderId() { return defaultImageProviderId; }
+    public void setDefaultImageProviderId(Long id) { this.defaultImageProviderId = id; }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;

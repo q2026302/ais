@@ -64,9 +64,15 @@ onMounted(async () => {
   await Promise.all([store.fetchSessions(), store.fetchProviders()])
   if (store.activeSessionId == null && store.sessions.length > 0) {
     const first = store.sessions[0]
-    if (first) await store.selectSession(first.id)
+    if (first) {
+      await store.selectSession(first.id)
+      await nextTick()
+      scrollToBottom()
+    }
   } else if (store.activeSessionId != null && store.messages.length === 0) {
     await store.selectSession(store.activeSessionId)
+    await nextTick()
+    scrollToBottom()
   }
   initialized.value = true
 })

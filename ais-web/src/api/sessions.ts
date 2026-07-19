@@ -11,6 +11,7 @@ import type {
   DrawRequest,
   MessageStatus,
   RegenerateRequest,
+  MessageStatusResponse,
 } from '@/types'
 
 export interface RequestOptions {
@@ -65,6 +66,10 @@ export const sessionApi = {
 
   getMessages(id: number): Promise<Message[]> {
     return client.get(`/api/sessions/${id}/messages`).then((r) => (r.data as Message[]).map(normalizeMessage))
+  },
+
+  getMessageStatus(sessionId: number, messageId: number): Promise<MessageStatusResponse> {
+    return client.get(`/api/sessions/${sessionId}/messages/${messageId}/status`).then((r) => r.data)
   },
 
   generate(id: number, data: GenerateRequest, options: RequestOptions = {}): Promise<GenerateResponse> {
@@ -135,8 +140,6 @@ export const sessionApi = {
   },
 
   async uploadImageReference(fileUrl: string, filename = 'history-reference.png'): Promise<UploadResponse> {
-    // fileUrl may have been resolved by normalizeMessage (e.g., /ais/api/images/xxx.png).
-    // Strip the app base path so axios doesn't double-prefix it with baseURL.
     const base = getAppBasePath().replace(/\/$/, '')
     const rawUrl = fileUrl.startsWith(base) ? fileUrl.slice(base.length) || '/' : fileUrl
     const response = await client.get(rawUrl, { responseType: 'blob' })

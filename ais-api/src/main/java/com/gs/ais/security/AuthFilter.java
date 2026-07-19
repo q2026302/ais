@@ -119,6 +119,10 @@ public class AuthFilter extends OncePerRequestFilter {
                 return true;
             }
         }
+        // User defaults are accessible by any authenticated user
+        if (pathMatcher.match("/api/admin/users/defaults", path)) {
+            return false;
+        }
         // Provider catalog: reads are USER, mutations are ADMIN.
         if (pathMatcher.match("/api/providers/**", path) || "/api/providers".equals(path)) {
             return !HttpMethod.GET.matches(method);

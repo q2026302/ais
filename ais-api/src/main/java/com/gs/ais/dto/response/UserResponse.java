@@ -13,11 +13,14 @@ public record UserResponse(
         AuthRole role,
         boolean enabled,
         String createdAt,
-        String updatedAt
+        String updatedAt,
+        Long defaultChatProviderId,
+        Long defaultImageProviderId
 ) {
     public static UserResponse from(AppUser user) {
         return new UserResponse(user.getId(), user.getUsername(), user.getDisplayName(), user.getEmail(),
-                user.getRole(), user.isEnabled(), format(user.getCreatedAt()), format(user.getUpdatedAt()));
+                user.getRole(), user.isEnabled(), format(user.getCreatedAt()), format(user.getUpdatedAt()),
+                user.getDefaultChatProviderId(), user.getDefaultImageProviderId());
     }
 
     private static String format(LocalDateTime value) {
