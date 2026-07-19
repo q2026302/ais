@@ -1,10 +1,10 @@
 # AIS — AI 创作工作台
 
-AIS（AI Studio）是一个基于 Spring Boot + Vue 3 的 AI 图像创作工作台，支持多种后端模型（ComfyUI、Agnes AI、GPT Image 2 等），提供 Web 与移动端友好的交互体验。
+AIS（AI Studio）是一个基于 Spring Boot + Vue 3 的 AI 图像创作工作台，支持多种模型及供应商，提供 Web 与移动端友好的交互体验。
 
 ## 功能特点
 
-- **多模型支持** — 集成 ComfyUI（SDXL/SD）、Agnes AI、GPT Image 2，后台可灵活切换
+- **多模型支持** — 支持多种模型及供应商（Agnes AI、GPT Image 2 等），后台可灵活切换
 - **图生图 / 文生图** — 支持文本提示词生成、参考图重绘、IP-Adapter 服装迁移
 - **会话管理** — 历史对话自动保存，支持断点续画、重新生成、图片引用
 - **移动端适配** — 独立的飞书 H5 视图，手势缩放、长按菜单、消息气泡操作
