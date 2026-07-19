@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Connection, DataAnalysis, Download, Lock, Monitor, Picture, Plus, Search, Upload, UserFilled } from '@element-plus/icons-vue'
 import type {
+  BillingRecord,
   ModelProvider,
   ProviderAccount,
   ProviderAccountRequest,
@@ -19,7 +20,7 @@ import {
   type SecuritySettings,
 } from '@/api/admin'
 import { useSessionStore } from '@/stores/session'
-import { usersApi, type ManagedUser } from '@/api/users'
+import { usersApi, type CreateUserPayload, type ManagedUser } from '@/api/users'
 import { billingApi } from '@/api/billing'
 import { adminApi } from '@/api/admin'
 import type { AuthRole } from '@/api/auth'
@@ -139,6 +140,19 @@ async function loadSectionData(section: AdminSection) {
   if (section === 'data' && !dataSectionLoaded.value) {
     await loadExportPreview()
     dataSectionLoaded.value = true
+  }
+  if (section === 'users') {
+    await loadUsers()
+  }
+  if (section === 'billing') {
+    // models are loaded via accounts already
+  }
+  if (section === 'billing-logs') {
+    await Promise.all([loadBillingLogs(), loadUsers()])
+    // populate user filter dropdown
+    if (users.value.length > 0) {
+      usersForFilter.value = users.value
+    }
   }
 }
 
@@ -377,6 +391,153 @@ function countModels(account: ProviderAccount, type: ModelProvider['type']) {
 
 function formatApiKey(value: string) {
   return value || '未配置'
+}
+
+// ====== Users management ======
+const users = ref<ManagedUser[]>([])
+const usersLoading = ref(false)
+const createDialogVisible = ref(false)
+const newUser = reactive<CreateUserPayload>({ username: '', displayName: '', email: '', role: 'USER', enabled: true })
+const newUserPassword = ref('')
+const resetPwdDialogVisible = ref(false)
+const resetPwdUserId = ref<number | null>(null)
+const resetPwdValue = ref('')
+
+async function loadUsers() {
+  usersLoading.value = true
+  try {
+    users.value = await usersApi.list()
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载用户列表失败')
+  } finally {
+    usersLoading.value = false
+  }
+}
+
+async function handleCreateUser() {
+  if (!newUser.username.trim()) {
+    ElMessage.warning('请输入用户名')
+    return
+  }
+  if (!newUserPassword.value) {
+    ElMessage.warning('请输入密码')
+    return
+  }
+  try {
+    await usersApi.create({ ...newUser }, newUserPassword.value)
+    ElMessage.success('用户创建成功')
+    createDialogVisible.value = false
+    newUser.username = ''
+    newUser.displayName = ''
+    newUser.email = ''
+    newUser.role = 'USER'
+    newUser.enabled = true
+    newUserPassword.value = ''
+    await loadUsers()
+  } catch (error: any) {
+    ElMessage.error(error.message || '创建用户失败')
+  }
+}
+
+async function handleToggleUser(user: ManagedUser) {
+  try {
+    await usersApi.update(user.id!, {
+      displayName: user.displayName || '',
+      email: user.email || '',
+      role: user.role,
+      enabled: !user.enabled,
+    })
+    ElMessage.success(user.enabled ? '用户已禁用' : '用户已启用')
+    await loadUsers()
+  } catch (error: any) {
+    ElMessage.error(error.message || '操作失败')
+  }
+}
+
+function openResetPwd(user: ManagedUser) {
+  resetPwdUserId.value = user.id
+  resetPwdValue.value = ''
+  resetPwdDialogVisible.value = true
+}
+
+async function handleResetPwd() {
+  if (!resetPwdUserId.value || !resetPwdValue.value) return
+  try {
+    await usersApi.resetPassword(resetPwdUserId.value, resetPwdValue.value)
+    ElMessage.success('密码已重置')
+    resetPwdDialogVisible.value = false
+  } catch (error: any) {
+    ElMessage.error(error.message || '重置密码失败')
+  }
+}
+
+// ====== Billing management ======
+const allModels = computed(() => {
+  const list: ModelProvider[] = []
+  for (const account of accounts.value) {
+    for (const model of account.models) {
+      list.push(model)
+    }
+  }
+  return list
+})
+
+const billingEditingModelId = ref<number | null>(null)
+const billingEditingMode = ref<string | null>(null)
+const billingEditingPrice = ref<number | null>(null)
+const billingDialogVisible = ref(false)
+
+function openBillingEdit(model: ModelProvider) {
+  billingEditingModelId.value = model.id
+  billingEditingMode.value = model.billingMode || 'per_request'
+  billingEditingPrice.value = model.pricePerUnit
+  billingDialogVisible.value = true
+}
+
+async function handleSaveBilling() {
+  if (billingEditingModelId.value == null) return
+  try {
+    await adminApi.updateModelBilling(billingEditingModelId.value, {
+      billingMode: billingEditingMode.value,
+      pricePerUnit: billingEditingPrice.value,
+    })
+    ElMessage.success('计费配置已更新')
+    billingDialogVisible.value = false
+    await refreshAll()
+  } catch (error: any) {
+    ElMessage.error(error.message || '保存计费配置失败')
+  }
+}
+
+// ====== Billing logs ======
+const billingLogs = ref<BillingRecord[]>([])
+const billingLogsLoading = ref(false)
+const billingLogsPage = ref(0)
+const billingLogsTotal = ref(0)
+const billingLogsUserFilter = ref<number | null>(null)
+const usersForFilter = ref<ManagedUser[]>([])
+
+async function loadBillingLogs() {
+  billingLogsLoading.value = true
+  try {
+    const result = await billingApi.adminLogs(billingLogsUserFilter.value, billingLogsPage.value, 20)
+    billingLogs.value = result.content
+    billingLogsTotal.value = result.totalElements
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载消费日志失败')
+  } finally {
+    billingLogsLoading.value = false
+  }
+}
+
+function formatBillingAmount(record: BillingRecord) {
+  if (record.amount != null) return `${record.amount}`
+  if (record.totalTokens != null) return `${record.totalTokens} tokens`
+  return '—'
+}
+
+function formatTime(value: string) {
+  return new Date(value).toLocaleString()
 }
 </script>
 
@@ -626,7 +787,219 @@ function formatApiKey(value: string) {
           </el-card>
         </section>
 
-        <section v-else class="admin-section">
+        <section v-else-if="activeSection === 'users'" class="admin-section">
+          <div class="section-intro">
+            <div>
+              <span class="section-kicker">USER MANAGEMENT</span>
+              <h3>用户管理</h3>
+              <p>管理系统用户账号，创建、启用或禁用用户。</p>
+            </div>
+            <el-button type="primary" :icon="Plus" @click="createDialogVisible = true">创建用户</el-button>
+          </div>
+
+          <el-table v-loading="usersLoading" :data="users" stripe empty-text="暂无用户">
+            <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column prop="username" label="用户名" min-width="140" />
+            <el-table-column prop="displayName" label="显示名称" min-width="140">
+              <template #default="{ row }">{{ row.displayName || '—' }}</template>
+            </el-table-column>
+            <el-table-column prop="email" label="邮箱" min-width="180">
+              <template #default="{ row }">{{ row.email || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="角色" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.role === 'ADMIN' ? 'warning' : 'primary'" size="small">
+                  {{ row.role === 'ADMIN' ? '管理员' : '用户' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.enabled ? 'success' : 'danger'" size="small">
+                  {{ row.enabled ? '启用' : '禁用' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="createdAt" label="创建时间" min-width="170">
+              <template #default="{ row }">{{ row.createdAt ? formatTime(row.createdAt) : '—' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="210" fixed="right">
+              <template #default="{ row }">
+                <div class="actions">
+                  <el-button size="small" :type="row.enabled ? 'danger' : 'success'" @click="handleToggleUser(row)">
+                    {{ row.enabled ? '禁用' : '启用' }}
+                  </el-button>
+                  <el-button size="small" @click="openResetPwd(row)">重置密码</el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <!-- Create user dialog -->
+          <el-dialog v-model="createDialogVisible" title="创建用户" width="440px" :close-on-click-modal="false">
+            <el-form label-position="top">
+              <el-form-item label="用户名">
+                <el-input v-model="newUser.username" placeholder="登录用户名" />
+              </el-form-item>
+              <el-form-item label="密码">
+                <el-input v-model="newUserPassword" type="password" show-password placeholder="初始密码" />
+              </el-form-item>
+              <el-form-item label="显示名称">
+                <el-input v-model="newUser.displayName" placeholder="可选" />
+              </el-form-item>
+              <el-form-item label="邮箱">
+                <el-input v-model="newUser.email" placeholder="可选" />
+              </el-form-item>
+              <el-form-item label="角色">
+                <el-radio-group v-model="newUser.role">
+                  <el-radio value="USER">普通用户</el-radio>
+                  <el-radio value="ADMIN">管理员</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="createDialogVisible = false">取消</el-button>
+              <el-button type="primary" @click="handleCreateUser">创建</el-button>
+            </template>
+          </el-dialog>
+
+          <!-- Reset password dialog -->
+          <el-dialog v-model="resetPwdDialogVisible" title="重置密码" width="400px" :close-on-click-modal="false">
+            <el-form label-position="top">
+              <el-form-item label="新密码">
+                <el-input v-model="resetPwdValue" type="password" show-password placeholder="输入新密码" />
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="resetPwdDialogVisible = false">取消</el-button>
+              <el-button type="primary" @click="handleResetPwd">确认重置</el-button>
+            </template>
+          </el-dialog>
+        </section>
+
+        <section v-else-if="activeSection === 'billing'" class="admin-section">
+          <div class="section-intro">
+            <div>
+              <span class="section-kicker">BILLING CONFIGURATION</span>
+              <h3>计费管理</h3>
+              <p>配置各模型的计费模式与单价。</p>
+            </div>
+          </div>
+
+          <el-table :data="allModels" stripe empty-text="暂无模型数据">
+            <el-table-column label="供应商" min-width="160">
+              <template #default="{ row }">
+                <span class="provider-label">{{ row.providerId || row.name }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="modelName" label="模型名称" min-width="200" />
+            <el-table-column label="类型" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.type === 'CHAT' ? 'primary' : 'success'" size="small">
+                  {{ row.type === 'CHAT' ? '对话' : '图像' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="计费模式" width="140">
+              <template #default="{ row }">
+                <el-tag v-if="row.billingMode === 'per_request'" size="small">按次计费</el-tag>
+                <el-tag v-else-if="row.billingMode === 'per_token'" type="warning" size="small">按 Token</el-tag>
+                <span v-else class="muted">未配置</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="单价" width="120">
+              <template #default="{ row }">
+                <span>{{ row.pricePerUnit != null ? row.pricePerUnit : '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="价格描述" min-width="180">
+              <template #default="{ row }">{{ row.priceDescription || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="120" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" @click="openBillingEdit(row)">编辑计费</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <!-- Billing edit dialog -->
+          <el-dialog v-model="billingDialogVisible" title="编辑计费配置" width="420px" :close-on-click-modal="false">
+            <el-form label-position="top">
+              <el-form-item label="计费模式">
+                <el-select v-model="billingEditingMode" placeholder="选择计费模式" clearable>
+                  <el-option label="按次计费 (per_request)" value="per_request" />
+                  <el-option label="按 Token 计费 (per_token)" value="per_token" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="单价">
+                <el-input-number v-model="billingEditingPrice" :min="0" :precision="4" :step="0.01" />
+                <small class="hint">每次请求或每 Token 的价格</small>
+              </el-form-item>
+            </el-form>
+            <template #footer>
+              <el-button @click="billingDialogVisible = false">取消</el-button>
+              <el-button type="primary" @click="handleSaveBilling">保存</el-button>
+            </template>
+          </el-dialog>
+        </section>
+
+        <section v-else-if="activeSection === 'billing-logs'" class="admin-section">
+          <div class="section-intro">
+            <div>
+              <span class="section-kicker">BILLING LOGS</span>
+              <h3>消费日志</h3>
+              <p>查看所有用户的模型调用消费记录。</p>
+            </div>
+            <div class="filter-bar">
+              <el-select v-model="billingLogsUserFilter" clearable placeholder="按用户筛选" style="width: 200px" @change="loadBillingLogs">
+                <el-option v-for="u in usersForFilter" :key="u.id" :label="u.displayName || u.username" :value="u.id" />
+              </el-select>
+            </div>
+          </div>
+
+          <el-table v-loading="billingLogsLoading" :data="billingLogs" stripe empty-text="暂无消费记录">
+            <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column label="用户" min-width="140">
+              <template #default="{ row }">
+                {{ row.userId ? `#${row.userId}` : '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="providerName" label="供应商" min-width="140">
+              <template #default="{ row }">{{ row.providerName || '—' }}</template>
+            </el-table-column>
+            <el-table-column prop="modelName" label="模型" min-width="160">
+              <template #default="{ row }">{{ row.modelName || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="计费模式" width="120">
+              <template #default="{ row }">
+                <el-tag v-if="row.billingMode === 'per_request'" size="small">按次</el-tag>
+                <el-tag v-else-if="row.billingMode === 'per_token'" type="warning" size="small">按 Token</el-tag>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="费用" width="100">
+              <template #default="{ row }">{{ formatBillingAmount(row) }}</template>
+            </el-table-column>
+            <el-table-column prop="description" label="说明" min-width="200" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.description || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="时间" min-width="170">
+              <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+            </el-table-column>
+          </el-table>
+
+          <div v-if="billingLogsTotal > 20" class="pagination-bar">
+            <el-pagination
+              v-model:current-page="billingLogsPage"
+              :page-size="20"
+              :total="billingLogsTotal"
+              layout="prev, pager, next"
+              @current-change="loadBillingLogs"
+            />
+          </div>
+        </section>
+
+        <section v-else-if="activeSection === 'tools'" class="admin-section">
           <div class="section-intro"><div><span class="section-kicker">DIAGNOSTICS</span><h3>诊断工具</h3><p>查看最近一次模型调用的请求、响应和调试信息，仅在需要排查问题时使用。</p></div></div>
           <LlmDebugPanel class="debug-panel" />
         </section>
@@ -657,6 +1030,10 @@ function formatApiKey(value: string) {
 .list-header { display: flex; align-items: end; justify-content: space-between; margin: 28px 0 13px; }.list-header h3 { margin: 0 0 5px; color: #34415e; font-size: 17px; }.list-header span { color: #8992a9; font-size: 12px; }.keyword-filter { width: 330px; }.keyword-filter :deep(.el-input__wrapper) { border-radius: 10px; background: rgba(255,255,255,.86); box-shadow: 0 0 0 1px #e6e9f6 inset; }
 .admin-view > :deep(.el-table) { overflow: hidden; border: 1px solid #e5e8f4; border-radius: 16px; background: rgba(255,255,255,.93); box-shadow: 0 12px 30px rgba(42,55,110,.07); }.admin-view > :deep(.el-table th.el-table__cell) { color: #69758f; font-size: 12px; font-weight: 800; background: #f5f6fc; }.admin-view > :deep(.el-table tr) { background: transparent; }.admin-view > :deep(.el-table .el-table__row:hover > td.el-table__cell) { background: #f7f8ff; }.admin-view > :deep(.el-table td.el-table__cell), .admin-view > :deep(.el-table th.el-table__cell) { padding: 13px 0; border-bottom-color: #edf0f7; }
 .provider-name { display: flex; flex-direction: column; gap: 4px; }.provider-name strong { color: #3d4966; }.provider-name span { color: #919ab0; font-size: 12px; }.model-counts { display: flex; align-items: center; gap: 6px; }.model-counts > span { color: #9099af; font-size: 12px; }.actions { display: flex; gap: 7px; white-space: nowrap; }.actions .el-button { margin-left: 0; border-radius: 8px; }.expanded-models { padding: 12px 50px 20px; background: #fafbff; }.expanded-title { margin-bottom: 10px; color: #56617d; font-size: 13px; font-weight: 800; }.muted { color: #929bae; font-size: 12px; }.capability-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.filter-bar { display: flex; align-items: center; gap: 10px; }
+.pagination-bar { display: flex; justify-content: center; padding: 18px 0 4px; }
+.provider-label { color: #3d4966; font-size: 13px; font-weight: 700; }
+.admin-content .hint { display: block; margin-top: 4px; color: #929bae; font-size: 12px; line-height: 1.5; }
 @media (max-width: 900px) { .default-selectors { grid-template-columns: 1fr; }.list-header { align-items: stretch; flex-direction: column; gap: 12px; }.keyword-filter { width: 100%; }.admin-header { align-items: flex-start; gap: 14px; flex-direction: column; } }
 @media (max-width: 600px) { .admin-view { padding: 18px 14px; }.admin-header h2 { font-size: 21px; }.card-header { align-items: flex-start; gap: 11px; flex-direction: column; }.expanded-models { padding: 10px; } }
 

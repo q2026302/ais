@@ -5,6 +5,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
+import java.math.BigDecimal;
+
 @Schema(description = "创建/更新模型供应商请求参数")
 public class ModelProviderRequest {
 
@@ -49,6 +51,11 @@ public class ModelProviderRequest {
     private String adapterType;
     @Schema(description = "模型特有的额外配置 JSON")
     private String configJson;
+
+    @Schema(description = "计费模式：per_request（按次）、per_token（按 Token）")
+    private String billingMode;
+    @Schema(description = "单价；按次计费时每次请求的价格，按 Token 计费时每个 Token 的价格")
+    private BigDecimal pricePerUnit;
 
     public String getProviderId() {
         return providerId;
@@ -122,4 +129,8 @@ public class ModelProviderRequest {
     public void setAdapterType(String value) { this.adapterType = value; }
     public String getConfigJson() { return configJson; }
     public void setConfigJson(String value) { this.configJson = value; }
+    public String getBillingMode() { return billingMode; }
+    public void setBillingMode(String value) { this.billingMode = value; }
+    public BigDecimal getPricePerUnit() { return pricePerUnit; }
+    public void setPricePerUnit(BigDecimal value) { this.pricePerUnit = value; }
 }

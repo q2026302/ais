@@ -133,9 +133,10 @@ public class ImageGenerationQueueService {
 
         final Long assistantMessageId = assistantMessage.getId();
         final Long finalUserId = userId;
+        final String finalPrompt = prompt;
 
         CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-            processDraw(sessionId, assistantMessageId, prompt, imageProviderId, safeRequest, finalUserId);
+            processDraw(sessionId, assistantMessageId, finalPrompt, imageProviderId, safeRequest, finalUserId);
         }, executor);
 
         pendingFutures.put(assistantMessageId, future);
