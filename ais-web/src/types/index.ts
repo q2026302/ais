@@ -55,7 +55,7 @@ export interface ModelProvider {
   type: 'CHAT' | 'IMAGE'
   modelName: string
   baseUrl: string
-  apiKey: ***
+  apiKey: string
   active: boolean
   createdAt: string
   updatedAt: string
@@ -148,7 +148,7 @@ export interface ProviderAccount {
   providerKey: string
   name: string
   baseUrl: string
-  apiKey: ***
+  apiKey: string
   models: ModelProvider[]
   createdAt: string
   updatedAt: string

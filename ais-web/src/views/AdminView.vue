@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Connection, DataAnalysis, Download, Lock, Monitor, Picture, Plus, Search, Upload, UserFilled } from '@element-plus/icons-vue'
@@ -22,7 +22,6 @@ import {
 import { useSessionStore } from '@/stores/session'
 import { usersApi, type CreateUserPayload, type ManagedUser } from '@/api/users'
 import { billingApi } from '@/api/billing'
-import { adminApi } from '@/api/admin'
 import type { AuthRole } from '@/api/auth'
 import ProviderDialog from '@/components/ProviderDialog.vue'
 import LlmDebugPanel from '@/components/LlmDebugPanel.vue'
@@ -490,7 +489,7 @@ const billingDialogVisible = ref(false)
 function openBillingEdit(model: ModelProvider) {
   billingEditingModelId.value = model.id
   billingEditingMode.value = model.billingMode || 'per_request'
-  billingEditingPrice.value = model.pricePerUnit
+  billingEditingPrice.value = model.pricePerUnit ?? null
   billingDialogVisible.value = true
 }
 
