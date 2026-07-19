@@ -18,6 +18,7 @@ const emit = defineEmits<{
   delete: [messageId: number]
   copy: [content: string]
   saveEdit: [messageId: number, content: string]
+  refresh: [messageId: number]
 }>()
 
 const editContent = ref('')
@@ -119,6 +120,7 @@ const isChatFailed = computed(() => props.message.role === 'ASSISTANT'
   && (props.message.messageType == null || props.message.messageType === 'CHAT')
   && props.message.status === 'FAILED')
 const isPending = computed(() => isDrawPending.value || isChatPending.value)
+const drawProcessingText = computed(() => props.message.processingInfo || '正在排队')
 
 
 const placeholderStyle = computed(() => {
@@ -238,7 +240,7 @@ function formatDateTime(dateStr: string): string {
           :style="placeholderStyle"
         >
           <div class="placeholder-icon">🎨</div>
-          <div class="placeholder-text">图片生成中</div>
+          <div class="placeholder-text">{{ drawProcessingText }}</div>
           <div class="placeholder-meta">
             {{ message.drawSize || message.drawPlaceholder?.size || '默认尺寸' }}
             <span v-if="message.drawFormat || message.drawPlaceholder?.format">
@@ -260,7 +262,7 @@ function formatDateTime(dateStr: string): string {
         <!-- Footer: edited badge, time, token count -->
         <div class="message-footer">
           <span v-if="message.edited" class="edited-badge">(已编辑)</span>
-          <span v-if="isDrawPending" class="status-badge pending">生成中</span>
+          <span v-if="isDrawPending" class="status-badge pending">{{ drawProcessingText }}</span>
           <span v-else-if="isChatPending" class="status-badge pending">等待回应</span>
           <span v-else-if="isDrawFailed || isChatFailed" class="status-badge failed">失败</span>
           <span v-if="message.tokenUsage" class="token-usage">
@@ -297,6 +299,14 @@ function formatDateTime(dateStr: string): string {
           @click="emit('regenerate', message.id)"
           :icon="Refresh"
           title="重新生成"
+        />
+        <el-button
+          v-if="isDrawPending"
+          text
+          size="small"
+          @click="emit('refresh', message.id)"
+          :icon="Refresh"
+          title="刷新生成状态"
         />
         <el-button
           text

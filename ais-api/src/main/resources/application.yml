@@ -49,6 +49,11 @@ maintenance:
 # When the user table is empty, APP_INITIAL_ADMIN_PASSWORD_MD5 seeds the first admin;
 # when omitted, the temporary default password is admin and a warning is printed.
 # Relocatable application directories. Relative paths are resolved below app.base-dir.
+ais:
+  image:
+    queue:
+      max-concurrent: ${AIS_QUEUE_MAX_CONCURRENCY:2}
+
 app:
   base-dir: ${APP_BASE_DIR:.}
   config-dir: ${APP_CONFIG_DIR:}

@@ -44,6 +44,7 @@ export interface Message {
   parentMessageId?: number | null
   edited: boolean
   createdAt: string
+  processingInfo?: string | null
   drawPlaceholder?: DrawPlaceholder
 }
 
@@ -296,6 +297,7 @@ export interface MessageStatusResponse {
   imageUrl: string | null
   content: string
   errorMessage: string | null
+  processingInfo?: string | null
 }
 
 export interface UserDefaults {

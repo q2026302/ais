@@ -15,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -47,6 +49,8 @@ public class ImageGenerationQueueService {
     private final AtomicInteger activeCount = new AtomicInteger(0);
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<Long, CompletableFuture<Void>> pendingFutures = new ConcurrentHashMap<>();
+    /** Latest human-readable queue stage for each pending message. */
+    private final Map<Long, String> processingInfo = new ConcurrentHashMap<>();
 
     public ImageGenerationQueueService(LlmClient llmClient,
                                        ModelProviderService modelProviderService,
@@ -115,6 +119,7 @@ public class ImageGenerationQueueService {
         userMessage.setContent(buildDrawMessageContent(prompt, safeRequest));
         applyDrawMetadata(userMessage, prompt, safeRequest, imageProviderId);
         userMessage = messageRepository.save(userMessage);
+        attachRequestAttachments(userMessage, safeRequest.getAttachmentIds());
 
         Message assistantMessage = new Message();
         assistantMessage.setSession(session);
@@ -132,19 +137,19 @@ public class ImageGenerationQueueService {
         }
 
         final Long assistantMessageId = assistantMessage.getId();
+        final Long userMessageId = userMessage.getId();
         final Long finalUserId = userId;
         final String finalPrompt = prompt;
+        processingInfo.put(assistantMessageId, "正在排队");
 
-        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-            processDraw(sessionId, assistantMessageId, finalPrompt, imageProviderId, safeRequest, finalUserId);
-        }, executor);
-
-        pendingFutures.put(assistantMessageId, future);
+        Runnable task = () -> processDraw(sessionId, userMessageId, assistantMessageId,
+                finalPrompt, imageProviderId, safeRequest, finalUserId);
+        submitAfterCommit(assistantMessageId, task);
 
         return assistantMessageId;
     }
 
-    private void processDraw(Long sessionId, Long assistantMessageId, String prompt,
+    private void processDraw(Long sessionId, Long userMessageId, Long assistantMessageId, String prompt,
                              Long imageProviderId, DrawRequest request, Long userId) {
         try {
             // Wait for capacity
@@ -153,7 +158,7 @@ public class ImageGenerationQueueService {
                 if (current < maxConcurrent && activeCount.compareAndSet(current, current + 1)) {
                     break;
                 }
-                updateOperationStage(assistantMessageId, "正在排队等待...");
+                updateOperationStage(assistantMessageId, "正在排队");
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {
@@ -163,7 +168,7 @@ public class ImageGenerationQueueService {
             }
 
             try {
-                updateOperationStage(assistantMessageId, "已提交出图请求...");
+                updateOperationStage(assistantMessageId, "已提交出图");
                 Session session = sessionService.getSession(sessionId);
 
                 Message assistantMessage = messageRepository.findById(assistantMessageId)
@@ -172,7 +177,7 @@ public class ImageGenerationQueueService {
                 // Check if cancelled
                 if (wasCancelled(assistantMessageId)) return;
 
-                List<LlmClient.ReferenceImage> referenceImages = loadReferenceImages(assistantMessage);
+                List<LlmClient.ReferenceImage> referenceImages = loadReferenceImages(userMessageId);
                 ModelProvider imageProvider = resolveImageProvider(imageProviderId);
                 LlmClient.ImageGenerationOptions options = new LlmClient.ImageGenerationOptions(
                         cleanOption(request.getSize()),
@@ -184,7 +189,7 @@ public class ImageGenerationQueueService {
 
                 if (wasCancelled(assistantMessageId)) return;
 
-                updateOperationStage(assistantMessageId, "正在保存图片...");
+                updateOperationStage(assistantMessageId, "正在保存图片");
                 String imageUrl = saveGeneratedImage(sessionId, imageData);
 
                 if (wasCancelled(assistantMessageId)) {
@@ -227,9 +232,30 @@ public class ImageGenerationQueueService {
         }
     }
 
+    private void submitAfterCommit(Long messageId, Runnable task) {
+        Runnable submit = () -> {
+            CompletableFuture<Void> future = CompletableFuture.runAsync(task, executor);
+            pendingFutures.put(messageId, future);
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    submit.run();
+                }
+            });
+        } else {
+            submit.run();
+        }
+    }
+
     private void updateOperationStage(Long messageId, String stage) {
-        // This is a lightweight status update; the frontend polls for actual status
+        processingInfo.put(messageId, stage);
         log.debug("Message {} stage: {}", messageId, stage);
+    }
+
+    public String getProcessingInfo(Long messageId) {
+        return processingInfo.get(messageId);
     }
 
     private byte[] generateImageWithRetry(String prompt, ModelProvider provider,
@@ -360,6 +386,17 @@ public class ImageGenerationQueueService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
+    private void attachRequestAttachments(Message userMessage, List<Long> attachmentIds) {
+        if (attachmentIds == null || attachmentIds.isEmpty()) return;
+        for (Long attachmentId : attachmentIds) {
+            if (attachmentId == null) continue;
+            attachmentRepository.findById(attachmentId).ifPresent(attachment -> {
+                attachment.setMessage(userMessage);
+                attachmentRepository.save(attachment);
+            });
+        }
+    }
+
     private String findLastAssistantContent(Long sessionId) {
         List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
         for (int i = messages.size() - 1; i >= 0; i--) {
@@ -399,9 +436,9 @@ public class ImageGenerationQueueService {
         message.setDrawProviderId(imageProviderId);
     }
 
-    private List<LlmClient.ReferenceImage> loadReferenceImages(Message message) {
+    private List<LlmClient.ReferenceImage> loadReferenceImages(Long messageId) {
         List<LlmClient.ReferenceImage> references = new ArrayList<>();
-        for (Attachment att : attachmentRepository.findByMessageId(message.getId())) {
+        for (Attachment att : attachmentRepository.findByMessageId(messageId)) {
             if (att.getContentType() == null || !att.getContentType().startsWith("image/")) continue;
             try {
                 references.add(new LlmClient.ReferenceImage(att.getOriginalName(), att.getContentType(),

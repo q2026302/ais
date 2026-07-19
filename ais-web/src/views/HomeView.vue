@@ -426,6 +426,16 @@ async function handleRegenerateConfirm(payload: {
   }
 }
 
+async function handleRefreshMessage(messageId: number) {
+  const completed = await store.manualRefreshMessage(messageId)
+  if (completed) {
+    await nextTick()
+    scrollToBottom()
+  } else {
+    ElMessage.info('图片仍在队列中，已继续轮询状态')
+  }
+}
+
 async function handleDeleteMessage(messageId: number) {
   try {
     await ElMessageBox.confirm('确定删除此消息及后续消息？', '确认删除', {
@@ -532,6 +542,7 @@ function fillExample(text: string) {
           @resend="handleResend"
           @regenerate="handleRegenerate"
           @delete="handleDeleteMessage"
+          @refresh="handleRefreshMessage"
           @copy="handleCopy"
           @save-edit="handleSaveEdit"
         />

@@ -196,15 +196,14 @@ public class SessionController {
             safeRequest.setImageProviderId(imageProviderId);
         }
 
-        Long userId = getCurrentUserId();
-        Long messageId = queueService.submitDraw(id, safeRequest, userId);
+        ImageGenerationService.DrawResult result = imageGenerationService.draw(id, safeRequest);
 
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("assistantMessageId", messageId);
-        body.put("imageUrl", null);
-        body.put("prompt", safeRequest.getPrompt());
-        body.put("status", "PENDING");
-        body.put("errorMessage", null);
+        body.put("assistantMessageId", result.assistantMessageId());
+        body.put("imageUrl", result.imageUrl());
+        body.put("prompt", result.prompt());
+        body.put("status", result.status());
+        body.put("errorMessage", result.errorMessage());
         return ResponseEntity.ok(body);
     }
 
@@ -227,6 +226,7 @@ public class SessionController {
         body.put("imageUrl", message.getImageUrl());
         body.put("content", message.getContent());
         body.put("errorMessage", message.getErrorMessage());
+        body.put("processingInfo", queueService.getProcessingInfo(messageId));
         return ResponseEntity.ok(body);
     }
 

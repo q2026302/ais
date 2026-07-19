@@ -12,8 +12,10 @@ import com.gs.ais.model.enums.MessageRole;
 import com.gs.ais.model.enums.MessageStatus;
 import com.gs.ais.model.enums.MessageType;
 import com.gs.ais.model.enums.ProviderType;
+import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
+import com.gs.ais.security.AuthContext;
 import com.gs.ais.util.LlmErrorMessageUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +50,8 @@ public class ImageGenerationService {
     private final ChatService chatService;
     private final ConversationTitleService conversationTitleService;
     private final BillingService billingService;
+    private final ImageGenerationQueueService imageGenerationQueueService;
+    private final AppUserRepository appUserRepository;
 
     private final Path uploadDir;
     private final Path attachmentDir;
@@ -60,6 +64,8 @@ public class ImageGenerationService {
                                   ChatService chatService,
                                   ConversationTitleService conversationTitleService,
                                   BillingService billingService,
+                                  ImageGenerationQueueService imageGenerationQueueService,
+                                  AppUserRepository appUserRepository,
                                   StoragePaths storagePaths) {
         this.llmClient = llmClient;
         this.modelProviderService = modelProviderService;
@@ -69,6 +75,8 @@ public class ImageGenerationService {
         this.chatService = chatService;
         this.conversationTitleService = conversationTitleService;
         this.billingService = billingService;
+        this.imageGenerationQueueService = imageGenerationQueueService;
+        this.appUserRepository = appUserRepository;
         this.uploadDir = storagePaths.uploadDir();
         this.attachmentDir = storagePaths.attachmentDir();
         initUploadDir();
@@ -80,6 +88,14 @@ public class ImageGenerationService {
         } catch (IOException e) {
             throw new RuntimeException("Could not create upload directory", e);
         }
+    }
+
+    private Long currentUserId() {
+        var principal = AuthContext.get();
+        if (principal == null) return null;
+        return appUserRepository.findByUsernameIgnoreCase(principal.subject())
+                .map(com.gs.ais.model.entity.AppUser::getId)
+                .orElse(null);
     }
 
     private ModelProvider resolveChatProvider(Long sessionChatProviderId) {
@@ -211,86 +227,10 @@ public class ImageGenerationService {
      * following assistant message.
      */
     public DrawResult draw(Long sessionId, DrawRequest request) {
-        Session session = sessionService.getSession(sessionId);
         DrawRequest safeRequest = request != null ? request : new DrawRequest();
-
-        String prompt = safeRequest.getPrompt();
-        if (prompt == null || prompt.isBlank()) {
-            prompt = findLastAssistantContent(sessionId);
-        }
-        if (prompt == null || prompt.isBlank()) {
-            throw new RuntimeException("Prompt is required for image generation");
-        }
-        prompt = prompt.trim();
-
-        boolean isFirstMessage = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).isEmpty();
-        Long imageProviderId = safeRequest.getImageProviderId() != null
-                ? safeRequest.getImageProviderId()
-                : session.getImageProviderId();
-
-        Message userMessage = new Message();
-        userMessage.setSession(session);
-        userMessage.setRole(MessageRole.USER);
-        userMessage.setMessageType(MessageType.DRAW_REQUEST);
-        userMessage.setStatus(MessageStatus.SUCCESS);
-        userMessage.setContent(buildDrawMessageContent(prompt, safeRequest));
-        applyDrawMetadata(userMessage, prompt, safeRequest, imageProviderId);
-        userMessage = messageRepository.save(userMessage);
-
-        Message assistantMessage = new Message();
-        assistantMessage.setSession(session);
-        assistantMessage.setRole(MessageRole.ASSISTANT);
-        assistantMessage.setMessageType(MessageType.DRAW_RESPONSE);
-        assistantMessage.setStatus(MessageStatus.PENDING);
-        assistantMessage.setContent("图片生成中...");
-        assistantMessage.setParentMessageId(userMessage.getId());
-        applyDrawMetadata(assistantMessage, prompt, safeRequest, imageProviderId);
-        assistantMessage = messageRepository.save(assistantMessage);
-
-        if (isFirstMessage) {
-            String title = prompt.length() > 30 ? prompt.substring(0, 30) + "..." : prompt;
-            sessionService.updateProvisionalSessionTitle(sessionId, title);
-        }
-
-        try {
-            List<LlmClient.ReferenceImage> referenceImages = attachReferences(userMessage, safeRequest.getAttachmentIds());
-            ModelProvider imageProvider = resolveImageProvider(imageProviderId);
-            LlmClient.ImageGenerationOptions options = new LlmClient.ImageGenerationOptions(
-                    cleanOption(safeRequest.getSize()),
-                    cleanOption(safeRequest.getQuality()),
-                    cleanOption(safeRequest.getFormat()));
-            byte[] imageData = generateImageWithRetry(prompt, imageProvider, options, referenceImages);
-            if (wasCancelled(assistantMessage.getId())) {
-                return new DrawResult(assistantMessage.getId(), null, prompt, MessageStatus.FAILED,
-                        "用户已终止本次请求。");
-            }
-            String imageUrl = saveGeneratedImage(sessionId, imageData);
-            if (wasCancelled(assistantMessage.getId())) {
-                deleteGeneratedImageUrl(imageUrl);
-                return new DrawResult(assistantMessage.getId(), null, prompt, MessageStatus.FAILED,
-                        "用户已终止本次请求。");
-            }
-
-            assistantMessage.setStatus(MessageStatus.SUCCESS);
-            assistantMessage.setContent("已根据提示词生成图片。");
-            assistantMessage.setImageUrl(imageUrl);
-            assistantMessage.setErrorMessage(null);
-            messageRepository.save(assistantMessage);
-
-            return new DrawResult(assistantMessage.getId(), imageUrl, prompt, MessageStatus.SUCCESS, null);
-        } catch (Exception e) {
-            if (wasCancelled(assistantMessage.getId())) {
-                return new DrawResult(assistantMessage.getId(), null, prompt, MessageStatus.FAILED,
-                        "用户已终止本次请求。");
-            }
-            String error = LlmErrorMessageUtils.describe(e);
-            log.error("Image generation failed", e);
-            assistantMessage.setStatus(MessageStatus.FAILED);
-            assistantMessage.setContent("图片生成失败。请检查提示词、模型供应商或输出参数后重试。");
-            assistantMessage.setErrorMessage(error);
-            messageRepository.save(assistantMessage);
-            return new DrawResult(assistantMessage.getId(), null, prompt, MessageStatus.FAILED, error);
-        }
+        Long messageId = imageGenerationQueueService.submitDraw(
+                sessionId, safeRequest, currentUserId());
+        return new DrawResult(messageId, null, safeRequest.getPrompt(), MessageStatus.PENDING, null);
     }
 
     /**

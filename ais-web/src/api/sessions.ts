@@ -69,7 +69,10 @@ export const sessionApi = {
   },
 
   getMessageStatus(sessionId: number, messageId: number): Promise<MessageStatusResponse> {
-    return client.get(`/api/sessions/${sessionId}/messages/${messageId}/status`).then((r) => r.data)
+    return client.get(`/api/sessions/${sessionId}/messages/${messageId}/status`).then((r) => {
+      const data = r.data as MessageStatusResponse
+      return { ...data, imageUrl: resolveAppUrl(data.imageUrl) || null }
+    })
   },
 
   generate(id: number, data: GenerateRequest, options: RequestOptions = {}): Promise<GenerateResponse> {

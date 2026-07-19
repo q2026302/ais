@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Session, Message, ModelProvider, DrawRequest, UploadResponse, Attachment } from '@/types'
+import type { Session, Message, ModelProvider, DrawRequest, UploadResponse, Attachment, MessageStatusResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { providerApi } from '@/api/providers'
 
@@ -299,25 +299,52 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   // Polling for draw generation status
+  async function applyMessageStatus(sessionId: number, status: MessageStatusResponse) {
+    if (activeSessionId.value !== sessionId) return
+    const message = messages.value.find((item) => item.id === status.messageId)
+    if (message) {
+      message.status = status.status
+      message.imageUrl = status.imageUrl
+      message.content = status.content || message.content
+      message.errorMessage = status.errorMessage
+      message.processingInfo = status.processingInfo || null
+      if (status.status === 'SUCCESS' || status.status === 'FAILED') {
+        message.drawPlaceholder = status.status === 'SUCCESS' ? message.drawPlaceholder : undefined
+      }
+    }
+  }
+
+  async function pollMessageStatus(sessionId: number, messageId: number) {
+    const status = await sessionApi.getMessageStatus(sessionId, messageId)
+    polledMessageStatuses.value.set(messageId, {
+      status: status.status,
+      stage: status.processingInfo || '',
+    })
+    await applyMessageStatus(sessionId, status)
+    return status
+  }
+
   function startPolling(sessionId: number, messageId: number) {
     stopPolling(messageId)
     const interval = setInterval(async () => {
       try {
-        const status = await sessionApi.getMessageStatus(sessionId, messageId)
-        polledMessageStatuses.value.set(messageId, { status: status.status, stage: '' })
-
+        const status = await pollMessageStatus(sessionId, messageId)
         if (status.status === 'SUCCESS' || status.status === 'FAILED') {
           stopPolling(messageId)
-          // Reload messages to get the final state
-          if (activeSessionId.value === sessionId) {
-            await selectSession(sessionId)
-          }
+          if (activeSessionId.value === sessionId) await selectSession(sessionId)
         }
       } catch {
-        stopPolling(messageId)
+        // Keep the placeholder visible and retry on the next interval. A transient
+        // network failure should not turn a durable queued message into a failure.
       }
     }, 3000)
     pollingIntervals.value.set(messageId, interval)
+    void pollMessageStatus(sessionId, messageId).then(async (status) => {
+      if (status.status === 'SUCCESS' || status.status === 'FAILED') {
+        stopPolling(messageId)
+        if (activeSessionId.value === sessionId) await selectSession(sessionId)
+      }
+    }).catch(() => undefined)
   }
 
   function stopPolling(messageId: number) {
@@ -380,6 +407,7 @@ export const useSessionStore = defineStore('session', () => {
     if (sessionId == null) return
     try {
       const status = await sessionApi.getMessageStatus(sessionId, messageId)
+      await applyMessageStatus(sessionId, status)
       if (status.status === 'SUCCESS' || status.status === 'FAILED') {
         stopPolling(messageId)
         await selectSession(sessionId)
