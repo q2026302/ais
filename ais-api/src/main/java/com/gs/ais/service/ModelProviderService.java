@@ -187,6 +187,8 @@ public class ModelProviderService {
         model.setRetryBackoffSeconds(request.getRetryBackoffSeconds());
         model.setAdapterType(request.getAdapterType());
         model.setConfigJson(request.getConfigJson());
+        model.setBillingMode(request.getBillingMode());
+        model.setPricePerUnit(request.getPricePerUnit());
         return model;
     }
 
@@ -203,6 +205,8 @@ public class ModelProviderService {
         model.setRetryBackoffSeconds(source.getRetryBackoffSeconds());
         model.setAdapterType(source.getAdapterType());
         model.setConfigJson(source.getConfigJson());
+        model.setBillingMode(source.getBillingMode());
+        model.setPricePerUnit(source.getPricePerUnit());
         return model;
     }
 
@@ -221,6 +225,8 @@ public class ModelProviderService {
         provider.setAdapterType(request.getType() == ProviderType.IMAGE
                 ? defaultText(request.getAdapterType(), ModelProviderDefaults.IMAGE_ADAPTER_TYPE) : null);
         provider.setConfigJson(request.getConfigJson());
+        provider.setBillingMode(request.getBillingMode());
+        provider.setPricePerUnit(request.getPricePerUnit());
     }
 
     private DuplicateProviderException duplicate(String providerKey) {

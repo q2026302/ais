@@ -93,6 +93,8 @@ function open(provider?: ProviderAccount | null) {
           priceCnyMin: model.priceCnyMin,
           priceCnyMax: model.priceCnyMax,
           priceDescription: model.priceDescription,
+          billingMode: model.billingMode,
+          pricePerUnit: model.pricePerUnit,
         })),
       }
     : emptyForm()
@@ -472,6 +474,16 @@ defineExpose({ open })
               <el-input-number v-model="model.retryBackoffSeconds" :min="1" :max="120" controls-position="right" />
               <span>秒</span>
             </div>
+          </el-form-item>
+          <el-form-item label="计费模式">
+            <el-select v-model="model.billingMode" clearable placeholder="不收费（默认）">
+              <el-option label="按次收费 (PER_CALL)" value="PER_CALL" />
+              <el-option label="按 Token 收费 (PER_TOKEN)" value="PER_TOKEN" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="model.billingMode" label="单价">
+            <el-input-number v-model="model.pricePerUnit" :min="0" :precision="6" :step="0.0001" controls-position="right" />
+            <small style="margin-left: 8px; color: #929bb0;">元/次 或 元/Token</small>
           </el-form-item>
         </div>
 

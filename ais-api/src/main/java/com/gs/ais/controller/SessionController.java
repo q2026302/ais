@@ -146,6 +146,25 @@ public class SessionController {
                 request.getAttachmentIds(),
                 resolvedChatProviderId != null ? resolvedChatProviderId : request.getChatProviderId());
 
+        // Record billing for successful chat
+        if (result.status() == MessageStatus.SUCCESS && result.tokenUsage() != null) {
+            Long userId = getCurrentUserId();
+            if (userId != null) {
+                try {
+                    ModelProvider chatProvider = imageGenerationService.getProviderById(
+                            resolvedChatProviderId != null ? resolvedChatProviderId : session.getChatProviderId());
+                    if (chatProvider != null) {
+                        billingService.recordChat(chatProvider, userId, id, result.assistantMessageId(),
+                                result.tokenUsage().getPromptTokens(),
+                                result.tokenUsage().getCompletionTokens(),
+                                result.tokenUsage().getTotalTokens());
+                    }
+                } catch (Exception e) {
+                    // Billing recording is non-critical
+                }
+            }
+        }
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("content", result.content());
         body.put("assistantMessageId", result.assistantMessageId());

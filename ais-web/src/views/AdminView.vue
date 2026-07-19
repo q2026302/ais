@@ -19,6 +19,10 @@ import {
   type SecuritySettings,
 } from '@/api/admin'
 import { useSessionStore } from '@/stores/session'
+import { usersApi, type ManagedUser } from '@/api/users'
+import { billingApi } from '@/api/billing'
+import { adminApi } from '@/api/admin'
+import type { AuthRole } from '@/api/auth'
 import ProviderDialog from '@/components/ProviderDialog.vue'
 import LlmDebugPanel from '@/components/LlmDebugPanel.vue'
 
@@ -30,13 +34,14 @@ function routeWithSource(path: string) {
     : { path }
 }
 const sessionStore = useSessionStore()
-type AdminSection = 'models' | 'security' | 'data' | 'tools'
+type AdminSection = 'models' | 'security' | 'data' | 'tools' | 'users' | 'billing' | 'billing-logs'
 const activeSection = ref<AdminSection>('models')
 const adminMenuGroups = [
   {
     label: '业务配置',
     items: [
       { key: 'models' as AdminSection, label: '模型与供应商', hint: '默认模型和接口配置', icon: Connection },
+      { key: 'billing' as AdminSection, label: '计费管理', hint: '模型计费配置', icon: DataAnalysis },
     ],
   },
   {
@@ -45,6 +50,13 @@ const adminMenuGroups = [
       { key: 'security' as AdminSection, label: '安全防护', hint: '登录与封锁策略', icon: Lock },
       { key: 'data' as AdminSection, label: '数据管理', hint: '备份与系统迁移', icon: DataAnalysis },
       { key: 'tools' as AdminSection, label: '诊断工具', hint: '查看模型通信记录', icon: Monitor },
+    ],
+  },
+  {
+    label: '账户管理',
+    items: [
+      { key: 'users' as AdminSection, label: '用户管理', hint: '账号与角色维护', icon: UserFilled },
+      { key: 'billing-logs' as AdminSection, label: '消费日志', hint: '用户消费记录', icon: DataAnalysis },
     ],
   },
 ]
@@ -100,7 +112,7 @@ const imageGroups = computed(() => modelGroups('IMAGE'))
 
 function selectAdminSection(section: AdminSection | 'users') {
   if (section === 'users') {
-    router.push(routeWithSource('/admin/users'))
+    activeSection.value = 'users'
     return
   }
   activeSection.value = section
@@ -405,14 +417,6 @@ function formatApiKey(value: string) {
               </span>
             </button>
           </template>
-          <div class="subnav-group-label account-group-label">账户管理</div>
-          <button type="button" class="subnav-item" @click="selectAdminSection('users')">
-            <el-icon><UserFilled /></el-icon>
-            <span>
-              <strong>用户与权限</strong>
-              <small>账号与角色维护</small>
-            </span>
-          </button>
         </nav>
       </aside>
 

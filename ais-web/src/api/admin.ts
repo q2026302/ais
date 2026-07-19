@@ -86,4 +86,8 @@ export const adminApi = {
   getSecurityEvents(limit = 100): Promise<LoginSecurityEvent[]> {
     return client.get('/api/admin/security-events', { params: { limit } }).then((r) => r.data)
   },
+
+  updateModelBilling(modelId: number, data: { billingMode?: string | null; pricePerUnit?: number | null }): Promise<Record<string, unknown>> {
+    return client.put(`/api/admin/models/${modelId}/billing`, data).then((r) => r.data)
+  },
 }

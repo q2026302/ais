@@ -30,6 +30,8 @@ public class ProviderModelRequest {
     private BigDecimal priceCnyMin;
     private BigDecimal priceCnyMax;
     private String priceDescription;
+    private String billingMode;
+    private BigDecimal pricePerUnit;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -67,4 +69,8 @@ public class ProviderModelRequest {
     public void setPriceCnyMax(BigDecimal value) { this.priceCnyMax = value; }
     public String getPriceDescription() { return priceDescription; }
     public void setPriceDescription(String value) { this.priceDescription = value; }
+    public String getBillingMode() { return billingMode; }
+    public void setBillingMode(String value) { this.billingMode = value; }
+    public BigDecimal getPricePerUnit() { return pricePerUnit; }
+    public void setPricePerUnit(BigDecimal value) { this.pricePerUnit = value; }
 }

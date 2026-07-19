@@ -200,6 +200,8 @@ public class ProviderAccountService {
                 ? request.getPriceCnyMax() : null);
         model.setPriceDescription(request.getType() == ProviderType.IMAGE
                 ? request.getPriceDescription() : null);
+        model.setBillingMode(request.getBillingMode());
+        model.setPricePerUnit(request.getPricePerUnit());
     }
 
     private void copyProviderCompatibilityFields(ModelProvider model, ApiProvider provider) {

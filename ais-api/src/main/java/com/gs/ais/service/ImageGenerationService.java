@@ -47,6 +47,7 @@ public class ImageGenerationService {
     private final AttachmentRepository attachmentRepository;
     private final ChatService chatService;
     private final ConversationTitleService conversationTitleService;
+    private final BillingService billingService;
 
     private final Path uploadDir;
     private final Path attachmentDir;
@@ -58,6 +59,7 @@ public class ImageGenerationService {
                                   AttachmentRepository attachmentRepository,
                                   ChatService chatService,
                                   ConversationTitleService conversationTitleService,
+                                  BillingService billingService,
                                   StoragePaths storagePaths) {
         this.llmClient = llmClient;
         this.modelProviderService = modelProviderService;
@@ -66,6 +68,7 @@ public class ImageGenerationService {
         this.attachmentRepository = attachmentRepository;
         this.chatService = chatService;
         this.conversationTitleService = conversationTitleService;
+        this.billingService = billingService;
         this.uploadDir = storagePaths.uploadDir();
         this.attachmentDir = storagePaths.attachmentDir();
         initUploadDir();
@@ -91,6 +94,15 @@ public class ImageGenerationService {
             return modelProviderService.getById(sessionImageProviderId);
         }
         return modelProviderService.getActiveProvider(ProviderType.IMAGE);
+    }
+
+    public ModelProvider getProviderById(Long providerId) {
+        if (providerId == null) return null;
+        try {
+            return modelProviderService.getById(providerId);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ===================== Flow A: Chat message =====================

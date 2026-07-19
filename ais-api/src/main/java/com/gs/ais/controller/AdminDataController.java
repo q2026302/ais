@@ -2,20 +2,18 @@ package com.gs.ais.controller;
 
 import com.gs.ais.dto.request.DataExportRequest;
 import com.gs.ais.dto.request.DataImportRequest;
+import com.gs.ais.model.entity.ModelProvider;
+import com.gs.ais.repository.ModelProviderRepository;
 import com.gs.ais.service.portability.DataPortabilityService;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestPart;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
@@ -24,9 +22,12 @@ import java.util.Map;
 public class AdminDataController {
 
     private final DataPortabilityService dataPortabilityService;
+    private final ModelProviderRepository modelProviderRepository;
 
-    public AdminDataController(DataPortabilityService dataPortabilityService) {
+    public AdminDataController(DataPortabilityService dataPortabilityService,
+                               ModelProviderRepository modelProviderRepository) {
         this.dataPortabilityService = dataPortabilityService;
+        this.modelProviderRepository = modelProviderRepository;
     }
 
     @GetMapping("/export/preview")
@@ -54,5 +55,32 @@ public class AdminDataController {
                                           @RequestPart(value = "options", required = false) DataImportRequest options)
             throws IOException {
         return dataPortabilityService.importData(file, options != null ? options : new DataImportRequest());
+    }
+
+    @PutMapping("/models/{modelId}/billing")
+    public ResponseEntity<Map<String, Object>> updateModelBilling(@PathVariable Long modelId,
+                                                                    @RequestBody Map<String, Object> body) {
+        ModelProvider model = modelProviderRepository.findById(modelId)
+                .orElseThrow(() -> new RuntimeException("Model not found: " + modelId));
+        String billingMode = (String) body.get("billingMode");
+        if (billingMode != null) {
+            model.setBillingMode(billingMode);
+        } else {
+            model.setBillingMode(null);
+        }
+        Object pricePerUnitObj = body.get("pricePerUnit");
+        if (pricePerUnitObj != null) {
+            if (pricePerUnitObj instanceof Number n) {
+                model.setPricePerUnit(BigDecimal.valueOf(n.doubleValue()));
+            }
+        } else {
+            model.setPricePerUnit(null);
+        }
+        modelProviderRepository.save(model);
+        return ResponseEntity.ok(Map.of(
+                "id", modelId,
+                "billingMode", model.getBillingMode(),
+                "pricePerUnit", model.getPricePerUnit()
+        ));
     }
 }
