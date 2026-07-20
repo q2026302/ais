@@ -50,14 +50,26 @@ public class LlmClient {
 
     public LlmClient(LlmDebugService debugService) {
         this.debugService = debugService;
-        this.restTemplate = createRestTemplate(10, 600);
+        this.restTemplate = createRestTemplate(10, ModelProviderDefaults.CHAT_TIMEOUT_SECONDS);
     }
 
     public record ChatResult(String content, Integer promptTokens,
-                               Integer completionTokens, Integer totalTokens) {}
+                               Integer completionTokens, Integer totalTokens,
+                               Integer cacheReadTokens, Integer cacheWriteTokens,
+                               Integer reasoningTokens) {
+        public ChatResult(String content, Integer promptTokens, Integer completionTokens, Integer totalTokens) {
+            this(content, promptTokens, completionTokens, totalTokens, null, null, null);
+        }
+    }
 
     public record OptimizeResult(String prompt, Integer promptTokens,
-                                   Integer completionTokens, Integer totalTokens) {}
+                                   Integer completionTokens, Integer totalTokens,
+                                   Integer cacheReadTokens, Integer cacheWriteTokens,
+                                   Integer reasoningTokens) {
+        public OptimizeResult(String prompt, Integer promptTokens, Integer completionTokens, Integer totalTokens) {
+            this(prompt, promptTokens, completionTokens, totalTokens, null, null, null);
+        }
+    }
 
     public record ImageGenerationOptions(String size, String quality, String format) {}
 
@@ -104,15 +116,23 @@ public class LlmClient {
         String content = (String) message.get("content");
 
         Integer promptTokens = null, completionTokens = null, totalTokens = null;
+        Integer cacheReadTokens = null, cacheWriteTokens = null, reasoningTokens = null;
         Map<String, Object> usage = (Map<String, Object>) response.getBody().get("usage");
         if (usage != null) {
-            if (usage.get("prompt_tokens") instanceof Number p) promptTokens = p.intValue();
-            if (usage.get("completion_tokens") instanceof Number c) completionTokens = c.intValue();
-            if (usage.get("total_tokens") instanceof Number t) totalTokens = t.intValue();
+            promptTokens = usageNumber(usage, "prompt_tokens", "input_tokens");
+            completionTokens = usageNumber(usage, "completion_tokens", "output_tokens");
+            totalTokens = usageNumber(usage, "total_tokens");
+            cacheReadTokens = nestedUsageNumber(usage, "prompt_tokens_details", "cached_tokens");
+            if (cacheReadTokens == null) cacheReadTokens = nestedUsageNumber(usage, "input_tokens_details", "cache_read");
+            cacheWriteTokens = nestedUsageNumber(usage, "prompt_tokens_details", "cache_creation_tokens");
+            if (cacheWriteTokens == null) cacheWriteTokens = nestedUsageNumber(usage, "input_tokens_details", "cache_write");
+            reasoningTokens = nestedUsageNumber(usage, "completion_tokens_details", "reasoning_tokens");
+            if (totalTokens == null && promptTokens != null && completionTokens != null) totalTokens = promptTokens + completionTokens;
         }
 
         String result = content != null ? content.trim() : "";
-        return new ChatResult(result, promptTokens, completionTokens, totalTokens);
+        return new ChatResult(result, promptTokens, completionTokens, totalTokens,
+                cacheReadTokens, cacheWriteTokens, reasoningTokens);
     }
 
     /**
@@ -169,16 +189,38 @@ public class LlmClient {
         Integer promptTokens = null;
         Integer completionTokens = null;
         Integer totalTokens = null;
+        Integer cacheReadTokens = null, cacheWriteTokens = null, reasoningTokens = null;
         Map<String, Object> usage = (Map<String, Object>) response.getBody().get("usage");
         if (usage != null) {
-            if (usage.get("prompt_tokens") instanceof Number p) promptTokens = p.intValue();
-            if (usage.get("completion_tokens") instanceof Number c) completionTokens = c.intValue();
-            if (usage.get("total_tokens") instanceof Number t) totalTokens = t.intValue();
+            promptTokens = usageNumber(usage, "prompt_tokens", "input_tokens");
+            completionTokens = usageNumber(usage, "completion_tokens", "output_tokens");
+            totalTokens = usageNumber(usage, "total_tokens");
+            cacheReadTokens = nestedUsageNumber(usage, "prompt_tokens_details", "cached_tokens");
+            if (cacheReadTokens == null) cacheReadTokens = nestedUsageNumber(usage, "input_tokens_details", "cache_read");
+            cacheWriteTokens = nestedUsageNumber(usage, "prompt_tokens_details", "cache_creation_tokens");
+            if (cacheWriteTokens == null) cacheWriteTokens = nestedUsageNumber(usage, "input_tokens_details", "cache_write");
+            reasoningTokens = nestedUsageNumber(usage, "completion_tokens_details", "reasoning_tokens");
+            if (totalTokens == null && promptTokens != null && completionTokens != null) totalTokens = promptTokens + completionTokens;
         }
 
         log.debug("Optimized prompt: {}", content);
         String result = content != null ? content.trim() : userInput;
-        return new OptimizeResult(result, promptTokens, completionTokens, totalTokens);
+        return new OptimizeResult(result, promptTokens, completionTokens, totalTokens,
+                cacheReadTokens, cacheWriteTokens, reasoningTokens);
+    }
+
+    private Integer usageNumber(Map<String, Object> usage, String... keys) {
+        for (String key : keys) {
+            Object value = usage.get(key);
+            if (value instanceof Number number) return number.intValue();
+        }
+        return null;
+    }
+
+    private Integer nestedUsageNumber(Map<String, Object> usage, String containerKey, String valueKey) {
+        Object nested = usage.get(containerKey);
+        if (nested instanceof Map<?, ?> map && map.get(valueKey) instanceof Number number) return number.intValue();
+        return null;
     }
 
     /**

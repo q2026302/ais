@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Connection, DataAnalysis, Download, Lock, Monitor, Picture, Plus, Search, Upload, UserFilled } from '@element-plus/icons-vue'
 import type {
@@ -8,6 +7,7 @@ import type {
   ModelProvider,
   ProviderAccount,
   ProviderAccountRequest,
+  Session,
   SystemModelSettings,
 } from '@/types'
 import { providerAccountApi } from '@/api/providers'
@@ -22,19 +22,13 @@ import {
 import { useSessionStore } from '@/stores/session'
 import { usersApi, type CreateUserPayload, type ManagedUser } from '@/api/users'
 import { billingApi } from '@/api/billing'
+import { sessionApi } from '@/api/sessions'
 import type { AuthRole } from '@/api/auth'
 import ProviderDialog from '@/components/ProviderDialog.vue'
 import LlmDebugPanel from '@/components/LlmDebugPanel.vue'
 
-const router = useRouter()
-
-function routeWithSource(path: string) {
-  return router.currentRoute.value.query.source === 'feishu'
-    ? { path, query: { source: 'feishu' } }
-    : { path }
-}
 const sessionStore = useSessionStore()
-type AdminSection = 'models' | 'security' | 'data' | 'tools' | 'users' | 'billing' | 'billing-logs'
+type AdminSection = 'models' | 'security' | 'data' | 'tools' | 'users' | 'sessions' | 'billing' | 'billing-logs'
 const activeSection = ref<AdminSection>('models')
 const adminMenuGroups = [
   {
@@ -56,6 +50,7 @@ const adminMenuGroups = [
     label: '账户管理',
     items: [
       { key: 'users' as AdminSection, label: '用户管理', hint: '账号与角色维护', icon: UserFilled },
+      { key: 'sessions' as AdminSection, label: '会话管理', hint: '查看全部用户会话', icon: ChatDotRound },
       { key: 'billing-logs' as AdminSection, label: '消费日志', hint: '用户消费记录', icon: DataAnalysis },
     ],
   },
@@ -142,6 +137,9 @@ async function loadSectionData(section: AdminSection) {
   }
   if (section === 'users') {
     await loadUsers()
+  }
+  if (section === 'sessions') {
+    await loadManagedSessions()
   }
   if (section === 'billing') {
     // models are loaded via accounts already
@@ -398,6 +396,10 @@ const usersLoading = ref(false)
 const createDialogVisible = ref(false)
 const newUser = reactive<CreateUserPayload>({ username: '', displayName: '', email: '', role: 'USER', enabled: true })
 const newUserPassword = ref('')
+const confirmPassword = ref('')
+const managedSessions = ref<Session[]>([])
+const sessionsLoading = ref(false)
+const sessionUserIdFilter = ref<number | null>(null)
 const resetPwdDialogVisible = ref(false)
 const resetPwdUserId = ref<number | null>(null)
 const resetPwdValue = ref('')
@@ -413,6 +415,37 @@ async function loadUsers() {
   }
 }
 
+const filteredManagedSessions = computed(() => {
+  if (sessionUserIdFilter.value == null) return managedSessions.value
+  return managedSessions.value.filter((session) => session.userId === sessionUserIdFilter.value)
+})
+
+function sessionUserLabel(userId: number | null | undefined) {
+  if (userId == null) return '未关联用户'
+  const user = users.value.find((item) => item.id === userId)
+  return user ? `${user.username}${user.displayName ? `（${user.displayName}）` : ''}` : `用户 #${userId}`
+}
+
+function formatSessionTime(value: string) {
+  return value ? new Date(value).toLocaleString() : '—'
+}
+
+async function loadManagedSessions() {
+  sessionsLoading.value = true
+  try {
+    const [allSessions, allUsers] = await Promise.all([
+      sessionApi.list(),
+      users.value.length > 0 ? Promise.resolve(users.value) : usersApi.list(),
+    ])
+    managedSessions.value = allSessions
+    users.value = allUsers
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载会话列表失败')
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
 async function handleCreateUser() {
   if (!newUser.username.trim()) {
     ElMessage.warning('请输入用户名')
@@ -420,6 +453,10 @@ async function handleCreateUser() {
   }
   if (!newUserPassword.value) {
     ElMessage.warning('请输入密码')
+    return
+  }
+  if (newUserPassword.value !== confirmPassword.value) {
+    ElMessage.warning('两次输入的密码不一致')
     return
   }
   try {
@@ -432,6 +469,7 @@ async function handleCreateUser() {
     newUser.role = 'USER'
     newUser.enabled = true
     newUserPassword.value = ''
+    confirmPassword.value = ''
     await loadUsers()
   } catch (error: any) {
     ElMessage.error(error.message || '创建用户失败')
@@ -484,21 +522,37 @@ const allModels = computed(() => {
 const billingEditingModelId = ref<number | null>(null)
 const billingEditingMode = ref<string | null>(null)
 const billingEditingPrice = ref<number | null>(null)
+const billingEditingInputPrice = ref<number | null>(null)
+const billingEditingOutputPrice = ref<number | null>(null)
+const billingEditingCachePrice = ref<number | null>(null)
 const billingDialogVisible = ref(false)
 
 function openBillingEdit(model: ModelProvider) {
   billingEditingModelId.value = model.id
-  billingEditingMode.value = model.billingMode || 'per_request'
+  billingEditingMode.value = model.billingMode || null
   billingEditingPrice.value = model.pricePerUnit ?? null
+  billingEditingInputPrice.value = model.inputPricePerMillion ?? null
+  billingEditingOutputPrice.value = model.outputPricePerMillion ?? null
+  billingEditingCachePrice.value = model.cacheReadPricePerMillion ?? null
   billingDialogVisible.value = true
 }
 
 async function handleSaveBilling() {
   if (billingEditingModelId.value == null) return
+  if (billingEditingMode.value === 'PER_CALL' && (!billingEditingPrice.value || billingEditingPrice.value <= 0)) {
+    return ElMessage.warning('按次收费单价必须大于 0')
+  }
+  if (billingEditingMode.value === 'PER_TOKEN'
+    && [billingEditingInputPrice.value, billingEditingOutputPrice.value, billingEditingCachePrice.value].some((value) => !value || value <= 0)) {
+    return ElMessage.warning('按 Token 收费必须填写三项单价且都大于 0')
+  }
   try {
     await adminApi.updateModelBilling(billingEditingModelId.value, {
       billingMode: billingEditingMode.value,
-      pricePerUnit: billingEditingPrice.value,
+      pricePerUnit: billingEditingMode.value === 'PER_CALL' ? billingEditingPrice.value : null,
+      inputPricePerMillion: billingEditingMode.value === 'PER_TOKEN' ? billingEditingInputPrice.value : null,
+      outputPricePerMillion: billingEditingMode.value === 'PER_TOKEN' ? billingEditingOutputPrice.value : null,
+      cacheReadPricePerMillion: billingEditingMode.value === 'PER_TOKEN' ? billingEditingCachePrice.value : null,
     })
     ElMessage.success('计费配置已更新')
     billingDialogVisible.value = false
@@ -530,7 +584,7 @@ async function loadBillingLogs() {
 }
 
 function formatBillingAmount(record: BillingRecord) {
-  if (record.amount != null) return `${record.amount}`
+  if (record.amount != null) return `${record.amount} 元`
   if (record.totalTokens != null) return `${record.totalTokens} tokens`
   return '—'
 }
@@ -586,9 +640,8 @@ function formatTime(value: string) {
             <div>
               <span class="section-kicker">CORE CONFIGURATION</span>
               <h3>模型与供应商</h3>
-              <p>维护 API 供应商、模型能力以及系统默认的对话和图像模型。</p>
+              <p>添加供应商时可选择内置类型（Grsai、DeepSeek 等）预填参数，也可选「自定义」自行填写；列表中只显示已添加的供应商账号。</p>
             </div>
-            <el-button plain @click="router.push(routeWithSource('/admin/users'))">进入用户与权限</el-button>
           </div>
 
           <el-card class="defaults-card" shadow="never">
@@ -843,6 +896,9 @@ function formatTime(value: string) {
               <el-form-item label="密码">
                 <el-input v-model="newUserPassword" type="password" show-password placeholder="初始密码" />
               </el-form-item>
+              <el-form-item label="确认密码">
+                <el-input v-model="confirmPassword" type="password" show-password placeholder="再次输入密码" />
+              </el-form-item>
               <el-form-item label="显示名称">
                 <el-input v-model="newUser.displayName" placeholder="可选" />
               </el-form-item>
@@ -874,6 +930,50 @@ function formatTime(value: string) {
               <el-button type="primary" @click="handleResetPwd">确认重置</el-button>
             </template>
           </el-dialog>
+        </section>
+
+        <section v-else-if="activeSection === 'sessions'" class="admin-section">
+          <div class="section-intro">
+            <div>
+              <span class="section-kicker">SESSION MANAGEMENT</span>
+              <h3>会话管理</h3>
+              <p>管理员可查看所有用户会话，并按用户筛选。</p>
+            </div>
+            <el-button :loading="sessionsLoading" @click="loadManagedSessions">刷新列表</el-button>
+          </div>
+
+          <div class="session-filter">
+            <span>用户筛选</span>
+            <el-select v-model="sessionUserIdFilter" clearable placeholder="全部用户" style="width: 240px">
+              <el-option
+                v-for="user in users"
+                :key="user.id ?? user.username"
+                :label="`${user.username}${user.displayName ? `（${user.displayName}）` : ''}`"
+                :value="user.id"
+              />
+            </el-select>
+            <span class="session-count">共 {{ filteredManagedSessions.length }} 个会话</span>
+          </div>
+
+          <el-table v-loading="sessionsLoading" :data="filteredManagedSessions" stripe empty-text="暂无会话数据">
+            <el-table-column prop="id" label="会话 ID" width="100" />
+            <el-table-column prop="title" label="会话标题" min-width="220" show-overflow-tooltip />
+            <el-table-column label="用户" min-width="160">
+              <template #default="{ row }">{{ sessionUserLabel(row.userId) }}</template>
+            </el-table-column>
+            <el-table-column label="对话模型" min-width="120">
+              <template #default="{ row }">{{ row.chatProviderId ?? '默认' }}</template>
+            </el-table-column>
+            <el-table-column label="图像模型" min-width="120">
+              <template #default="{ row }">{{ row.imageProviderId ?? '默认' }}</template>
+            </el-table-column>
+            <el-table-column label="创建时间" min-width="180">
+              <template #default="{ row }">{{ formatSessionTime(row.createdAt) }}</template>
+            </el-table-column>
+            <el-table-column label="更新时间" min-width="180">
+              <template #default="{ row }">{{ formatSessionTime(row.updatedAt) }}</template>
+            </el-table-column>
+          </el-table>
         </section>
 
         <section v-else-if="activeSection === 'billing'" class="admin-section">
@@ -926,14 +1026,19 @@ function formatTime(value: string) {
             <el-form label-position="top">
               <el-form-item label="计费模式">
                 <el-select v-model="billingEditingMode" placeholder="选择计费模式" clearable>
-                  <el-option label="按次计费 (per_request)" value="per_request" />
-                  <el-option label="按 Token 计费 (per_token)" value="per_token" />
+                <el-option label="按次收费" value="PER_CALL" />
+                  <el-option label="按 Token 收费" value="PER_TOKEN" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="单价">
-                <el-input-number v-model="billingEditingPrice" :min="0" :precision="4" :step="0.01" />
-                <small class="hint">每次请求或每 Token 的价格</small>
+              <el-form-item v-if="billingEditingMode === 'PER_CALL'" label="单价" required>
+                <el-input-number v-model="billingEditingPrice" :min="0.000001" :precision="6" :step="0.01" />
+                <small class="hint">元/次</small>
               </el-form-item>
+              <template v-if="billingEditingMode === 'PER_TOKEN'">
+                <el-form-item label="输入单价" required><el-input-number v-model="billingEditingInputPrice" :min="0.000001" :precision="6" :step="0.01" /><small class="hint">元/百万 Token</small></el-form-item>
+                <el-form-item label="输出单价" required><el-input-number v-model="billingEditingOutputPrice" :min="0.000001" :precision="6" :step="0.01" /><small class="hint">元/百万 Token</small></el-form-item>
+                <el-form-item label="缓存读取单价" required><el-input-number v-model="billingEditingCachePrice" :min="0.000001" :precision="6" :step="0.01" /><small class="hint">元/百万 Token</small></el-form-item>
+              </template>
             </el-form>
             <template #footer>
               <el-button @click="billingDialogVisible = false">取消</el-button>
@@ -1128,6 +1233,9 @@ function formatTime(value: string) {
 .admin-content :deep(.el-table tr) { background: transparent; }
 .admin-content :deep(.el-table .el-table__row:hover > td.el-table__cell) { background: #f7f8ff; }
 .admin-content :deep(.el-table td.el-table__cell), .admin-content :deep(.el-table th.el-table__cell) { padding: 13px 0; border-bottom-color: #edf0f7; }
+
+.session-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; color: #697590; font-size: 13px; }
+.session-count { color: #97a0b5; }
 
 @keyframes admin-section-in {
   from { opacity: 0; transform: translateY(4px); }

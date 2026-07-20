@@ -143,14 +143,38 @@ public class ImageGenerationQueueService {
         processingInfo.put(assistantMessageId, "正在排队");
 
         Runnable task = () -> processDraw(sessionId, userMessageId, assistantMessageId,
-                finalPrompt, imageProviderId, safeRequest, finalUserId);
+                finalPrompt, imageProviderId, safeRequest, finalUserId, null);
         submitAfterCommit(assistantMessageId, task);
 
         return assistantMessageId;
     }
 
+    /**
+     * Queue a new attempt for messages that have already been created by a
+     * resend/regenerate operation. This preserves the original draw request and
+     * its reference attachments while reusing the standard queue, retry, and
+     * billing flow.
+     */
+    @Transactional
+    public Long submitExistingDraw(Long sessionId, Long userMessageId, Long assistantMessageId,
+                                   String prompt, Long imageProviderId, DrawRequest request,
+                                   Long userId, String previousImageUrl) {
+        if (prompt == null || prompt.isBlank()) {
+            throw new RuntimeException("Prompt is required for image generation");
+        }
+        DrawRequest safeRequest = request != null ? request : new DrawRequest();
+        String finalPrompt = prompt.trim();
+        processingInfo.put(assistantMessageId, "正在排队");
+
+        Runnable task = () -> processDraw(sessionId, userMessageId, assistantMessageId,
+                finalPrompt, imageProviderId, safeRequest, userId, previousImageUrl);
+        submitAfterCommit(assistantMessageId, task);
+        return assistantMessageId;
+    }
+
     private void processDraw(Long sessionId, Long userMessageId, Long assistantMessageId, String prompt,
-                             Long imageProviderId, DrawRequest request, Long userId) {
+                             Long imageProviderId, DrawRequest request, Long userId,
+                             String previousImageUrl) {
         try {
             // Wait for capacity
             while (true) {
@@ -197,6 +221,9 @@ public class ImageGenerationQueueService {
                     return;
                 }
 
+                if (previousImageUrl != null && !previousImageUrl.equals(imageUrl)) {
+                    deleteGeneratedImageUrl(previousImageUrl);
+                }
                 assistantMessage.setStatus(MessageStatus.SUCCESS);
                 assistantMessage.setContent("已根据提示词生成图片。");
                 assistantMessage.setImageUrl(imageUrl);
@@ -222,6 +249,9 @@ public class ImageGenerationQueueService {
                     msg.setStatus(MessageStatus.FAILED);
                     msg.setContent("图片生成失败。请检查提示词、模型供应商或输出参数后重试。");
                     msg.setErrorMessage(error);
+                    if (previousImageUrl != null) {
+                        msg.setImageUrl(previousImageUrl);
+                    }
                     messageRepository.save(msg);
                 }
             } catch (Exception ex) {

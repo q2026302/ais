@@ -33,6 +33,21 @@ public class BillingRecord {
     @Column(name = "total_tokens")
     private Integer totalTokens;
 
+    @Column(name = "input_tokens")
+    private Integer inputTokens;
+
+    @Column(name = "output_tokens")
+    private Integer outputTokens;
+
+    @Column(name = "cache_read_tokens")
+    private Integer cacheReadTokens;
+
+    @Column(name = "cache_write_tokens")
+    private Integer cacheWriteTokens;
+
+    @Column(name = "reasoning_tokens")
+    private Integer reasoningTokens;
+
     @Column(name = "billing_mode", length = 32)
     private String billingMode;
 
@@ -77,6 +92,16 @@ public class BillingRecord {
     public void setCompletionTokens(Integer completionTokens) { this.completionTokens = completionTokens; }
     public Integer getTotalTokens() { return totalTokens; }
     public void setTotalTokens(Integer totalTokens) { this.totalTokens = totalTokens; }
+    public Integer getInputTokens() { return inputTokens; }
+    public void setInputTokens(Integer inputTokens) { this.inputTokens = inputTokens; }
+    public Integer getOutputTokens() { return outputTokens; }
+    public void setOutputTokens(Integer outputTokens) { this.outputTokens = outputTokens; }
+    public Integer getCacheReadTokens() { return cacheReadTokens; }
+    public void setCacheReadTokens(Integer cacheReadTokens) { this.cacheReadTokens = cacheReadTokens; }
+    public Integer getCacheWriteTokens() { return cacheWriteTokens; }
+    public void setCacheWriteTokens(Integer cacheWriteTokens) { this.cacheWriteTokens = cacheWriteTokens; }
+    public Integer getReasoningTokens() { return reasoningTokens; }
+    public void setReasoningTokens(Integer reasoningTokens) { this.reasoningTokens = reasoningTokens; }
     public String getBillingMode() { return billingMode; }
     public void setBillingMode(String billingMode) { this.billingMode = billingMode; }
     public BigDecimal getUnitPrice() { return unitPrice; }

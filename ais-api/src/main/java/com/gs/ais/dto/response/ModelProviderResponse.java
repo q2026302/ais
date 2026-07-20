@@ -50,6 +50,11 @@ public class ModelProviderResponse {
     private BigDecimal priceCnyMin;
     private BigDecimal priceCnyMax;
     private String priceDescription;
+    private String billingMode;
+    private BigDecimal pricePerUnit;
+    private BigDecimal inputPricePerMillion;
+    private BigDecimal outputPricePerMillion;
+    private BigDecimal cacheReadPricePerMillion;
 
     @Schema(description = "创建时间")
     private LocalDateTime createdAt;
@@ -170,4 +175,14 @@ public class ModelProviderResponse {
     public void setPriceCnyMax(BigDecimal value) { this.priceCnyMax = value; }
     public String getPriceDescription() { return priceDescription; }
     public void setPriceDescription(String value) { this.priceDescription = value; }
+    public String getBillingMode() { return billingMode; }
+    public void setBillingMode(String value) { this.billingMode = value; }
+    public BigDecimal getPricePerUnit() { return pricePerUnit; }
+    public void setPricePerUnit(BigDecimal value) { this.pricePerUnit = value; }
+    public BigDecimal getInputPricePerMillion() { return inputPricePerMillion; }
+    public void setInputPricePerMillion(BigDecimal value) { this.inputPricePerMillion = value; }
+    public BigDecimal getOutputPricePerMillion() { return outputPricePerMillion; }
+    public void setOutputPricePerMillion(BigDecimal value) { this.outputPricePerMillion = value; }
+    public BigDecimal getCacheReadPricePerMillion() { return cacheReadPricePerMillion; }
+    public void setCacheReadPricePerMillion(BigDecimal value) { this.cacheReadPricePerMillion = value; }
 }

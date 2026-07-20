@@ -189,6 +189,12 @@ public class ModelProviderService {
         model.setConfigJson(request.getConfigJson());
         model.setBillingMode(request.getBillingMode());
         model.setPricePerUnit(request.getPricePerUnit());
+        model.setInputPricePerMillion(request.getInputPricePerMillion());
+        model.setOutputPricePerMillion(request.getOutputPricePerMillion());
+        model.setCacheReadPricePerMillion(request.getCacheReadPricePerMillion());
+        model.setInputPricePerMillion(request.getInputPricePerMillion());
+        model.setOutputPricePerMillion(request.getOutputPricePerMillion());
+        model.setCacheReadPricePerMillion(request.getCacheReadPricePerMillion());
         return model;
     }
 
@@ -207,6 +213,9 @@ public class ModelProviderService {
         model.setConfigJson(source.getConfigJson());
         model.setBillingMode(source.getBillingMode());
         model.setPricePerUnit(source.getPricePerUnit());
+        model.setInputPricePerMillion(source.getInputPricePerMillion());
+        model.setOutputPricePerMillion(source.getOutputPricePerMillion());
+        model.setCacheReadPricePerMillion(source.getCacheReadPricePerMillion());
         return model;
     }
 

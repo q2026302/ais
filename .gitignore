@@ -1,3 +1,11 @@
+# Runtime data and historical local artifacts
+/data/
+/logs/
+/uploads/
+/data.xxx/
+/txt2img/.gradle/
+/txt2img/build/
+
 # Build products
 ais-api/build/
 ais-api/.gradle/

@@ -11,10 +11,10 @@ public final class ModelProviderDefaults {
 
     public static final String REASONING_EFFORT = "default";
     public static final double CHAT_TEMPERATURE = 0.7D;
-    public static final int CHAT_TIMEOUT_SECONDS = 600;
-    public static final int IMAGE_TIMEOUT_SECONDS = 900;
+    public static final int CHAT_TIMEOUT_SECONDS = 300;
+    public static final int IMAGE_TIMEOUT_SECONDS = 300;
     public static final int IMAGE_MAX_RETRIES = 2;
-    public static final int IMAGE_RETRY_BACKOFF_SECONDS = 3;
+    public static final int IMAGE_RETRY_BACKOFF_SECONDS = 20;
     public static final String IMAGE_ADAPTER_TYPE = "AUTO";
 
     private ModelProviderDefaults() {

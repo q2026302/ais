@@ -1,5 +1,6 @@
 package com.gs.ais.dto.response;
 
+import com.gs.ais.model.enums.MessageStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 @Schema(description = "生成操作响应结果")
@@ -17,6 +18,9 @@ public class GenerateResponse {
     @Schema(description = "Token 使用统计")
     private TokenUsage tokenUsage;
 
+    @Schema(description = "生成状态")
+    private MessageStatus status;
+
     public GenerateResponse() {}
 
     public GenerateResponse(Long messageId, String optimizedPrompt, String imageUrl) {
@@ -32,6 +36,12 @@ public class GenerateResponse {
         this.tokenUsage = tokenUsage;
     }
 
+    public GenerateResponse(Long messageId, String optimizedPrompt, String imageUrl,
+                            TokenUsage tokenUsage, MessageStatus status) {
+        this(messageId, optimizedPrompt, imageUrl, tokenUsage);
+        this.status = status;
+    }
+
     public Long getMessageId() { return messageId; }
     public void setMessageId(Long messageId) { this.messageId = messageId; }
     public String getOptimizedPrompt() { return optimizedPrompt; }
@@ -40,4 +50,6 @@ public class GenerateResponse {
     public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
     public TokenUsage getTokenUsage() { return tokenUsage; }
     public void setTokenUsage(TokenUsage tokenUsage) { this.tokenUsage = tokenUsage; }
+    public MessageStatus getStatus() { return status; }
+    public void setStatus(MessageStatus status) { this.status = status; }
 }

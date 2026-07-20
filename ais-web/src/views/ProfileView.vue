@@ -32,6 +32,8 @@ const billingLogs = ref<BillingRecord[]>([])
 const billingLogsLoading = ref(false)
 const billingLogsPage = ref(0)
 const billingLogsTotal = ref(0)
+const billingFrom = ref(new Date().toISOString().slice(0, 10))
+const billingTo = ref(billingFrom.value)
 
 async function load() {
   loading.value = true
@@ -100,7 +102,7 @@ async function saveModels() {
 async function loadBillingLogs() {
   billingLogsLoading.value = true
   try {
-    const result = await billingApi.myLogs(billingLogsPage.value, 20)
+    const result = await billingApi.myLogs(billingLogsPage.value, 20, billingFrom.value, billingTo.value)
     billingLogs.value = result.content
     billingLogsTotal.value = result.totalElements
   } catch (error: any) {
@@ -113,6 +115,16 @@ async function loadBillingLogs() {
 function formatTime(value: string) {
   return new Date(value).toLocaleString()
 }
+
+function applyBillingFilter() {
+  if (!billingFrom.value || !billingTo.value) return ElMessage.warning('请选择完整的日志日期范围')
+  const span = (new Date(billingTo.value).getTime() - new Date(billingFrom.value).getTime()) / 86400000
+  if (span < 0) return ElMessage.warning('结束日期不能早于开始日期')
+  if (span > 31) return ElMessage.warning('查询时间范围不能超过 31 天')
+  billingLogsPage.value = 0
+  void loadBillingLogs()
+}
+
 
 async function saveProfile() {
   saving.value = true
@@ -273,6 +285,12 @@ onMounted(async () => {
           <template #header>
             <div class="card-title"><Lock /> <strong>我的消费记录</strong></div>
           </template>
+          <div class="billing-filter">
+            <el-date-picker v-model="billingFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" />
+            <span>至</span>
+            <el-date-picker v-model="billingTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" />
+            <el-button type="primary" @click="applyBillingFilter">查询</el-button>
+          </div>
           <el-table v-loading="billingLogsLoading" :data="billingLogs" stripe empty-text="暂无消费记录">
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="providerName" label="供应商" min-width="140">
@@ -288,7 +306,12 @@ onMounted(async () => {
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="费用" width="100">
+            <el-table-column label="Token 用量" min-width="230">
+            <template #default="{ row }">
+              输入 {{ row.inputTokens ?? row.promptTokens ?? 0 }} · 输出 {{ row.outputTokens ?? row.completionTokens ?? 0 }} · 缓存读取 {{ row.cacheReadTokens ?? 0 }}
+            </template>
+          </el-table-column>
+          <el-table-column label="费用" width="100">
               <template #default="{ row }">
                 {{ row.amount != null ? row.amount : row.totalTokens != null ? `${row.totalTokens} tokens` : '—' }}
               </template>
@@ -316,7 +339,9 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.profile-view {
+.billing-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; color: #7c87a1; font-size: 13px; }
+.billing-filter :deep(.el-date-editor) { width: 150px; }
+
   position: relative;
   width: min(100%, 1120px);
   min-height: 100%;

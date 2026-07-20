@@ -106,6 +106,15 @@ public class ModelProvider {
     @Column(name = "price_per_unit", precision = 10, scale = 6)
     private BigDecimal pricePerUnit;
 
+    @Column(name = "input_price_per_million", precision = 12, scale = 6)
+    private BigDecimal inputPricePerMillion;
+
+    @Column(name = "output_price_per_million", precision = 12, scale = 6)
+    private BigDecimal outputPricePerMillion;
+
+    @Column(name = "cache_read_price_per_million", precision = 12, scale = 6)
+    private BigDecimal cacheReadPricePerMillion;
+
     @CreatedDate
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -246,6 +255,12 @@ public class ModelProvider {
     public void setBillingMode(String value) { this.billingMode = value; }
     public BigDecimal getPricePerUnit() { return pricePerUnit; }
     public void setPricePerUnit(BigDecimal value) { this.pricePerUnit = value; }
+    public BigDecimal getInputPricePerMillion() { return inputPricePerMillion; }
+    public void setInputPricePerMillion(BigDecimal value) { this.inputPricePerMillion = value; }
+    public BigDecimal getOutputPricePerMillion() { return outputPricePerMillion; }
+    public void setOutputPricePerMillion(BigDecimal value) { this.outputPricePerMillion = value; }
+    public BigDecimal getCacheReadPricePerMillion() { return cacheReadPricePerMillion; }
+    public void setCacheReadPricePerMillion(BigDecimal value) { this.cacheReadPricePerMillion = value; }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;

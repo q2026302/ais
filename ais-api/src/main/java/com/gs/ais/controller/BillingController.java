@@ -8,6 +8,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -34,12 +35,14 @@ public class BillingController {
     @GetMapping("/api/billing/my-logs")
     public ResponseEntity<Map<String, Object>> myLogs(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to) {
         Long userId = getCurrentUserId();
         if (userId == null) {
             return ResponseEntity.status(401).body(Map.of("error", "未登录"));
         }
-        Page<BillingRecord> records = billingService.getUserBillingLogs(userId, page, size);
+        Page<BillingRecord> records = billingService.getUserBillingLogs(userId, page, size, from, to);
         return ResponseEntity.ok(toPageResponse(records));
     }
 

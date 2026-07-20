@@ -63,10 +63,19 @@ public class AdminDataController {
         ModelProvider model = modelProviderRepository.findById(modelId)
                 .orElseThrow(() -> new RuntimeException("Model not found: " + modelId));
         String billingMode = (String) body.get("billingMode");
-        if (billingMode != null) {
-            model.setBillingMode(billingMode);
-        } else {
-            model.setBillingMode(null);
+        if (billingMode != null && !billingMode.equalsIgnoreCase("PER_CALL") && !billingMode.equalsIgnoreCase("PER_TOKEN")) {
+            throw new IllegalArgumentException("不支持的计费模式");
+        }
+        model.setBillingMode(billingMode);
+        if ("PER_CALL".equalsIgnoreCase(billingMode)) {
+            if (body.get("pricePerUnit") == null || toBigDecimal(body.get("pricePerUnit")).signum() <= 0) {
+                throw new IllegalArgumentException("按次收费单价必须大于 0");
+            }
+        } else if ("PER_TOKEN".equalsIgnoreCase(billingMode)
+                && (toBigDecimal(body.get("inputPricePerMillion")) == null || toBigDecimal(body.get("inputPricePerMillion")).signum() <= 0
+                || toBigDecimal(body.get("outputPricePerMillion")) == null || toBigDecimal(body.get("outputPricePerMillion")).signum() <= 0
+                || toBigDecimal(body.get("cacheReadPricePerMillion")) == null || toBigDecimal(body.get("cacheReadPricePerMillion")).signum() <= 0)) {
+            throw new IllegalArgumentException("按 Token 收费必须填写三项单价且都大于 0");
         }
         Object pricePerUnitObj = body.get("pricePerUnit");
         if (pricePerUnitObj != null) {
@@ -76,11 +85,23 @@ public class AdminDataController {
         } else {
             model.setPricePerUnit(null);
         }
+        model.setInputPricePerMillion(toBigDecimal(body.get("inputPricePerMillion")));
+        model.setOutputPricePerMillion(toBigDecimal(body.get("outputPricePerMillion")));
+        model.setCacheReadPricePerMillion(toBigDecimal(body.get("cacheReadPricePerMillion")));
         modelProviderRepository.save(model);
         return ResponseEntity.ok(Map.of(
                 "id", modelId,
                 "billingMode", model.getBillingMode(),
-                "pricePerUnit", model.getPricePerUnit()
+                "pricePerUnit", model.getPricePerUnit(),
+                "inputPricePerMillion", model.getInputPricePerMillion(),
+                "outputPricePerMillion", model.getOutputPricePerMillion(),
+                "cacheReadPricePerMillion", model.getCacheReadPricePerMillion()
         ));
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number number) return BigDecimal.valueOf(number.doubleValue());
+        try { return new BigDecimal(String.valueOf(value)); } catch (NumberFormatException e) { return null; }
     }
 }

@@ -134,7 +134,14 @@ html, body, #app {
 
 button, input, textarea, select { font-family: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 3px solid rgba(82, 103, 246, .35); outline-offset: 2px; }
+
+/* Focus rings must follow border-radius; avoid outline + offset (square / detached). */
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(82, 103, 246, .28);
+}
 
 ::selection { color: #fff; background: var(--app-primary); }
 
@@ -146,9 +153,60 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 3px s
 .el-button { font-weight: 600; min-height: 32px; transition: transform .18s ease, box-shadow .18s ease, background-color .18s ease, border-color .18s ease; }
 .el-button:not(.is-disabled):active { transform: translateY(1px); }
 .el-button--primary { border: 0; box-shadow: 0 5px 12px rgba(82, 103, 246, .2); }
+.el-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(82, 103, 246, .28);
+}
+.el-button--primary:focus-visible {
+  box-shadow: 0 5px 12px rgba(82, 103, 246, .22), 0 0 0 3px rgba(82, 103, 246, .28);
+}
 .el-card { border-color: var(--app-border); }
-.el-input__wrapper, .el-textarea__inner { box-shadow: 0 0 0 1px var(--app-border) inset; }
-.el-input__wrapper.is-focus, .el-textarea__inner:focus { box-shadow: 0 0 0 2px rgba(82, 103, 246, .15) inset; }
+
+/*
+ * Form controls: real border follows border-radius cleanly.
+ * Kill Element Plus inset box-shadow borders (often read as square corners).
+ */
+.el-input .el-input__wrapper,
+.el-textarea .el-textarea__inner,
+.el-select .el-select__wrapper,
+.el-input-number .el-input .el-input__wrapper {
+  border: 1px solid var(--app-border);
+  border-radius: var(--el-border-radius-base);
+  box-shadow: none;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+.el-input .el-input__wrapper:hover,
+.el-textarea .el-textarea__inner:hover,
+.el-select .el-select__wrapper.is-hovering:not(.is-focused),
+.el-input-number .el-input:not(.is-disabled) .el-input__wrapper:hover,
+.el-input-number__increase:hover ~ .el-input:not(.is-disabled) .el-input__wrapper,
+.el-input-number__decrease:hover ~ .el-input:not(.is-disabled) .el-input__wrapper {
+  border-color: #c5cbe3;
+  box-shadow: none;
+}
+.el-input .el-input__wrapper.is-focus,
+.el-textarea .el-textarea__inner:focus,
+.el-select .el-select__wrapper.is-focused,
+.el-input-number .el-input .el-input__wrapper.is-focus {
+  border-color: rgba(82, 103, 246, .65);
+  box-shadow: 0 0 0 3px rgba(82, 103, 246, .14);
+}
+.el-input.is-disabled .el-input__wrapper,
+.el-textarea.is-disabled .el-textarea__inner,
+.el-select .el-select__wrapper.is-disabled,
+.el-input-number.is-disabled .el-input__wrapper {
+  border-color: var(--el-disabled-border-color, #e4e7ed);
+  box-shadow: none;
+}
+.el-input .el-input__inner,
+.el-input .el-input__inner:focus,
+.el-select .el-select__input,
+.el-select .el-select__input:focus {
+  outline: none;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
 .el-dialog { border-radius: 20px; overflow: hidden; box-shadow: 0 24px 80px rgba(29, 43, 98, .22); }
 .el-dialog__header { margin-right: 0; padding: 20px 24px 16px; border-bottom: 1px solid var(--app-border); }
 .el-dialog__body { padding: 22px 24px; }

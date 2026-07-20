@@ -157,7 +157,10 @@ public class SessionController {
                         billingService.recordChat(chatProvider, userId, id, result.assistantMessageId(),
                                 result.tokenUsage().getPromptTokens(),
                                 result.tokenUsage().getCompletionTokens(),
-                                result.tokenUsage().getTotalTokens());
+                                result.tokenUsage().getTotalTokens(),
+                                result.tokenUsage().getCacheReadTokens(),
+                                result.tokenUsage().getCacheWriteTokens(),
+                                result.tokenUsage().getReasoningTokens());
                     }
                 } catch (Exception e) {
                     // Billing recording is non-critical
@@ -252,7 +255,7 @@ public class SessionController {
                 id, messageId, chatProviderId, imageProviderId);
         TokenUsage tokenUsage = result.tokenUsage();
         return ResponseEntity.ok(new GenerateResponse(
-                result.messageId(), result.optimizedPrompt(), result.imageUrl(), tokenUsage));
+                result.messageId(), result.optimizedPrompt(), result.imageUrl(), tokenUsage, result.status()));
     }
 
     @DeleteMapping("/{id}/messages/{messageId}")
