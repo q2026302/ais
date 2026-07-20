@@ -47,7 +47,7 @@ jobs:
         working-directory: ais-web
         run: |
           for i in 1 2 3; do
-            yarn install --frozen-lockfile --network-timeout 120000 --network-concurrency 4 && break
+            yarn install --frozen-lockfile --network-timeout 120000 && break
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
@@ -103,7 +103,7 @@ jobs:
         working-directory: ais-web
         run: |
           for i in 1 2 3; do
-            yarn install --frozen-lockfile --network-timeout 120000 --network-concurrency 4 && break
+            yarn install --frozen-lockfile --network-timeout 120000 && break
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
@@ -159,7 +159,7 @@ jobs:
         working-directory: ais-web
         run: |
           for i in 1 2 3; do
-            yarn install --frozen-lockfile --network-timeout 120000 --network-concurrency 4 && break
+            yarn install --frozen-lockfile --network-timeout 120000 && break
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
