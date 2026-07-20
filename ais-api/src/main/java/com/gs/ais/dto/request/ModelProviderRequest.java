@@ -41,11 +41,11 @@ public class ModelProviderRequest {
     private String reasoningEffort;
     @Schema(description = "采样温度；普通对话默认 0.7，推理模型可留空", defaultValue = "0.7")
     private Double temperature;
-    @Schema(description = "请求超时秒数；对话默认 600，图片默认 900")
+    @Schema(description = "请求超时秒数；默认 300")
     private Integer timeoutSeconds;
     @Schema(description = "图片失败重试次数", defaultValue = "2")
     private Integer maxRetries;
-    @Schema(description = "图片重试退避基准秒数", defaultValue = "3")
+    @Schema(description = "图片重试退避基准秒数", defaultValue = "20")
     private Integer retryBackoffSeconds;
     @Schema(description = "图片适配器：AUTO、OPENAI_IMAGE、GEMINI_IMAGE", defaultValue = "AUTO")
     private String adapterType;
@@ -56,6 +56,9 @@ public class ModelProviderRequest {
     private String billingMode;
     @Schema(description = "单价；按次计费时每次请求的价格，按 Token 计费时每个 Token 的价格")
     private BigDecimal pricePerUnit;
+    private BigDecimal inputPricePerMillion;
+    private BigDecimal outputPricePerMillion;
+    private BigDecimal cacheReadPricePerMillion;
 
     public String getProviderId() {
         return providerId;
@@ -133,4 +136,10 @@ public class ModelProviderRequest {
     public void setBillingMode(String value) { this.billingMode = value; }
     public BigDecimal getPricePerUnit() { return pricePerUnit; }
     public void setPricePerUnit(BigDecimal value) { this.pricePerUnit = value; }
+    public BigDecimal getInputPricePerMillion() { return inputPricePerMillion; }
+    public void setInputPricePerMillion(BigDecimal value) { this.inputPricePerMillion = value; }
+    public BigDecimal getOutputPricePerMillion() { return outputPricePerMillion; }
+    public void setOutputPricePerMillion(BigDecimal value) { this.outputPricePerMillion = value; }
+    public BigDecimal getCacheReadPricePerMillion() { return cacheReadPricePerMillion; }
+    public void setCacheReadPricePerMillion(BigDecimal value) { this.cacheReadPricePerMillion = value; }
 }

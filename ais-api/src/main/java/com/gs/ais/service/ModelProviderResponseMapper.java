@@ -46,6 +46,11 @@ public class ModelProviderResponseMapper {
         response.setPriceCnyMin(provider.getPriceCnyMin());
         response.setPriceCnyMax(provider.getPriceCnyMax());
         response.setPriceDescription(provider.getPriceDescription());
+        response.setBillingMode(provider.getBillingMode());
+        response.setPricePerUnit(provider.getPricePerUnit());
+        response.setInputPricePerMillion(provider.getInputPricePerMillion());
+        response.setOutputPricePerMillion(provider.getOutputPricePerMillion());
+        response.setCacheReadPricePerMillion(provider.getCacheReadPricePerMillion());
         response.setCreatedAt(provider.getCreatedAt());
         response.setUpdatedAt(provider.getUpdatedAt());
         return response;

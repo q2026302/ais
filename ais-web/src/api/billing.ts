@@ -2,8 +2,8 @@ import client from './client'
 import type { PageResponse, BillingRecord } from '@/types'
 
 export const billingApi = {
-  myLogs(page = 0, size = 20): Promise<PageResponse<BillingRecord>> {
-    return client.get('/api/billing/my-logs', { params: { page, size } }).then((r) => r.data)
+  myLogs(page = 0, size = 20, from?: string, to?: string): Promise<PageResponse<BillingRecord>> {
+    return client.get('/api/billing/my-logs', { params: { page, size, from, to } }).then((r) => r.data)
   },
 
   adminLogs(userId?: number | null, page = 0, size = 20): Promise<PageResponse<BillingRecord>> {

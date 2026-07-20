@@ -255,8 +255,9 @@ defineExpose({ clearDraft })
 .attachment-icon { color: #8791ab; font-size: 16px; }
 .attachment-name { max-width: 120px; overflow: hidden; color: #59647d; text-overflow: ellipsis; white-space: nowrap; }
 .input-row { padding-top: 2px; }
-.input-row :deep(.el-textarea__inner) { padding: 11px 12px; color: #38435f; border: 0; border-radius: 12px; background: transparent; box-shadow: none; }
-.input-row :deep(.el-textarea__inner:focus) { box-shadow: none; }
+.input-row :deep(.el-textarea__inner),
+.input-row :deep(.el-textarea__inner:hover),
+.input-row :deep(.el-textarea__inner:focus) { padding: 11px 12px; color: #38435f; border: 0; border-radius: 12px; background: transparent; box-shadow: none; }
 .toolbar { display: flex; align-items: center; gap: 8px; margin-top: 3px; padding: 8px 2px 0; border-top: 1px solid #eef0f7; }
 .toolbar :deep(.el-button.is-text) { color: #697691; border-radius: 8px; }
 .toolbar :deep(.el-button.is-text:hover) { color: var(--app-primary); background: #f0f2ff; }

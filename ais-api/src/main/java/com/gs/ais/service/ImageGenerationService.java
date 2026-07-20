@@ -196,12 +196,18 @@ public class ImageGenerationService {
             assistantMessage.setPromptTokens(chatResult.promptTokens());
             assistantMessage.setCompletionTokens(chatResult.completionTokens());
             assistantMessage.setTotalTokens(chatResult.totalTokens());
+            assistantMessage.setInputTokens(chatResult.promptTokens());
+            assistantMessage.setOutputTokens(chatResult.completionTokens());
+            assistantMessage.setCacheReadTokens(chatResult.cacheReadTokens());
+            assistantMessage.setCacheWriteTokens(chatResult.cacheWriteTokens());
+            assistantMessage.setReasoningTokens(chatResult.reasoningTokens());
             messageRepository.save(assistantMessage);
             conversationTitleService.generateTitleWhenReady(sessionId, chatProvider);
 
             return new ChatMessageResult(chatResult.content(), assistantMessage.getId(),
                     new com.gs.ais.dto.response.TokenUsage(
-                            chatResult.promptTokens(), chatResult.completionTokens(), chatResult.totalTokens()),
+                            chatResult.promptTokens(), chatResult.completionTokens(), chatResult.totalTokens(),
+                            chatResult.cacheReadTokens(), chatResult.cacheWriteTokens(), chatResult.reasoningTokens()),
                     MessageStatus.SUCCESS, null);
         } catch (Exception e) {
             if (wasCancelled(assistantMessage.getId())) {
@@ -468,6 +474,11 @@ public class ImageGenerationService {
             assistantMessage.setPromptTokens(chatResult.promptTokens());
             assistantMessage.setCompletionTokens(chatResult.completionTokens());
             assistantMessage.setTotalTokens(chatResult.totalTokens());
+            assistantMessage.setInputTokens(chatResult.promptTokens());
+            assistantMessage.setOutputTokens(chatResult.completionTokens());
+            assistantMessage.setCacheReadTokens(chatResult.cacheReadTokens());
+            assistantMessage.setCacheWriteTokens(chatResult.cacheWriteTokens());
+            assistantMessage.setReasoningTokens(chatResult.reasoningTokens());
             messageRepository.save(assistantMessage);
             return new GenerationResult(
                     assistantMessage.getId(),
@@ -498,9 +509,6 @@ public class ImageGenerationService {
                 : userMessage.getDrawProviderId() != null
                     ? userMessage.getDrawProviderId()
                     : session.getImageProviderId();
-        ModelProvider imageProvider = resolveImageProvider(imageProviderId);
-        LlmClient.ImageGenerationOptions options = new LlmClient.ImageGenerationOptions(
-                userMessage.getDrawSize(), userMessage.getDrawQuality(), userMessage.getDrawFormat());
 
         Message assistantMessage = new Message();
         assistantMessage.setSession(session);
@@ -516,34 +524,16 @@ public class ImageGenerationService {
         assistantMessage.setDrawProviderId(imageProviderId);
         assistantMessage = messageRepository.save(assistantMessage);
 
-        try {
-            byte[] imageData = generateImageWithRetry(
-                    prompt, imageProvider, options, referencesFromMessage(userMessage));
-            if (wasCancelled(assistantMessage.getId())) {
-                return new GenerationResult(assistantMessage.getId(), prompt, null, null);
-            }
-            String imageUrl = saveGeneratedImage(session.getId(), imageData);
-            if (wasCancelled(assistantMessage.getId())) {
-                deleteGeneratedImageUrl(imageUrl);
-                return new GenerationResult(assistantMessage.getId(), prompt, null, null);
-            }
-            assistantMessage.setStatus(MessageStatus.SUCCESS);
-            assistantMessage.setContent("已根据提示词生成图片。");
-            assistantMessage.setImageUrl(imageUrl);
-            assistantMessage.setErrorMessage(null);
-            messageRepository.save(assistantMessage);
-            return new GenerationResult(assistantMessage.getId(), prompt, imageUrl, null);
-        } catch (Exception e) {
-            if (wasCancelled(assistantMessage.getId())) {
-                return new GenerationResult(assistantMessage.getId(), prompt, null, null);
-            }
-            String error = LlmErrorMessageUtils.describe(e);
-            assistantMessage.setStatus(MessageStatus.FAILED);
-            assistantMessage.setContent("图片再次生成失败。请稍后重试。");
-            assistantMessage.setErrorMessage(error);
-            messageRepository.save(assistantMessage);
-            throw new RuntimeException(error, e);
-        }
+        DrawRequest request = new DrawRequest();
+        request.setPrompt(prompt);
+        request.setImageProviderId(imageProviderId);
+        request.setSize(userMessage.getDrawSize());
+        request.setQuality(userMessage.getDrawQuality());
+        request.setFormat(userMessage.getDrawFormat());
+        imageGenerationQueueService.submitExistingDraw(
+                session.getId(), userMessage.getId(), assistantMessage.getId(), prompt,
+                imageProviderId, request, currentUserId(), null);
+        return new GenerationResult(assistantMessage.getId(), prompt, null, null, MessageStatus.PENDING);
     }
 
     private Message findLatestUserMessage(Long sessionId) {
@@ -564,44 +554,32 @@ public class ImageGenerationService {
                 : message.getDrawProviderId() != null
                     ? message.getDrawProviderId()
                     : session.getImageProviderId();
-        ModelProvider imageProvider = resolveImageProvider(imageProviderId);
-        LlmClient.ImageGenerationOptions options = new LlmClient.ImageGenerationOptions(
-                message.getDrawSize() != null ? message.getDrawSize() : userMessage.getDrawSize(),
-                message.getDrawQuality() != null ? message.getDrawQuality() : userMessage.getDrawQuality(),
-                message.getDrawFormat() != null ? message.getDrawFormat() : userMessage.getDrawFormat());
+        String size = message.getDrawSize() != null ? message.getDrawSize() : userMessage.getDrawSize();
+        String quality = message.getDrawQuality() != null ? message.getDrawQuality() : userMessage.getDrawQuality();
+        String format = message.getDrawFormat() != null ? message.getDrawFormat() : userMessage.getDrawFormat();
+        String previousImageUrl = message.getImageUrl();
+
         message.setStatus(MessageStatus.PENDING);
         message.setContent("图片生成中...");
         message.setErrorMessage(null);
+        message.setImageUrl(null);
+        message.setDrawPrompt(prompt);
+        message.setDrawSize(size);
+        message.setDrawQuality(quality);
+        message.setDrawFormat(format);
         message.setDrawProviderId(imageProviderId);
         messageRepository.save(message);
-        try {
-            byte[] imageData = generateImageWithRetry(prompt, imageProvider, options, referencesFromMessage(userMessage));
-            if (wasCancelled(message.getId())) {
-                return new GenerationResult(message.getId(), prompt, null, null);
-            }
-            String imageUrl = saveGeneratedImage(session.getId(), imageData);
-            if (wasCancelled(message.getId())) {
-                deleteGeneratedImageUrl(imageUrl);
-                return new GenerationResult(message.getId(), prompt, null, null);
-            }
-            deleteOldImage(message);
-            message.setStatus(MessageStatus.SUCCESS);
-            message.setContent("已根据提示词生成图片。");
-            message.setImageUrl(imageUrl);
-            message.setErrorMessage(null);
-            messageRepository.save(message);
-            return new GenerationResult(message.getId(), prompt, imageUrl, null);
-        } catch (Exception e) {
-            if (wasCancelled(message.getId())) {
-                return new GenerationResult(message.getId(), prompt, null, null);
-            }
-            String error = LlmErrorMessageUtils.describe(e);
-            message.setStatus(MessageStatus.FAILED);
-            message.setContent("图片重新生成失败。请稍后重试。");
-            message.setErrorMessage(error);
-            messageRepository.save(message);
-            throw new RuntimeException(error, e);
-        }
+
+        DrawRequest request = new DrawRequest();
+        request.setPrompt(prompt);
+        request.setImageProviderId(imageProviderId);
+        request.setSize(size);
+        request.setQuality(quality);
+        request.setFormat(format);
+        imageGenerationQueueService.submitExistingDraw(
+                session.getId(), userMessage.getId(), message.getId(), prompt,
+                imageProviderId, request, currentUserId(), previousImageUrl);
+        return new GenerationResult(message.getId(), prompt, null, null, MessageStatus.PENDING);
     }
 
     private List<LlmClient.ReferenceImage> referencesFromMessage(Message message) {
@@ -796,5 +774,11 @@ public class ImageGenerationService {
                              MessageStatus status, String errorMessage) {}
 
     public record GenerationResult(Long messageId, String optimizedPrompt, String imageUrl,
-                                    com.gs.ais.dto.response.TokenUsage tokenUsage) {}
+                                   com.gs.ais.dto.response.TokenUsage tokenUsage,
+                                   MessageStatus status) {
+        public GenerationResult(Long messageId, String optimizedPrompt, String imageUrl,
+                                com.gs.ais.dto.response.TokenUsage tokenUsage) {
+            this(messageId, optimizedPrompt, imageUrl, tokenUsage, MessageStatus.SUCCESS);
+        }
+    }
 }

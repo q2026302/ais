@@ -21,6 +21,11 @@ export interface TokenUsage {
   promptTokens: number | null
   completionTokens: number | null
   totalTokens: number | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
+  reasoningTokens?: number | null
 }
 
 export type MessageType = 'CHAT' | 'DRAW_REQUEST' | 'DRAW_RESPONSE'
@@ -77,6 +82,9 @@ export interface ModelProvider {
   priceDescription?: string | null
   billingMode?: string | null
   pricePerUnit?: number | null
+  inputPricePerMillion?: number | null
+  outputPricePerMillion?: number | null
+  cacheReadPricePerMillion?: number | null
 }
 
 export interface ModelProviderRequest {
@@ -104,6 +112,9 @@ export interface ModelProviderRequest {
   priceDescription?: string | null
   billingMode?: string | null
   pricePerUnit?: number | null
+  inputPricePerMillion?: number | null
+  outputPricePerMillion?: number | null
+  cacheReadPricePerMillion?: number | null
 }
 
 
@@ -128,6 +139,9 @@ export interface ProviderModelRequest {
   priceDescription?: string | null
   billingMode?: string | null
   pricePerUnit?: number | null
+  inputPricePerMillion?: number | null
+  outputPricePerMillion?: number | null
+  cacheReadPricePerMillion?: number | null
 }
 
 
@@ -198,8 +212,9 @@ export interface RegenerateRequest {
 export interface GenerateResponse {
   messageId: number | null
   optimizedPrompt: string
-  imageUrl: string
+  imageUrl: string | null
   tokenUsage: TokenUsage | null
+  status: MessageStatus | null
 }
 
 export interface UpdateMessageRequest {
@@ -274,8 +289,16 @@ export interface BillingRecord {
   promptTokens: number | null
   completionTokens: number | null
   totalTokens: number | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
+  reasoningTokens?: number | null
   billingMode: string | null
   unitPrice: number | null
+  inputPricePerMillion?: number | null
+  outputPricePerMillion?: number | null
+  cacheReadPricePerMillion?: number | null
   amount: number | null
   description: string | null
   sessionId: number | null

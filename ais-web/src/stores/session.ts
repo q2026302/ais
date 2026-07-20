@@ -470,6 +470,9 @@ export const useSessionStore = defineStore('session', () => {
           timeout: isDraw ? 15 * 60 * 1000 : 5 * 60 * 1000,
         },
       )
+      if (result.status === 'PENDING' && result.messageId) {
+        startPolling(sessionId, result.messageId)
+      }
       if (activeSessionId.value === sessionId) await selectSession(sessionId)
       return result
     } catch (e) {
@@ -553,6 +556,9 @@ export const useSessionStore = defineStore('session', () => {
           timeout: isDraw ? 15 * 60 * 1000 : 5 * 60 * 1000,
         },
       )
+      if (result.status === 'PENDING' && result.messageId) {
+        startPolling(sessionId, result.messageId)
+      }
       if (activeSessionId.value === sessionId) await selectSession(sessionId)
       return result
     } catch (e) {

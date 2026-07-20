@@ -25,13 +25,16 @@ public class ProviderAccountService {
     private final ApiProviderRepository providerRepository;
     private final ModelProviderRepository modelRepository;
     private final SystemModelSettingsService settingsService;
+    private final GrsaiModelCatalogService grsaiModelCatalogService;
 
     public ProviderAccountService(ApiProviderRepository providerRepository,
                                   ModelProviderRepository modelRepository,
-                                  SystemModelSettingsService settingsService) {
+                                  SystemModelSettingsService settingsService,
+                                  GrsaiModelCatalogService grsaiModelCatalogService) {
         this.providerRepository = providerRepository;
         this.modelRepository = modelRepository;
         this.settingsService = settingsService;
+        this.grsaiModelCatalogService = grsaiModelCatalogService;
     }
 
     @Transactional(readOnly = true)
@@ -159,6 +162,8 @@ public class ProviderAccountService {
         ModelProvider model = new ModelProvider();
         model.setProviderId(uniqueLegacyModelKey(provider.getProviderKey()));
         model.setActive(false);
+        // Attach parent early so Grsai catalog enrichment can resolve providerKey.
+        model.setApiProvider(provider);
         applyModelFields(model, request);
         copyProviderCompatibilityFields(model, provider);
         return model;
@@ -182,9 +187,15 @@ public class ProviderAccountService {
         model.setRetryBackoffSeconds(request.getType() == ProviderType.IMAGE
                 ? defaultPositive(request.getRetryBackoffSeconds(), ModelProviderDefaults.IMAGE_RETRY_BACKOFF_SECONDS)
                 : null);
-        model.setAdapterType(request.getType() == ProviderType.IMAGE
-                ? defaultText(request.getAdapterType(), ModelProviderDefaults.IMAGE_ADAPTER_TYPE)
-                : null);
+        if (request.getType() == ProviderType.IMAGE) {
+            String adapter = defaultText(request.getAdapterType(), ModelProviderDefaults.IMAGE_ADAPTER_TYPE);
+            if (isGrsaiProvider(model)) {
+                adapter = GrsaiModelCatalogService.ADAPTER_TYPE;
+            }
+            model.setAdapterType(adapter);
+        } else {
+            model.setAdapterType(null);
+        }
         model.setConfigJson(request.getConfigJson());
         model.setSupportsTextToImage(request.getType() == ProviderType.IMAGE
                 ? request.getSupportsTextToImage() : null);
@@ -200,8 +211,67 @@ public class ProviderAccountService {
                 ? request.getPriceCnyMax() : null);
         model.setPriceDescription(request.getType() == ProviderType.IMAGE
                 ? request.getPriceDescription() : null);
-        model.setBillingMode(request.getBillingMode());
-        model.setPricePerUnit(request.getPricePerUnit());
+        validateBilling(request);
+        model.setBillingMode(normalizeBillingMode(request.getBillingMode()));
+        model.setPricePerUnit(request.getBillingMode() == null ? null : request.getPricePerUnit());
+        model.setInputPricePerMillion(request.getBillingMode() != null ? request.getInputPricePerMillion() : null);
+        model.setOutputPricePerMillion(request.getBillingMode() != null ? request.getOutputPricePerMillion() : null);
+        model.setCacheReadPricePerMillion(request.getBillingMode() != null ? request.getCacheReadPricePerMillion() : null);
+        enrichGrsaiCatalogMetadata(model);
+    }
+
+    /**
+     * For the built-in Grsai supplier type, fill image-model capability/price metadata
+     * from the catalog when the request omitted them (e.g. user typed a known model name).
+     */
+    private void enrichGrsaiCatalogMetadata(ModelProvider model) {
+        if (model == null || model.getType() != ProviderType.IMAGE || !isGrsaiProvider(model)) {
+            return;
+        }
+        String modelName = model.getModelName();
+        if (!hasText(modelName)) {
+            return;
+        }
+        model.setAdapterType(GrsaiModelCatalogService.ADAPTER_TYPE);
+        grsaiModelCatalogService.getCatalog().stream()
+                .filter(item -> modelName.equalsIgnoreCase(item.modelName()))
+                .findFirst()
+                .ifPresent(item -> {
+                    if (model.getSupportsTextToImage() == null) {
+                        model.setSupportsTextToImage(item.supportsTextToImage());
+                    }
+                    if (model.getSupportsImageToImage() == null) {
+                        model.setSupportsImageToImage(item.supportsImageToImage());
+                    }
+                    if (model.getPriceCreditsMin() == null) {
+                        model.setPriceCreditsMin(item.priceCreditsMin());
+                    }
+                    if (model.getPriceCreditsMax() == null) {
+                        model.setPriceCreditsMax(item.priceCreditsMax());
+                    }
+                    if (model.getPriceCnyMin() == null) {
+                        model.setPriceCnyMin(item.priceCnyMin());
+                    }
+                    if (model.getPriceCnyMax() == null) {
+                        model.setPriceCnyMax(item.priceCnyMax());
+                    }
+                    if (!hasText(model.getPriceDescription())) {
+                        model.setPriceDescription(item.priceDescription());
+                    }
+                });
+    }
+
+    private boolean isGrsaiProvider(ModelProvider model) {
+        if (model == null) {
+            return false;
+        }
+        if (model.getApiProvider() != null
+                && GrsaiModelCatalogService.PROVIDER_KEY
+                .equalsIgnoreCase(model.getApiProvider().getProviderKey())) {
+            return true;
+        }
+        return GrsaiModelCatalogService.ADAPTER_TYPE
+                .equalsIgnoreCase(defaultText(model.getAdapterType(), ""));
     }
 
     private void copyProviderCompatibilityFields(ModelProvider model, ApiProvider provider) {
@@ -237,6 +307,27 @@ public class ProviderAccountService {
 
     private String defaultText(String value, String fallback) {
         return hasText(value) ? value.trim() : fallback;
+    }
+
+    private void validateBilling(ProviderModelRequest request) {
+        String mode = normalizeBillingMode(request.getBillingMode());
+        if (mode == null) return;
+        if ("PER_CALL".equals(mode) && (request.getPricePerUnit() == null || request.getPricePerUnit().signum() <= 0)) {
+            throw new IllegalArgumentException("按次收费单价必须大于 0");
+        }
+        if ("PER_TOKEN".equals(mode)
+                && (request.getInputPricePerMillion() == null || request.getInputPricePerMillion().signum() <= 0
+                || request.getOutputPricePerMillion() == null || request.getOutputPricePerMillion().signum() <= 0
+                || request.getCacheReadPricePerMillion() == null || request.getCacheReadPricePerMillion().signum() <= 0)) {
+            throw new IllegalArgumentException("按 Token 收费必须填写输入、输出和缓存读取单价");
+        }
+    }
+
+    private String normalizeBillingMode(String value) {
+        if (!hasText(value)) return null;
+        if ("per_request".equalsIgnoreCase(value) || "PER_CALL".equalsIgnoreCase(value)) return "PER_CALL";
+        if ("per_token".equalsIgnoreCase(value) || "PER_TOKEN".equalsIgnoreCase(value)) return "PER_TOKEN";
+        throw new IllegalArgumentException("不支持的计费模式: " + value);
     }
 
     private boolean hasText(String value) {

@@ -471,7 +471,7 @@ function fillExample(text: string) {
 </script>
 
 <template>
-  <div class="home-view">
+  <div class="home-view" v-loading="store.loading || sending">
     <SessionSidebar :mobile-open="sidebarOpen" @close="sidebarOpen = false" />
     <div class="chat-area">
       <!-- Chat header with view and model controls -->

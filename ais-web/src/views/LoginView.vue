@@ -282,6 +282,36 @@ async function redirectAfterLogin() {
 .captcha-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .captcha-image span { display: grid; place-items: center; height: 100%; color: #8a94aa; font-size: 11px; }
 .submit { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 46px; margin-top: 8px; border-radius: 12px; background: linear-gradient(110deg, #536bf5, #795be8); box-shadow: 0 10px 22px rgba(82, 103, 246, .25); }
+
+/* Real border so the field itself is rounded, not only the focus glow */
+.login-card :deep(.el-input .el-input__wrapper) {
+  border: 1px solid #e0e5f5;
+  border-radius: 10px;
+  box-shadow: none;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+.login-card :deep(.el-input .el-input__wrapper:hover) {
+  border-color: #aab5fa;
+  box-shadow: none;
+}
+.login-card :deep(.el-input .el-input__wrapper.is-focus) {
+  border-color: rgba(91, 111, 248, .65);
+  box-shadow: 0 0 0 3px rgba(91, 111, 248, .16);
+}
+.login-card :deep(.el-input .el-input__inner),
+.login-card :deep(.el-input .el-input__inner:focus) {
+  outline: none;
+  border: 0;
+  box-shadow: none;
+}
+.login-card :deep(.el-input__inner) {
+  height: 40px;
+  font-size: 14px;
+}
+.login-card :deep(.el-button:focus-visible) {
+  outline: none;
+  box-shadow: 0 10px 22px rgba(82, 103, 246, .25), 0 0 0 3px rgba(91, 111, 248, .22);
+}
 .security-note { margin: 16px 0 0; color: #a2aabd; font-size: 11px; text-align: center; }
 .login-footer { position: absolute; z-index: 1; bottom: 13px; margin: 0; color: #9aa3ba; font-size: 11px; }
 

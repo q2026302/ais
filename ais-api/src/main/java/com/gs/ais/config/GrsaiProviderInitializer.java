@@ -17,8 +17,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Keeps Grsai image-model catalog metadata in sync when an admin has already
+ * added the grsai provider. Does <strong>not</strong> auto-insert grsai into
+ * the provider list — it is chosen as a built-in type when adding a supplier.
+ */
 @Component
 @Order(30)
 public class GrsaiProviderInitializer implements CommandLineRunner {
@@ -40,16 +46,23 @@ public class GrsaiProviderInitializer implements CommandLineRunner {
     @Override
     @Transactional
     public void run(String... args) {
-        ApiProvider provider = providerRepository.findByProviderKey(GrsaiModelCatalogService.PROVIDER_KEY)
-                .orElseGet(() -> {
-                    ApiProvider created = new ApiProvider();
-                    created.setProviderKey(GrsaiModelCatalogService.PROVIDER_KEY);
-                    created.setName(GrsaiModelCatalogService.PROVIDER_NAME);
-                    created.setBaseUrl(GrsaiModelCatalogService.DEFAULT_BASE_URL);
-                    created.setApiKey("");
-                    return providerRepository.saveAndFlush(created);
-                });
+        Optional<ApiProvider> existing = providerRepository.findByProviderKey(GrsaiModelCatalogService.PROVIDER_KEY);
+        if (existing.isEmpty()) {
+            log.debug("Grsai provider not configured yet; skip catalog sync until it is added");
+            return;
+        }
+        syncCatalog(existing.get());
+    }
 
+    /**
+     * Synchronize built-in Grsai image models onto an existing provider account.
+     * Safe to call after an admin first creates the grsai supplier.
+     */
+    @Transactional
+    public void syncCatalog(ApiProvider provider) {
+        if (provider == null || provider.getId() == null) {
+            return;
+        }
         Map<String, ModelProvider> existing = new HashMap<>();
         for (ModelProvider model : modelProviderRepository.findByApiProviderId(provider.getId())) {
             existing.put(model.getModelName(), model);

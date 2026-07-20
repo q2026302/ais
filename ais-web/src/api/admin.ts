@@ -87,7 +87,7 @@ export const adminApi = {
     return client.get('/api/admin/security-events', { params: { limit } }).then((r) => r.data)
   },
 
-  updateModelBilling(modelId: number, data: { billingMode?: string | null; pricePerUnit?: number | null }): Promise<Record<string, unknown>> {
+  updateModelBilling(modelId: number, data: { billingMode?: string | null; pricePerUnit?: number | null; inputPricePerMillion?: number | null; outputPricePerMillion?: number | null; cacheReadPricePerMillion?: number | null }): Promise<Record<string, unknown>> {
     return client.put(`/api/admin/models/${modelId}/billing`, data).then((r) => r.data)
   },
 }
