@@ -45,7 +45,12 @@ jobs:
 
       - name: Install Frontend Dependencies
         working-directory: ais-web
-        run: yarn install --frozen-lockfile --network-timeout 600000
+        run: |
+          for i in 1 2 3; do
+            yarn install --frozen-lockfile --network-timeout 120000 --network-concurrency 4 && break
+            echo "yarn install attempt $i failed, retrying..." >&2
+            sleep 5
+          done
 
       - name: Build JAR
         run: ./gradlew bootJar
@@ -96,7 +101,12 @@ jobs:
 
       - name: Install Frontend Dependencies
         working-directory: ais-web
-        run: yarn install --frozen-lockfile --network-timeout 600000
+        run: |
+          for i in 1 2 3; do
+            yarn install --frozen-lockfile --network-timeout 120000 --network-concurrency 4 && break
+            echo "yarn install attempt $i failed, retrying..." >&2
+            sleep 5
+          done
 
       - name: Install system deps for native-image
         run: |
@@ -147,7 +157,12 @@ jobs:
 
       - name: Install Frontend Dependencies
         working-directory: ais-web
-        run: yarn install --frozen-lockfile --network-timeout 600000
+        run: |
+          for i in 1 2 3; do
+            yarn install --frozen-lockfile --network-timeout 120000 --network-concurrency 4 && break
+            echo "yarn install attempt $i failed, retrying..." >&2
+            sleep 5
+          done
 
       - name: Publish to GitHub Packages
         env:
