@@ -42,7 +42,11 @@ jobs:
 
       - name: Install Frontend Dependencies
         working-directory: ais-web
-        run: yarn install --frozen-lockfile --network-timeout 600000
+        run: |
+          # Keep the committed lockfile on the domestic mirror for local development,
+          # but use the public npm registry on GitHub-hosted runners.
+          sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+          yarn install --frozen-lockfile --network-timeout 120000
 
       - name: Install system deps
         run: |
@@ -93,7 +97,11 @@ jobs:
 
       - name: Install Frontend Dependencies
         working-directory: ais-web
-        run: yarn install --frozen-lockfile --network-timeout 600000
+        run: |
+          # Keep the committed lockfile on the domestic mirror for local development,
+          # but use the public npm registry on GitHub-hosted runners.
+          sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+          yarn install --frozen-lockfile --network-timeout 120000
 
       - name: Build JAR
         run: ./gradlew bootJar

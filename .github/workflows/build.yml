@@ -46,8 +46,20 @@ jobs:
       - name: Install Frontend Dependencies
         working-directory: ais-web
         run: |
+          # Keep the committed lockfile on the domestic mirror for local development,
+          # but use the public npm registry on GitHub-hosted runners.
+          sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+
           for i in 1 2 3; do
-            yarn install --frozen-lockfile --network-timeout 120000 && break
+            if yarn install --frozen-lockfile --network-timeout 120000; then
+              exit 0
+            fi
+
+            if [ "$i" -eq 3 ]; then
+              echo "yarn install failed after ${i} attempts." >&2
+              exit 1
+            fi
+
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
@@ -102,8 +114,20 @@ jobs:
       - name: Install Frontend Dependencies
         working-directory: ais-web
         run: |
+          # Keep the committed lockfile on the domestic mirror for local development,
+          # but use the public npm registry on GitHub-hosted runners.
+          sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+
           for i in 1 2 3; do
-            yarn install --frozen-lockfile --network-timeout 120000 && break
+            if yarn install --frozen-lockfile --network-timeout 120000; then
+              exit 0
+            fi
+
+            if [ "$i" -eq 3 ]; then
+              echo "yarn install failed after ${i} attempts." >&2
+              exit 1
+            fi
+
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
@@ -158,8 +182,20 @@ jobs:
       - name: Install Frontend Dependencies
         working-directory: ais-web
         run: |
+          # Keep the committed lockfile on the domestic mirror for local development,
+          # but use the public npm registry on GitHub-hosted runners.
+          sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+
           for i in 1 2 3; do
-            yarn install --frozen-lockfile --network-timeout 120000 && break
+            if yarn install --frozen-lockfile --network-timeout 120000; then
+              exit 0
+            fi
+
+            if [ "$i" -eq 3 ]; then
+              echo "yarn install failed after ${i} attempts." >&2
+              exit 1
+            fi
+
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
