@@ -34,9 +34,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: yarn
+          cache-dependency-path: ais-web/yarn.lock
 
-      - name: Set up Yarn
-        run: npm install -g yarn
+      - name: Enable Corepack Yarn
+        run: corepack enable
+
+      - name: Install Frontend Dependencies
+        working-directory: ais-web
+        run: yarn install --frozen-lockfile --network-timeout 600000
 
       - name: Install system deps
         run: |
@@ -79,12 +85,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: yarn
+          cache-dependency-path: ais-web/yarn.lock
 
-      - name: Set up Yarn
-        run: npm install -g yarn
+      - name: Enable Corepack Yarn
+        run: corepack enable
 
-      - name: Build Frontend
-        run: yarn --cwd ../ais-web install --frozen-lockfile
+      - name: Install Frontend Dependencies
+        working-directory: ais-web
+        run: yarn install --frozen-lockfile --network-timeout 600000
 
       - name: Build JAR
         run: ./gradlew bootJar
