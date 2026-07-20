@@ -463,6 +463,7 @@ defineExpose({ open })
             v-model="providerType"
             :disabled="editing"
             filterable
+            popper-class="provider-type-select-dropdown"
             placeholder="选择内置类型或自定义"
             @change="handleProviderTypeChange"
           >
@@ -812,12 +813,6 @@ defineExpose({ open })
   padding: 5px 0;
   white-space: normal;
 }
-.provider-form :deep(.el-select-dropdown__item) {
-  height: auto;
-  min-height: 52px;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
 .preset-option small {
   color: #8d97ac;
   font-size: 12px;
@@ -844,5 +839,32 @@ defineExpose({ open })
   .inline-field { flex-wrap: wrap; }
   .inline-field .el-input { flex-basis: 100%; }
   .retry-field { flex-wrap: wrap; white-space: normal; }
+}
+</style>
+
+<!-- Dropdown is teleported to body; scoped :deep styles under .provider-form cannot reach it. -->
+<style>
+.provider-type-select-dropdown.el-select-dropdown .el-select-dropdown__item,
+.provider-type-select-dropdown .el-select-dropdown__item {
+  height: auto !important;
+  min-height: 52px;
+  line-height: 1.35 !important;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  white-space: normal;
+}
+.provider-type-select-dropdown .preset-option {
+  display: flex;
+  min-height: 42px;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: center;
+  line-height: 1.35;
+  padding: 0;
+  white-space: normal;
+}
+.provider-type-select-dropdown .preset-option small {
+  color: #8d97ac;
+  font-size: 12px;
 }
 </style>

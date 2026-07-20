@@ -342,6 +342,7 @@ onMounted(async () => {
 .billing-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; color: #7c87a1; font-size: 13px; }
 .billing-filter :deep(.el-date-editor) { width: 150px; }
 
+.profile-view {
   position: relative;
   width: min(100%, 1120px);
   min-height: 100%;
