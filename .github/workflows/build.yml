@@ -1,0 +1,144 @@
+name: Build & Package
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ============================================================
+  # Job 1: 构建 + 测试（Jar 模式，不依赖 GraalVM）
+  # ============================================================
+  build-jar:
+    name: Build (JAR)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ais-api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Yarn
+        run: npm install -g yarn
+
+      - name: Build Frontend
+        run: yarn --cwd ../ais-web install --frozen-lockfile
+
+      - name: Build JAR
+        run: ./gradlew bootJar
+
+      - name: Run Tests
+        run: ./gradlew test
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ais-api-jar
+          path: ais-api/build/libs/*.jar
+          retention-days: 7
+
+  # ============================================================
+  # Job 2: GraalVM Native Image 构建
+  # ============================================================
+  build-native:
+    name: Build (Native Image)
+    runs-on: ubuntu-latest
+    needs: build-jar
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    defaults:
+      run:
+        working-directory: ais-api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up GraalVM JDK 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "25"
+          distribution: "graalvm"
+          components: "native-image"
+          cache: gradle
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Yarn
+        run: npm install -g yarn
+
+      - name: Install system deps for native-image
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgif-dev zlib1g-dev libssl-dev
+
+      - name: Build Native Image
+        run: ./gradlew nativeCompile
+
+      - name: Upload Native Image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ais-native
+          path: ais-api/build/native/nativeCompile/ais
+          retention-days: 7
+
+  # ============================================================
+  # Job 3: 发布到 GitHub Packages (Maven)
+  # ============================================================
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    needs: build-jar
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    permissions:
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Yarn
+        run: npm install -g yarn
+
+      - name: Build Frontend
+        run: yarn --cwd ../ais-web install --frozen-lockfile
+
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew publish
+        working-directory: ais-api
