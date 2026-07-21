@@ -2,6 +2,9 @@ package com.gs.ais.controller;
 
 import com.gs.ais.model.entity.SecuritySettings;
 import com.gs.ais.service.SecuritySettingsService;
+import com.gs.ais.service.OperationLogService;
+import com.gs.ais.security.AuthContext;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -19,9 +22,12 @@ import java.util.Map;
 public class SecuritySettingsController {
 
     private final SecuritySettingsService securitySettingsService;
+    private final OperationLogService operationLogService;
 
-    public SecuritySettingsController(SecuritySettingsService securitySettingsService) {
+    public SecuritySettingsController(SecuritySettingsService securitySettingsService,
+                                      OperationLogService operationLogService) {
         this.securitySettingsService = securitySettingsService;
+        this.operationLogService = operationLogService;
     }
 
     @GetMapping
@@ -30,12 +36,15 @@ public class SecuritySettingsController {
     }
 
     @PutMapping
-    public Map<String, Object> update(@Valid @RequestBody UpdateRequest request) {
+    public Map<String, Object> update(@Valid @RequestBody UpdateRequest request,
+                                      HttpServletRequest httpRequest) {
         SecuritySettings settings = securitySettingsService.update(
                 request.maxFailures(),
                 request.failureWindowMinutes(),
                 request.lockDurationMinutes(),
                 request.captchaEnabled());
+        operationLogService.record(AuthContext.get(), "ADMIN_SECURITY_UPDATE", "SECURITY_SETTINGS", null,
+                "更新登录防护配置", httpRequest);
         return toResponse(settings);
     }
 

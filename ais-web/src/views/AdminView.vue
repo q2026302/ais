@@ -17,6 +17,7 @@ import {
   type ExportSection,
   type ImportMode,
   type LoginSecurityEvent,
+  type OperationLog,
   type SecuritySettings,
 } from '@/api/admin'
 import { useSessionStore } from '@/stores/session'
@@ -28,7 +29,7 @@ import ProviderDialog from '@/components/ProviderDialog.vue'
 import LlmDebugPanel from '@/components/LlmDebugPanel.vue'
 
 const sessionStore = useSessionStore()
-type AdminSection = 'models' | 'security' | 'data' | 'tools' | 'users' | 'sessions' | 'billing' | 'billing-logs'
+type AdminSection = 'models' | 'security' | 'data' | 'tools' | 'users' | 'sessions' | 'billing' | 'billing-logs' | 'operation-logs'
 const activeSection = ref<AdminSection>('models')
 const adminMenuGroups = [
   {
@@ -52,6 +53,7 @@ const adminMenuGroups = [
       { key: 'users' as AdminSection, label: '用户管理', hint: '账号与角色维护', icon: UserFilled },
       { key: 'sessions' as AdminSection, label: '会话管理', hint: '查看全部用户会话', icon: ChatDotRound },
       { key: 'billing-logs' as AdminSection, label: '消费日志', hint: '用户消费记录', icon: DataAnalysis },
+      { key: 'operation-logs' as AdminSection, label: '操作日志', hint: '账号与管理操作记录', icon: Monitor },
     ],
   },
 ]
@@ -150,6 +152,9 @@ async function loadSectionData(section: AdminSection) {
     if (users.value.length > 0) {
       usersForFilter.value = users.value
     }
+  }
+  if (section === 'operation-logs') {
+    await loadOperationLogs()
   }
 }
 
@@ -584,9 +589,59 @@ async function loadBillingLogs() {
 }
 
 function formatBillingAmount(record: BillingRecord) {
-  if (record.amount != null) return `${record.amount} 元`
-  if (record.totalTokens != null) return `${record.totalTokens} tokens`
-  return '—'
+  if (record.amount == null || !Number.isFinite(record.amount)) return '—'
+  const amount = record.amount.toFixed(6).replace(/\.?(?:0+)$/, '')
+  return `¥${amount}`
+}
+
+// ====== Operation logs ======
+const operationLogs = ref<OperationLog[]>([])
+const operationLogsLoading = ref(false)
+const operationLogsPage = ref(1)
+const operationLogsTotal = ref(0)
+const operationLogUsername = ref('')
+const operationLogAction = ref('')
+const operationLogDateRange = ref<[Date, Date] | null>(null)
+const operationLogActions = ['LOGIN', 'SESSION_CREATE', 'SESSION_DELETE', 'CHAT', 'IMAGE_GENERATE', 'UPLOAD', 'MESSAGE_DELETE', 'ADMIN_USER_CREATE', 'ADMIN_USER_UPDATE', 'ADMIN_USER_DELETE', 'ADMIN_PASSWORD_RESET', 'ADMIN_SECURITY_UPDATE', 'ADMIN_DATA_EXPORT', 'ADMIN_DATA_IMPORT', 'ADMIN_BILLING_UPDATE', 'ADMIN_PROVIDER_CREATE', 'ADMIN_PROVIDER_UPDATE', 'ADMIN_PROVIDER_DELETE', 'ADMIN_MODEL_DEFAULTS_UPDATE']
+
+function toOperationLogTime(date: Date, endOfDay = false) {
+  const value = new Date(date)
+  if (endOfDay) value.setHours(23, 59, 59, 999)
+  return value.toISOString().slice(0, 19)
+}
+
+async function loadOperationLogs(resetPage = false) {
+  if (resetPage) operationLogsPage.value = 1
+  operationLogsLoading.value = true
+  try {
+    const result = await adminApi.getOperationLogs({
+      page: operationLogsPage.value - 1,
+      size: 20,
+      username: operationLogUsername.value.trim() || undefined,
+      action: operationLogAction.value || undefined,
+      start: operationLogDateRange.value?.[0] ? toOperationLogTime(operationLogDateRange.value[0]) : undefined,
+      end: operationLogDateRange.value?.[1] ? toOperationLogTime(operationLogDateRange.value[1], true) : undefined,
+    })
+    operationLogs.value = result.content
+    operationLogsTotal.value = result.totalElements
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载操作日志失败')
+  } finally {
+    operationLogsLoading.value = false
+  }
+}
+
+function operationActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    LOGIN: '登录', SESSION_CREATE: '创建会话', SESSION_DELETE: '删除会话', CHAT: '发送对话',
+    IMAGE_GENERATE: '生成图片', UPLOAD: '上传文件', MESSAGE_DELETE: '删除消息',
+    ADMIN_USER_CREATE: '创建用户', ADMIN_USER_UPDATE: '更新用户', ADMIN_USER_DELETE: '删除用户',
+    ADMIN_PASSWORD_RESET: '重置密码', ADMIN_SECURITY_UPDATE: '更新安全设置',
+    ADMIN_DATA_EXPORT: '导出数据', ADMIN_DATA_IMPORT: '导入数据', ADMIN_BILLING_UPDATE: '更新计费',
+    ADMIN_PROVIDER_CREATE: '创建供应商', ADMIN_PROVIDER_UPDATE: '更新供应商', ADMIN_PROVIDER_DELETE: '删除供应商',
+    ADMIN_MODEL_DEFAULTS_UPDATE: '更新默认模型',
+  }
+  return labels[action] || action
 }
 
 function formatTime(value: string) {
@@ -956,7 +1011,7 @@ function formatTime(value: string) {
           </div>
 
           <el-table v-loading="sessionsLoading" :data="filteredManagedSessions" stripe empty-text="暂无会话数据">
-            <el-table-column prop="id" label="会话 ID" width="100" />
+            <el-table-column prop="id" label="会话ID" width="100" />
             <el-table-column prop="title" label="会话标题" min-width="220" show-overflow-tooltip />
             <el-table-column label="用户" min-width="160">
               <template #default="{ row }">{{ sessionUserLabel(row.userId) }}</template>
@@ -1063,6 +1118,12 @@ function formatTime(value: string) {
 
           <el-table v-loading="billingLogsLoading" :data="billingLogs" stripe empty-text="暂无消费记录">
             <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column prop="sessionId" label="会话ID" width="100">
+              <template #default="{ row }">{{ row.sessionId ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column prop="messageId" label="消息ID" width="100">
+              <template #default="{ row }">{{ row.messageId ?? '—' }}</template>
+            </el-table-column>
             <el-table-column label="用户" min-width="140">
               <template #default="{ row }">
                 {{ row.userId ? `#${row.userId}` : '—' }}
@@ -1073,6 +1134,15 @@ function formatTime(value: string) {
             </el-table-column>
             <el-table-column prop="modelName" label="模型" min-width="160">
               <template #default="{ row }">{{ row.modelName || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="输入Token" width="105">
+              <template #default="{ row }">{{ row.inputTokens ?? row.promptTokens ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="输出Token" width="105">
+              <template #default="{ row }">{{ row.outputTokens ?? row.completionTokens ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="缓存读取" width="105">
+              <template #default="{ row }">{{ row.cacheReadTokens ?? '—' }}</template>
             </el-table-column>
             <el-table-column label="计费模式" width="120">
               <template #default="{ row }">
@@ -1100,6 +1170,32 @@ function formatTime(value: string) {
               layout="prev, pager, next"
               @current-change="loadBillingLogs"
             />
+          </div>
+        </section>
+
+        <section v-else-if="activeSection === 'operation-logs'" class="admin-section">
+          <div class="section-intro">
+            <div><span class="section-kicker">AUDIT TRAIL</span><h3>操作日志</h3><p>记录登录、会话、创作、上传及关键管理操作，支持按时间、用户和类型筛选。</p></div>
+            <el-button :loading="operationLogsLoading" @click="loadOperationLogs">刷新日志</el-button>
+          </div>
+          <div class="filter-bar operation-log-filter">
+            <el-input v-model="operationLogUsername" clearable placeholder="按用户筛选" style="width: 180px" @keyup.enter="loadOperationLogs(true)" />
+            <el-select v-model="operationLogAction" clearable filterable placeholder="按操作类型筛选" style="width: 190px" @change="loadOperationLogs(true)">
+              <el-option v-for="action in operationLogActions" :key="action" :label="operationActionLabel(action)" :value="action" />
+            </el-select>
+            <el-date-picker v-model="operationLogDateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width: 280px" @change="loadOperationLogs(true)" />
+            <el-button type="primary" @click="loadOperationLogs(true)">查询</el-button>
+          </div>
+          <el-table v-loading="operationLogsLoading" :data="operationLogs" stripe empty-text="暂无操作日志">
+            <el-table-column label="时间" min-width="170"><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></el-table-column>
+            <el-table-column label="用户" min-width="135"><template #default="{ row }">{{ row.username || '匿名/系统' }}</template></el-table-column>
+            <el-table-column label="操作" min-width="130"><template #default="{ row }"><el-tag size="small">{{ operationActionLabel(row.action) }}</el-tag></template></el-table-column>
+            <el-table-column label="目标" min-width="130"><template #default="{ row }">{{ row.targetType ? `${row.targetType}${row.targetId ? ` #${row.targetId}` : ''}` : '—' }}</template></el-table-column>
+            <el-table-column prop="detail" label="详情" min-width="220" show-overflow-tooltip><template #default="{ row }">{{ row.detail || '—' }}</template></el-table-column>
+            <el-table-column prop="ip" label="IP" min-width="130"><template #default="{ row }">{{ row.ip || '—' }}</template></el-table-column>
+          </el-table>
+          <div v-if="operationLogsTotal > 20" class="pagination-bar">
+            <el-pagination v-model:current-page="operationLogsPage" :page-size="20" :total="operationLogsTotal" layout="prev, pager, next" @current-change="() => loadOperationLogs()" />
           </div>
         </section>
 

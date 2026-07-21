@@ -9,6 +9,8 @@ import com.gs.ais.model.entity.AppUser;
 import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.service.UserManagementService;
+import com.gs.ais.service.OperationLogService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,11 +26,14 @@ public class UserManagementController {
 
     private final UserManagementService userManagementService;
     private final AppUserRepository appUserRepository;
+    private final OperationLogService operationLogService;
 
     public UserManagementController(UserManagementService userManagementService,
-                                    AppUserRepository appUserRepository) {
+                                    AppUserRepository appUserRepository,
+                                    OperationLogService operationLogService) {
         this.userManagementService = userManagementService;
         this.appUserRepository = appUserRepository;
+        this.operationLogService = operationLogService;
     }
 
     @GetMapping
@@ -37,26 +42,39 @@ public class UserManagementController {
     }
 
     @PostMapping
-    public ResponseEntity<UserResponse> create(@Valid @RequestBody CreateUserRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(userManagementService.createUser(request));
+    public ResponseEntity<UserResponse> create(@Valid @RequestBody CreateUserRequest request,
+                                               HttpServletRequest httpRequest) {
+        UserResponse user = userManagementService.createUser(request);
+        operationLogService.record(AuthContext.get(), "ADMIN_USER_CREATE", "USER", user.id(),
+                "创建用户：" + user.username(), httpRequest);
+        return ResponseEntity.status(HttpStatus.CREATED).body(user);
     }
 
     @PutMapping("/{id}")
     public UserResponse update(@PathVariable Long id,
-                               @Valid @RequestBody UpdateUserRequest request) {
-        return userManagementService.updateUser(id, request, AuthContext.get());
+                               @Valid @RequestBody UpdateUserRequest request,
+                               HttpServletRequest httpRequest) {
+        UserResponse user = userManagementService.updateUser(id, request, AuthContext.get());
+        operationLogService.record(AuthContext.get(), "ADMIN_USER_UPDATE", "USER", id,
+                (user.enabled() ? "启用" : "禁用") + "用户：" + user.username(), httpRequest);
+        return user;
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
+    public ResponseEntity<Void> delete(@PathVariable Long id, HttpServletRequest httpRequest) {
         userManagementService.deleteUser(id, AuthContext.get());
+        operationLogService.record(AuthContext.get(), "ADMIN_USER_DELETE", "USER", id,
+                "删除用户", httpRequest);
         return ResponseEntity.noContent().build();
     }
 
     @PutMapping("/{id}/password")
     public ResponseEntity<Void> resetPassword(@PathVariable Long id,
-                                              @Valid @RequestBody ResetUserPasswordRequest request) {
+                                              @Valid @RequestBody ResetUserPasswordRequest request,
+                                              HttpServletRequest httpRequest) {
         userManagementService.resetPassword(id, request);
+        operationLogService.record(AuthContext.get(), "ADMIN_PASSWORD_RESET", "USER", id,
+                "重置用户密码", httpRequest);
         return ResponseEntity.noContent().build();
     }
 

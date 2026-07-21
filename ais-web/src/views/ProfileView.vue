@@ -255,7 +255,7 @@ onMounted(async () => {
                 <el-option
                   v-for="model in chatModels"
                   :key="model.id"
-                  :label="model.modelName"
+                  :label="`${model.name || model.providerId} / ${model.modelName}`"
                   :value="model.id"
                 />
               </el-select>
@@ -267,7 +267,7 @@ onMounted(async () => {
                 <el-option
                   v-for="model in imageModels"
                   :key="model.id"
-                  :label="model.modelName"
+                  :label="`${model.name || model.providerId} / ${model.modelName}`"
                   :value="model.id"
                 />
               </el-select>

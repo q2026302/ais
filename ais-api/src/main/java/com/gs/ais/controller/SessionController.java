@@ -16,11 +16,11 @@ import com.gs.ais.model.entity.ModelProvider;
 import com.gs.ais.model.enums.MessageStatus;
 import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.security.AuthContext;
-import com.gs.ais.security.AuthRole;
 import com.gs.ais.service.BillingService;
 import com.gs.ais.service.ImageGenerationQueueService;
 import com.gs.ais.service.ImageGenerationService;
 import com.gs.ais.service.SessionService;
+import com.gs.ais.service.OperationLogService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -28,6 +28,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -47,17 +48,20 @@ public class SessionController {
     private final ImageGenerationQueueService queueService;
     private final AppUserRepository appUserRepository;
     private final BillingService billingService;
+    private final OperationLogService operationLogService;
 
     public SessionController(SessionService sessionService,
                              ImageGenerationService imageGenerationService,
                              ImageGenerationQueueService queueService,
                              AppUserRepository appUserRepository,
-                             BillingService billingService) {
+                             BillingService billingService,
+                             OperationLogService operationLogService) {
         this.sessionService = sessionService;
         this.imageGenerationService = imageGenerationService;
         this.queueService = queueService;
         this.appUserRepository = appUserRepository;
         this.billingService = billingService;
+        this.operationLogService = operationLogService;
     }
 
     private Long getCurrentUserId() {
@@ -79,11 +83,14 @@ public class SessionController {
     @Operation(summary = "创建新会话", description = "创建一个新的对话会话。")
     @ApiResponses({@ApiResponse(responseCode = "201", description = "会话创建成功")})
     @PostMapping
-    public ResponseEntity<Session> createSession(@Valid @RequestBody(required = false) CreateSessionRequest request) {
+    public ResponseEntity<Session> createSession(@Valid @RequestBody(required = false) CreateSessionRequest request,
+                                                  HttpServletRequest httpRequest) {
         Long userId = getCurrentUserId();
         Session session = sessionService.createSession(
                 request == null ? null : request.getTitle(),
                 userId);
+        operationLogService.record(AuthContext.get(), "SESSION_CREATE", "SESSION", session.getId(),
+                "创建会话：" + session.getTitle(), httpRequest);
         return ResponseEntity.status(HttpStatus.CREATED).body(session);
     }
 
@@ -103,10 +110,13 @@ public class SessionController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteSession(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteSession(@PathVariable Long id, HttpServletRequest httpRequest) {
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
+        String title = session.getTitle();
         sessionService.deleteSession(id);
+        operationLogService.record(AuthContext.get(), "SESSION_DELETE", "SESSION", id,
+                "删除会话：" + title, httpRequest);
         return ResponseEntity.noContent().build();
     }
 
@@ -126,7 +136,8 @@ public class SessionController {
 
     @PostMapping("/{id}/chat")
     public ResponseEntity<Map<String, Object>> chat(@PathVariable Long id,
-                                                     @Valid @RequestBody GenerateRequest request) {
+                                                     @Valid @RequestBody GenerateRequest request,
+                                                     HttpServletRequest httpRequest) {
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
 
@@ -174,12 +185,15 @@ public class SessionController {
         body.put("tokenUsage", result.tokenUsage());
         body.put("status", result.status());
         body.put("errorMessage", result.errorMessage());
+        operationLogService.record(AuthContext.get(), "CHAT", "SESSION", id,
+                result.status() == MessageStatus.SUCCESS ? "发送对话" : "对话失败：" + result.errorMessage(), httpRequest);
         return ResponseEntity.ok(body);
     }
 
     @PostMapping("/{id}/draw")
     public ResponseEntity<Map<String, Object>> draw(@PathVariable Long id,
-                                                     @RequestBody(required = false) DrawRequest request) {
+                                                     @RequestBody(required = false) DrawRequest request,
+                                                     HttpServletRequest httpRequest) {
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
 
@@ -207,6 +221,8 @@ public class SessionController {
         body.put("prompt", result.prompt());
         body.put("status", result.status());
         body.put("errorMessage", result.errorMessage());
+        operationLogService.record(AuthContext.get(), "IMAGE_GENERATE", "SESSION", id,
+                result.status() == MessageStatus.SUCCESS ? "生成图片" : "图片生成失败：" + result.errorMessage(), httpRequest);
         return ResponseEntity.ok(body);
     }
 
@@ -260,10 +276,13 @@ public class SessionController {
 
     @DeleteMapping("/{id}/messages/{messageId}")
     public ResponseEntity<Void> deleteMessage(@PathVariable Long id,
-                                               @PathVariable Long messageId) {
+                                               @PathVariable Long messageId,
+                                               HttpServletRequest httpRequest) {
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
         imageGenerationService.deleteMessage(id, messageId);
+        operationLogService.record(AuthContext.get(), "MESSAGE_DELETE", "MESSAGE", messageId,
+                "删除会话 #" + id + " 中的消息", httpRequest);
         return ResponseEntity.noContent().build();
     }
 

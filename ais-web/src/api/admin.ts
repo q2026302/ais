@@ -33,6 +33,28 @@ export interface SecuritySettings {
   updatedAt?: string | null
 }
 
+
+export interface OperationLog {
+  id: number
+  userId: number | null
+  username: string | null
+  action: string
+  targetType: string | null
+  targetId: string | null
+  detail: string | null
+  ip: string | null
+  createdAt: string
+}
+
+export interface OperationLogQuery {
+  page?: number
+  size?: number
+  username?: string
+  action?: string
+  start?: string
+  end?: string
+}
+
 export interface LoginSecurityEvent {
   id: number | null
   eventType: 'IP_LOCKED' | 'ACCOUNT_BLOCKED'
@@ -85,6 +107,10 @@ export const adminApi = {
 
   getSecurityEvents(limit = 100): Promise<LoginSecurityEvent[]> {
     return client.get('/api/admin/security-events', { params: { limit } }).then((r) => r.data)
+  },
+
+  getOperationLogs(query: OperationLogQuery = {}): Promise<{ content: OperationLog[]; totalElements: number; totalPages: number; number: number; size: number }> {
+    return client.get('/api/admin/operation-logs', { params: query }).then((r) => r.data)
   },
 
   updateModelBilling(modelId: number, data: { billingMode?: string | null; pricePerUnit?: number | null; inputPricePerMillion?: number | null; outputPricePerMillion?: number | null; cacheReadPricePerMillion?: number | null }): Promise<Record<string, unknown>> {

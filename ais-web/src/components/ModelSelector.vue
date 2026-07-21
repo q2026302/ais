@@ -28,7 +28,7 @@ const emit = defineEmits<{
         <el-option
           v-for="p in chatProviders"
           :key="p.id"
-          :label="p.name || p.providerId"
+          :label="`${p.name || p.providerId} / ${p.modelName}`"
           :value="p.id"
         />
       </el-select>
@@ -45,7 +45,7 @@ const emit = defineEmits<{
         <el-option
           v-for="p in imageProviders"
           :key="p.id"
-          :label="p.name || p.providerId"
+          :label="`${p.name || p.providerId} / ${p.modelName}`"
           :value="p.id"
         />
       </el-select>
