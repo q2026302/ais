@@ -16,7 +16,7 @@ if [[ "$(basename "$NATIVE_DIR")" == "bin" ]]; then
 else
   BASE_DIR="$(cd "$NATIVE_DIR" && pwd)"
 fi
-SERVICE_NAME="ais.service"
+SERVICE_NAME="ai-image-studio.service"
 UNIT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME"
 ENV_FILE="$BASE_DIR/config/application.env"
 
@@ -46,6 +46,14 @@ fi
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "未找到 systemctl；当前系统可能不支持 systemd。" >&2
   exit 1
+fi
+
+# 也清理旧名称 ais.service（如果有）
+OLD_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/ais.service"
+if [[ -f "$OLD_UNIT" ]] || systemctl --user --quiet is-enabled ais.service 2>/dev/null; then
+  systemctl --user disable --now ais.service >/dev/null 2>&1 || true
+  rm -f "$OLD_UNIT"
+  echo "已清理旧服务 ais.service"
 fi
 
 systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
