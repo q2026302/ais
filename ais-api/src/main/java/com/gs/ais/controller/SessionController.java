@@ -160,24 +160,37 @@ public class SessionController {
         long chatDuration = System.currentTimeMillis() - chatStart;
 
         // Record billing for successful chat
-        if (result.status() == MessageStatus.SUCCESS && result.tokenUsage() != null) {
+        if (result.status() == MessageStatus.SUCCESS) {
             Long userId = getCurrentUserId();
             if (userId != null) {
                 try {
-                    ModelProvider chatProvider = imageGenerationService.getProviderById(
-                            resolvedChatProviderId != null ? resolvedChatProviderId : session.getChatProviderId());
+                    // Prefer the explicit request override, then the session selection, then the active default.
+                    Long billingProviderId = resolvedChatProviderId != null
+                            ? resolvedChatProviderId
+                            : session.getChatProviderId();
+                    ModelProvider chatProvider = imageGenerationService.getProviderById(billingProviderId);
+                    if (chatProvider == null) {
+                        chatProvider = imageGenerationService.getProviderById(session.getChatProviderId());
+                    }
+                    if (chatProvider == null) {
+                        // Fall back to the same resolver path used by the chat service.
+                        chatProvider = imageGenerationService.resolveChatProviderForBilling(session.getChatProviderId());
+                    }
                     if (chatProvider != null) {
+                        var usage = result.tokenUsage();
                         billingService.recordChat(chatProvider, userId, id, result.assistantMessageId(),
-                                result.tokenUsage().getPromptTokens(),
-                                result.tokenUsage().getCompletionTokens(),
-                                result.tokenUsage().getTotalTokens(),
-                                result.tokenUsage().getCacheReadTokens(),
-                                result.tokenUsage().getCacheWriteTokens(),
-                                result.tokenUsage().getReasoningTokens(),
+                                usage != null ? usage.getPromptTokens() : null,
+                                usage != null ? usage.getCompletionTokens() : null,
+                                usage != null ? usage.getTotalTokens() : null,
+                                usage != null ? usage.getCacheReadTokens() : null,
+                                usage != null ? usage.getCacheWriteTokens() : null,
+                                usage != null ? usage.getReasoningTokens() : null,
                                 chatDuration);
                     }
                 } catch (Exception e) {
-                    // Billing recording is non-critical
+                    // Billing recording is non-critical but should be visible in logs for diagnosis.
+                    org.slf4j.LoggerFactory.getLogger(SessionController.class)
+                            .warn("Failed to record chat billing for session {}", id, e);
                 }
             }
         }
@@ -277,24 +290,30 @@ public class SessionController {
 
         // Regeneration records billing in ImageGenerationService so direct service callers are covered too.
         // Keep this controller fallback for paths where the service could not resolve a user for billing.
-        if (result.status() == MessageStatus.SUCCESS && result.tokenUsage() != null && !result.billingRecorded()) {
+        if (result.status() == MessageStatus.SUCCESS && !result.billingRecorded()) {
             Long userId = getCurrentUserId();
             if (userId != null) {
                 try {
-                    ModelProvider chatProvider = imageGenerationService.getProviderById(
-                            chatProviderId != null ? chatProviderId : session.getChatProviderId());
+                    Long billingProviderId = chatProviderId != null ? chatProviderId : session.getChatProviderId();
+                    ModelProvider chatProvider = imageGenerationService.getProviderById(billingProviderId);
+                    if (chatProvider == null) {
+                        chatProvider = imageGenerationService.resolveChatProviderForBilling(session.getChatProviderId());
+                    }
                     if (chatProvider != null) {
+                        var usage = result.tokenUsage();
                         billingService.recordChat(chatProvider, userId, id, result.messageId(),
-                                result.tokenUsage().getPromptTokens(),
-                                result.tokenUsage().getCompletionTokens(),
-                                result.tokenUsage().getTotalTokens(),
-                                result.tokenUsage().getCacheReadTokens(),
-                                result.tokenUsage().getCacheWriteTokens(),
-                                result.tokenUsage().getReasoningTokens(),
+                                usage != null ? usage.getPromptTokens() : null,
+                                usage != null ? usage.getCompletionTokens() : null,
+                                usage != null ? usage.getTotalTokens() : null,
+                                usage != null ? usage.getCacheReadTokens() : null,
+                                usage != null ? usage.getCacheWriteTokens() : null,
+                                usage != null ? usage.getReasoningTokens() : null,
                                 regenDuration);
                     }
                 } catch (Exception e) {
-                    // Billing recording is non-critical
+                    // Billing recording is non-critical but should be visible in logs for diagnosis.
+                    org.slf4j.LoggerFactory.getLogger(SessionController.class)
+                            .warn("Failed to record chat billing for session {}", id, e);
                 }
             }
         }

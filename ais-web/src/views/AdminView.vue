@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, Connection, DataAnalysis, Download, Lock, Monitor, Picture, Plus, Search, Upload, UserFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, ChatDotRound, Connection, DataAnalysis, Download, Lock, Monitor, Picture, Plus, Search, Upload, UserFilled } from '@element-plus/icons-vue'
 import type {
   BillingRecord,
   ModelProvider,
@@ -29,8 +30,14 @@ import ProviderDialog from '@/components/ProviderDialog.vue'
 import LlmDebugPanel from '@/components/LlmDebugPanel.vue'
 
 const sessionStore = useSessionStore()
+const router = useRouter()
+const route = useRoute()
 type AdminSection = 'models' | 'security' | 'data' | 'tools' | 'users' | 'sessions' | 'billing' | 'billing-logs' | 'operation-logs'
 const activeSection = ref<AdminSection>('models')
+
+function goBackToWorkspace() {
+  void router.push(route.query.source === 'feishu' ? { name: 'feishu-h5' } : { name: 'home' })
+}
 const adminMenuGroups = [
   {
     label: '业务配置',
@@ -594,6 +601,24 @@ function formatBillingAmount(record: BillingRecord) {
   return `¥${amount}`
 }
 
+function isPerCallBilling(mode: string | null | undefined) {
+  return mode === 'PER_CALL' || mode === 'per_request' || mode === 'per_call'
+}
+
+function isPerTokenBilling(mode: string | null | undefined) {
+  return mode === 'PER_TOKEN' || mode === 'per_token'
+}
+
+function formatDuration(ms: number | null | undefined) {
+  if (ms == null || ms < 0) return '—'
+  if (ms < 1000) return `${ms} ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`
+  const minutes = Math.floor(seconds / 60)
+  const remain = Math.round(seconds % 60)
+  return `${minutes}m ${remain}s`
+}
+
 // ====== Operation logs ======
 const operationLogs = ref<OperationLog[]>([])
 const operationLogsLoading = ref(false)
@@ -658,6 +683,10 @@ function formatTime(value: string) {
         <p>配置模型服务、账户安全和数据运维，保持核心业务设置清晰可见。</p>
       </div>
       <div class="admin-header-actions">
+        <el-button class="return-workspace-btn" @click="goBackToWorkspace">
+          <el-icon><ArrowLeft /></el-icon>
+          返回创作
+        </el-button>
         <el-button v-if="activeSection === 'models'" type="primary" :icon="Plus" @click="handleAdd">添加供应商</el-button>
       </div>
     </div>
@@ -1056,8 +1085,8 @@ function formatTime(value: string) {
             </el-table-column>
             <el-table-column label="计费模式" width="140">
               <template #default="{ row }">
-                <el-tag v-if="row.billingMode === 'per_request'" size="small">按次计费</el-tag>
-                <el-tag v-else-if="row.billingMode === 'per_token'" type="warning" size="small">按 Token</el-tag>
+                <el-tag v-if="isPerCallBilling(row.billingMode)" size="small">按次计费</el-tag>
+                <el-tag v-else-if="isPerTokenBilling(row.billingMode)" type="warning" size="small">按 Token</el-tag>
                 <span v-else class="muted">未配置</span>
               </template>
             </el-table-column>
@@ -1146,13 +1175,16 @@ function formatTime(value: string) {
             </el-table-column>
             <el-table-column label="计费模式" width="120">
               <template #default="{ row }">
-                <el-tag v-if="row.billingMode === 'per_request'" size="small">按次</el-tag>
-                <el-tag v-else-if="row.billingMode === 'per_token'" type="warning" size="small">按 Token</el-tag>
-                <span v-else class="muted">—</span>
+                <el-tag v-if="isPerCallBilling(row.billingMode)" size="small">按次</el-tag>
+                <el-tag v-else-if="isPerTokenBilling(row.billingMode)" type="warning" size="small">按 Token</el-tag>
+                <span v-else class="muted">未配置</span>
               </template>
             </el-table-column>
             <el-table-column label="费用" width="100">
               <template #default="{ row }">{{ formatBillingAmount(row) }}</template>
+            </el-table-column>
+            <el-table-column label="耗时" width="100">
+              <template #default="{ row }">{{ formatDuration(row.durationMs) }}</template>
             </el-table-column>
             <el-table-column prop="description" label="说明" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">{{ row.description || '—' }}</template>
@@ -1213,6 +1245,8 @@ function formatTime(value: string) {
 <style scoped>
 .admin-view { height: 100%; overflow-y: auto; box-sizing: border-box; padding: clamp(20px, 3vw, 36px); background: radial-gradient(circle at 95% 0%, rgba(150,103,244,.12), transparent 25rem), #f7f8fe; }
 .admin-header { display: flex; align-items: center; justify-content: space-between; margin: 2px 0 24px; }.admin-header h2 { margin: 0; color: #263452; font-size: 25px; letter-spacing: -.45px; }.admin-header p { max-width: 700px; margin: 8px 0 0; color: #7c87a1; font-size: 13px; }.admin-header :deep(.el-button) { min-height: 38px; padding: 0 15px; border-radius: 10px; }
+.admin-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.return-workspace-btn { border-radius: 999px !important; font-weight: 700; }
 .defaults-card, .debug-panel { margin-bottom: 20px; overflow: hidden; border-radius: 16px; box-shadow: 0 9px 26px rgba(44,57,112,.06); }.defaults-card :deep(.el-card__header) { padding: 15px 19px; border-bottom-color: #edf0f7; background: linear-gradient(90deg, #fbfcff, #f5f3ff); }.defaults-card :deep(.el-card__body) { padding: 20px; }
 .security-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .security-grid .default-field small { color: #929bb0; font-size: 11px; line-height: 1.45; }

@@ -36,24 +36,22 @@ public class BillingService {
                                  Long durationMs) {
         if (provider == null || userId == null) return;
 
-        String billingMode = provider.getBillingMode();
+        String billingMode = normalizeBillingMode(provider.getBillingMode());
         BigDecimal pricePerUnit = provider.getPricePerUnit();
-
-        if (billingMode == null || pricePerUnit == null) return;
-
         BigDecimal amount = BigDecimal.ZERO;
 
-        if ("PER_CALL".equalsIgnoreCase(billingMode)) {
+        // Image generation is always treated as a per-call charge when a unit price is set.
+        if (pricePerUnit != null && pricePerUnit.signum() > 0) {
             amount = pricePerUnit;
-        } else if ("PER_TOKEN".equalsIgnoreCase(billingMode)) {
-            // For image generation, we don't have token counts, so use a flat rate
-            amount = pricePerUnit;
+            if (billingMode == null) {
+                billingMode = "PER_CALL";
+            }
         }
 
         BillingRecord record = new BillingRecord();
         record.setUserId(userId);
         record.setProviderId(provider.getId());
-        record.setProviderName(provider.getName());
+        record.setProviderName(provider.getName() != null ? provider.getName() : provider.getProviderId());
         record.setModelName(provider.getModelName());
         record.setBillingMode(billingMode);
         record.setUnitPrice(pricePerUnit);
@@ -61,10 +59,11 @@ public class BillingService {
         record.setSessionId(sessionId);
         record.setMessageId(messageId);
         record.setDurationMs(durationMs);
-        record.setDescription("图片生成 - " + provider.getModelName());
+        record.setDescription("图片生成 - " + (provider.getModelName() != null ? provider.getModelName() : "unknown"));
         billingRecordRepository.save(record);
 
-        log.debug("Billing record created: user={}, provider={}, amount={}", userId, provider.getName(), amount);
+        log.debug("Billing record created: user={}, provider={}, amount={}, durationMs={}",
+                userId, provider.getName(), amount, durationMs);
     }
 
     @Transactional
@@ -97,23 +96,28 @@ public class BillingService {
                            Long durationMs) {
         if (provider == null || userId == null) return;
 
-        String billingMode = provider.getBillingMode();
+        // Always persist a usage log, even when billing is not configured, so operators can audit traffic.
+        String billingMode = normalizeBillingMode(provider.getBillingMode());
         BigDecimal pricePerUnit = provider.getPricePerUnit();
-        if (billingMode == null || (pricePerUnit == null && "PER_CALL".equalsIgnoreCase(billingMode))) return;
-
         BigDecimal amount = BigDecimal.ZERO;
-        if ("PER_CALL".equalsIgnoreCase(billingMode) || "per_request".equalsIgnoreCase(billingMode)) {
-            amount = pricePerUnit;
-        } else if ("PER_TOKEN".equalsIgnoreCase(billingMode) || "per_token".equalsIgnoreCase(billingMode)) {
+
+        if ("PER_CALL".equals(billingMode)) {
+            if (pricePerUnit != null && pricePerUnit.signum() > 0) {
+                amount = pricePerUnit;
+            }
+        } else if ("PER_TOKEN".equals(billingMode)) {
             BigDecimal inputPrice = provider.getInputPricePerMillion();
             BigDecimal outputPrice = provider.getOutputPricePerMillion();
             BigDecimal cachePrice = provider.getCacheReadPricePerMillion();
-            if (inputPrice != null && outputPrice != null && cachePrice != null) {
+            if (inputPrice != null || outputPrice != null || cachePrice != null) {
                 amount = priceForTokens(promptTokens, inputPrice)
                         .add(priceForTokens(completionTokens, outputPrice))
                         .add(priceForTokens(cacheReadTokens, cachePrice));
             } else if (pricePerUnit != null) {
-                int tokens = totalTokens != null ? totalTokens : (promptTokens != null ? promptTokens : 0);
+                int tokens = totalTokens != null
+                        ? totalTokens
+                        : (promptTokens != null ? promptTokens : 0)
+                        + (completionTokens != null ? completionTokens : 0);
                 amount = pricePerUnit.multiply(BigDecimal.valueOf(tokens));
             }
         }
@@ -121,7 +125,7 @@ public class BillingService {
         BillingRecord record = new BillingRecord();
         record.setUserId(userId);
         record.setProviderId(provider.getId());
-        record.setProviderName(provider.getName());
+        record.setProviderName(provider.getName() != null ? provider.getName() : provider.getProviderId());
         record.setModelName(provider.getModelName());
         record.setPromptTokens(promptTokens);
         record.setCompletionTokens(completionTokens);
@@ -137,8 +141,24 @@ public class BillingService {
         record.setSessionId(sessionId);
         record.setMessageId(messageId);
         record.setDurationMs(durationMs);
-        record.setDescription("对话 - " + provider.getModelName());
+        record.setDescription("对话 - " + (provider.getModelName() != null ? provider.getModelName() : "unknown"));
         billingRecordRepository.save(record);
+
+        log.debug("Chat billing record created: user={}, provider={}, amount={}, durationMs={}",
+                userId, provider.getName(), amount, durationMs);
+    }
+
+    private String normalizeBillingMode(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        if ("per_request".equalsIgnoreCase(value) || "PER_CALL".equalsIgnoreCase(value)) {
+            return "PER_CALL";
+        }
+        if ("per_token".equalsIgnoreCase(value) || "PER_TOKEN".equalsIgnoreCase(value)) {
+            return "PER_TOKEN";
+        }
+        return value.trim().toUpperCase();
     }
 
     private BigDecimal priceForTokens(Integer tokens, BigDecimal pricePerMillion) {
