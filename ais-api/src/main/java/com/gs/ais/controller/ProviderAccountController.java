@@ -10,6 +10,9 @@ import com.gs.ais.model.entity.ApiProvider;
 import com.gs.ais.service.ModelProviderResponseMapper;
 import com.gs.ais.service.ProviderAccountService;
 import com.gs.ais.service.SystemModelSettingsService;
+import com.gs.ais.service.OperationLogService;
+import com.gs.ais.security.AuthContext;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,15 +28,18 @@ public class ProviderAccountController {
     private final SystemModelSettingsService settingsService;
     private final ModelProviderResponseMapper modelMapper;
     private final LlmClient llmClient;
+    private final OperationLogService operationLogService;
 
     public ProviderAccountController(ProviderAccountService providerService,
                                      SystemModelSettingsService settingsService,
                                      ModelProviderResponseMapper modelMapper,
-                                     LlmClient llmClient) {
+                                     LlmClient llmClient,
+                                     OperationLogService operationLogService) {
         this.providerService = providerService;
         this.settingsService = settingsService;
         this.modelMapper = modelMapper;
         this.llmClient = llmClient;
+        this.operationLogService = operationLogService;
     }
 
     @GetMapping
@@ -48,19 +54,29 @@ public class ProviderAccountController {
 
     @PostMapping
     public ResponseEntity<ProviderAccountResponse> create(
-            @Valid @RequestBody ProviderAccountRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(providerService.create(request)));
+            @Valid @RequestBody ProviderAccountRequest request,
+            HttpServletRequest httpRequest) {
+        ApiProvider provider = providerService.create(request);
+        operationLogService.record(AuthContext.get(), "ADMIN_PROVIDER_CREATE", "PROVIDER", provider.getId(),
+                "创建供应商：" + provider.getName(), httpRequest);
+        return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(provider));
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<ProviderAccountResponse> update(
-            @PathVariable Long id, @Valid @RequestBody ProviderAccountRequest request) {
-        return ResponseEntity.ok(toResponse(providerService.update(id, request)));
+            @PathVariable Long id, @Valid @RequestBody ProviderAccountRequest request,
+            HttpServletRequest httpRequest) {
+        ApiProvider provider = providerService.update(id, request);
+        operationLogService.record(AuthContext.get(), "ADMIN_PROVIDER_UPDATE", "PROVIDER", id,
+                "更新供应商：" + provider.getName(), httpRequest);
+        return ResponseEntity.ok(toResponse(provider));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
+    public ResponseEntity<Void> delete(@PathVariable Long id, HttpServletRequest httpRequest) {
         providerService.delete(id);
+        operationLogService.record(AuthContext.get(), "ADMIN_PROVIDER_DELETE", "PROVIDER", id,
+                "删除供应商", httpRequest);
         return ResponseEntity.noContent().build();
     }
 
@@ -73,9 +89,12 @@ public class ProviderAccountController {
 
     @PutMapping("/defaults")
     public ResponseEntity<SystemModelSettingsResponse> updateDefaults(
-            @RequestBody SystemModelSettingsRequest request) {
+            @RequestBody SystemModelSettingsRequest request,
+            HttpServletRequest httpRequest) {
         var settings = settingsService.update(
                 request.getDefaultChatModelId(), request.getDefaultImageModelId());
+        operationLogService.record(AuthContext.get(), "ADMIN_MODEL_DEFAULTS_UPDATE", "SYSTEM_MODEL_SETTINGS", null,
+                "更新默认模型：对话=" + settings.defaultChatModelId() + "，绘画=" + settings.defaultImageModelId(), httpRequest);
         return ResponseEntity.ok(new SystemModelSettingsResponse(
                 settings.defaultChatModelId(), settings.defaultImageModelId()));
     }

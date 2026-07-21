@@ -26,4 +26,15 @@ public class FeishuAsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    @Bean("operationLogTaskExecutor")
+    public TaskExecutor operationLogTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("operation-log-");
+        executor.initialize();
+        return executor;
+    }
 }

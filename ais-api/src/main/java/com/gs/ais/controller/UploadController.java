@@ -2,6 +2,9 @@ package com.gs.ais.controller;
 
 import com.gs.ais.dto.response.UploadResponse;
 import com.gs.ais.service.AttachmentService;
+import com.gs.ais.service.OperationLogService;
+import com.gs.ais.security.AuthContext;
+import jakarta.servlet.http.HttpServletRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -22,9 +25,11 @@ import java.util.List;
 public class UploadController {
 
     private final AttachmentService attachmentService;
+    private final OperationLogService operationLogService;
 
-    public UploadController(AttachmentService attachmentService) {
+    public UploadController(AttachmentService attachmentService, OperationLogService operationLogService) {
         this.attachmentService = attachmentService;
+        this.operationLogService = operationLogService;
     }
 
     @Operation(summary = "上传单个文件", description = """
@@ -41,8 +46,11 @@ public class UploadController {
     })
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<UploadResponse> uploadFile(
-            @Parameter(description = "待上传的文件", required = true) @RequestParam("file") MultipartFile file) {
+            @Parameter(description = "待上传的文件", required = true) @RequestParam("file") MultipartFile file,
+            HttpServletRequest httpRequest) {
         UploadResponse response = attachmentService.upload(file);
+        operationLogService.record(AuthContext.get(), "UPLOAD", "ATTACHMENT", response.getId(),
+                "上传文件：" + response.getOriginalName(), httpRequest);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -59,10 +67,13 @@ public class UploadController {
     })
     @PostMapping(value = "/upload/multiple", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<List<UploadResponse>> uploadFiles(
-            @Parameter(description = "待上传的文件列表（最多 10 个）", required = true) @RequestParam("files") List<MultipartFile> files) {
+            @Parameter(description = "待上传的文件列表（最多 10 个）", required = true) @RequestParam("files") List<MultipartFile> files,
+            HttpServletRequest httpRequest) {
         List<UploadResponse> responses = files.stream()
                 .map(attachmentService::upload)
                 .toList();
+        operationLogService.record(AuthContext.get(), "UPLOAD", "ATTACHMENT", null,
+                "批量上传文件：" + responses.size() + " 个", httpRequest);
         return ResponseEntity.status(HttpStatus.CREATED).body(responses);
     }
 }

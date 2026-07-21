@@ -15,6 +15,7 @@ import com.gs.ais.security.CaptchaService;
 import com.gs.ais.security.LoginProtectionService;
 import com.gs.ais.security.RsaPasswordCryptoService;
 import com.gs.ais.service.LoginSecurityEventService;
+import com.gs.ais.service.OperationLogService;
 import com.gs.ais.service.SecuritySettingsService;
 import com.gs.ais.service.UserManagementService;
 import com.gs.ais.util.ClientIpUtils;
@@ -46,6 +47,7 @@ public class AuthController {
     private final AppUserRepository appUserRepository;
     private final RsaPasswordCryptoService rsaPasswordCryptoService;
     private final UserManagementService userManagementService;
+    private final OperationLogService operationLogService;
 
     public AuthController(AccessTokenService accessTokenService,
                           SecurityProperties securityProperties,
@@ -55,7 +57,8 @@ public class AuthController {
                           SecuritySettingsService securitySettingsService,
                           AppUserRepository appUserRepository,
                           RsaPasswordCryptoService rsaPasswordCryptoService,
-                          UserManagementService userManagementService) {
+                          UserManagementService userManagementService,
+                          OperationLogService operationLogService) {
         this.accessTokenService = accessTokenService;
         this.securityProperties = securityProperties;
         this.captchaService = captchaService;
@@ -65,6 +68,7 @@ public class AuthController {
         this.appUserRepository = appUserRepository;
         this.rsaPasswordCryptoService = rsaPasswordCryptoService;
         this.userManagementService = userManagementService;
+        this.operationLogService = operationLogService;
     }
 
     @GetMapping("/captcha")
@@ -99,6 +103,7 @@ public class AuthController {
                                                      HttpServletRequest httpRequest) {
         if (!securityProperties.isEnabled()) {
             AuthPrincipal principal = new AuthPrincipal(AuthRole.ADMIN, "security-disabled");
+            operationLogService.record(principal, "LOGIN", "AUTH", null, "安全校验已关闭，登录工作台", httpRequest);
             return ResponseEntity.ok(tokenResponse(principal, accessTokenService.issueToken(principal)));
         }
 
@@ -117,6 +122,7 @@ public class AuthController {
                     request.username(), passwordDigest);
             loginProtectionService.recordSuccess(ip);
             String token = accessTokenService.issueToken(principal);
+            operationLogService.record(principal, "LOGIN", "AUTH", null, "登录成功", httpRequest);
             return ResponseEntity.ok(tokenResponse(principal, token));
         } catch (AuthException ex) {
             if (ex.getStatus() == 401) {

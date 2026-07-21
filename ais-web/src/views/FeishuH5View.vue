@@ -2,11 +2,13 @@
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowRight, ChatDotRound, Check, Clock, Close, CopyDocument, Delete, Download, EditPen, FullScreen, MagicStick, Monitor, Paperclip, Picture, Plus, Promotion, RefreshRight, Setting, SwitchButton, UploadFilled, User, UserFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, ChatDotRound, Check, Clock, Close, CopyDocument, DataAnalysis, Delete, Download, EditPen, FullScreen, MagicStick, Monitor, MoreFilled, Paperclip, Picture, Plus, Promotion, RefreshRight, Setting, SwitchButton, UploadFilled, User, UserFilled } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
 import { useAuthStore } from '@/stores/auth'
 import { sessionApi } from '@/api/sessions'
-import type { Message, ModelProvider, UploadResponse } from '@/types'
+import { adminApi, type OperationLog } from '@/api/admin'
+import { usersApi, type ManagedUser } from '@/api/users'
+import type { Message, ModelProvider, Session, UploadResponse } from '@/types'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
@@ -26,6 +28,16 @@ const view = ref<'create' | 'gallery'>('create')
 const mode = ref<'chat' | 'draw'>('draw')
 const historyVisible = ref(false)
 const accountVisible = ref(false)
+const composerExtraVisible = ref(false)
+const mobileAdminVisible = ref(false)
+const mobileAdminSection = ref<'menu' | 'users' | 'sessions' | 'logs'>('menu')
+const mobileUsers = ref<ManagedUser[]>([])
+const mobileUsersLoading = ref(false)
+const mobileUserSearch = ref('')
+const mobileManagedSessions = ref<Session[]>([])
+const mobileSessionsLoading = ref(false)
+const mobileOperationLogs = ref<OperationLog[]>([])
+const mobileLogsLoading = ref(false)
 const referenceVisible = ref(false)
 const referenceImportingId = ref<number | null>(null)
 const modelVisible = ref(false)
@@ -113,11 +125,29 @@ const isGptImageModel = computed(() => {
 const drawSizeOptions = computed(() => usesRatioOptions.value ? ['1:1', '16:9', '9:16', '4:3', '3:4'] : isGptImageModel.value ? ['1024x1024', '1536x1024', '1024x1536', 'auto'] : ['1024x1024', '512x512', '768x768', '1024x1792', '1792x1024'])
 const drawQualityOptions = computed(() => usesRatioOptions.value ? ['1K', '2K', '4K'] : isGptImageModel.value ? ['auto', 'low', 'medium', 'high'] : ['standard', 'hd'])
 const drawFormatOptions = computed(() => usesRatioOptions.value ? ['png'] : ['png', 'jpeg', 'webp'])
-const selectedProviderLabel = computed(() => selectedProvider.value?.name || selectedProvider.value?.providerId || '系统默认模型')
+const selectedProviderLabel = computed(() => {
+  const provider = selectedProvider.value
+  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认模型'
+})
 const editingMessage = computed(() => editTargetId.value == null ? null : store.messages.find((message) => message.id === editTargetId.value) || null)
 const canSubmit = computed(() => !store.loading && (inputText.value.trim().length > 0 || (mode.value === 'chat' && pendingAttachments.value.length > 0)))
 const activeSessionTitle = computed(() => activeSession.value?.title || '新会话')
 const accountRoleLabel = computed(() => auth.isAdmin ? '管理员' : '普通用户')
+const activeBottomNav = computed(() => historyVisible.value ? 'sessions' : view.value)
+const filteredMobileUsers = computed(() => {
+  const keyword = mobileUserSearch.value.trim().toLowerCase()
+  if (!keyword) return mobileUsers.value
+  return mobileUsers.value.filter((user) => [user.username, user.displayName, user.email].some((value) => (value || '').toLowerCase().includes(keyword)))
+})
+const mobileActionLabels: Record<string, string> = {
+  LOGIN: '登录', SESSION_CREATE: '创建会话', SESSION_DELETE: '删除会话', CHAT: '发送对话',
+  IMAGE_GENERATE: '生成图片', UPLOAD: '上传文件', MESSAGE_DELETE: '删除消息',
+  ADMIN_USER_CREATE: '创建用户', ADMIN_USER_UPDATE: '更新用户', ADMIN_USER_DELETE: '删除用户',
+  ADMIN_PASSWORD_RESET: '重置密码', ADMIN_SECURITY_UPDATE: '更新安全设置',
+  ADMIN_DATA_EXPORT: '导出数据', ADMIN_DATA_IMPORT: '导入数据', ADMIN_BILLING_UPDATE: '更新计费',
+  ADMIN_PROVIDER_CREATE: '创建供应商', ADMIN_PROVIDER_UPDATE: '更新供应商', ADMIN_PROVIDER_DELETE: '删除供应商',
+  ADMIN_MODEL_DEFAULTS_UPDATE: '更新默认模型',
+}
 
 function defaultProviderId(providers: ModelProvider[]) { return providers.find((item) => item.active)?.id ?? null }
 function syncProviderSelection() {
@@ -544,6 +574,98 @@ async function deleteSession(sessionId: number, title: string) {
 }
 function formatTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date) }
 
+function openComposerExtras() {
+  composerExtraVisible.value = true
+}
+
+function openReferencePicker() {
+  composerExtraVisible.value = false
+  if (!historyImages.value.length) {
+    ElMessage.info('当前会话还没有可用的历史图片')
+    return
+  }
+  referenceVisible.value = true
+}
+
+function openModelPicker() {
+  composerExtraVisible.value = false
+  modelVisible.value = true
+}
+
+function formatMobileAdminTime(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN')
+}
+
+async function loadMobileUsers() {
+  mobileUsersLoading.value = true
+  try {
+    mobileUsers.value = await usersApi.list()
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载用户列表失败')
+  } finally {
+    mobileUsersLoading.value = false
+  }
+}
+
+async function loadMobileSessions() {
+  mobileSessionsLoading.value = true
+  try {
+    mobileManagedSessions.value = await sessionApi.list()
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载会话列表失败')
+  } finally {
+    mobileSessionsLoading.value = false
+  }
+}
+
+async function loadMobileOperationLogs() {
+  mobileLogsLoading.value = true
+  try {
+    mobileOperationLogs.value = (await adminApi.getOperationLogs({ page: 0, size: 50 })).content
+  } catch (error: any) {
+    ElMessage.error(error.message || '加载操作日志失败')
+  } finally {
+    mobileLogsLoading.value = false
+  }
+}
+
+async function openMobileAdmin(section: 'menu' | 'users' | 'sessions' | 'logs' = 'menu') {
+  accountVisible.value = false
+  mobileAdminVisible.value = true
+  mobileAdminSection.value = section
+  if (section === 'users') await loadMobileUsers()
+  if (section === 'sessions') await loadMobileSessions()
+  if (section === 'logs') await loadMobileOperationLogs()
+}
+
+async function selectMobileAdminSection(section: 'users' | 'sessions' | 'logs') {
+  mobileAdminSection.value = section
+  if (section === 'users') await loadMobileUsers()
+  if (section === 'sessions') await loadMobileSessions()
+  if (section === 'logs') await loadMobileOperationLogs()
+}
+
+async function toggleMobileUser(user: ManagedUser) {
+  if (user.id == null) return
+  try {
+    await usersApi.update(user.id, {
+      displayName: user.displayName || '',
+      email: user.email || '',
+      role: user.role,
+      enabled: !user.enabled,
+    })
+    ElMessage.success(user.enabled ? '用户已禁用' : '用户已启用')
+    await loadMobileUsers()
+  } catch (error: any) {
+    ElMessage.error(error.message || '更新用户失败')
+  }
+}
+
+function showPcOnlyNotice() {
+  ElMessage.info('该复杂功能请在 PC 端操作')
+}
+
 async function openAppPage(name: 'profile' | 'admin' | 'admin-users' | 'home') {
   accountVisible.value = false
   await router.push({ name, query: { source: 'feishu' } })
@@ -575,15 +697,8 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
         </div>
       </div>
       <div class="header-actions">
-        <button class="header-icon-button" type="button" aria-label="刷新会话" :disabled="store.loading" @click="refreshMessages">
-          <RefreshRight />
-        </button>
-        <button class="header-icon-button" type="button" aria-label="新建会话" :disabled="store.loading" @click="createNewSession">
-          <Plus />
-        </button>
-        <button class="avatar-button" type="button" aria-label="打开应用菜单" @click="accountVisible = true">
-          <User />
-        </button>
+        <button class="header-icon-button" type="button" :disabled="store.loading" aria-label="新建会话" title="新建会话" @click="createNewSession"><Plus /></button>
+        <button class="more-button" type="button" aria-label="更多操作" @click="accountVisible = true"><MoreFilled /></button>
       </div>
     </header>
 
@@ -712,28 +827,9 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
     </div>
 
     <footer v-if="view === 'create'" class="composer">
-      <div class="composer-toolbar">
-        <div class="mode-switch" aria-label="创作模式">
-          <button :class="{ active: mode === 'draw' }" type="button" @click="mode = 'draw'"><Picture /> 绘画</button>
-          <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
-        </div>
-        <button v-if="mode === 'draw' && historyImages.length" class="tool-button" type="button" @click="referenceVisible = true"><Clock /> 历史图</button>
-        <button class="model-trigger" type="button" @click="modelVisible = true">
-          <span>{{ selectedProviderLabel }}</span>
-          <i class="model-chevron" aria-hidden="true"></i>
-        </button>
-      </div>
-      <div v-if="mode === 'draw'" class="draw-options-inline">
-        <button type="button" class="draw-options-summary" :aria-expanded="drawOptionsExpanded" @click="drawOptionsExpanded = !drawOptionsExpanded">
-          <span>参数</span>
-          <strong>{{ drawSize }} · {{ drawQuality.toUpperCase() }} · {{ drawFormat.toUpperCase() }}</strong>
-          <i :class="{ expanded: drawOptionsExpanded }" aria-hidden="true">⌄</i>
-        </button>
-        <div v-if="drawOptionsExpanded" class="draw-options-inline-fields">
-          <label><span>尺寸</span><el-select v-model="drawSize"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
-          <label><span>质量</span><el-select v-model="drawQuality"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-          <label><span>格式</span><el-select v-model="drawFormat"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-        </div>
+      <div class="mode-toggle-bar">
+        <button :class="{ active: mode === 'draw' }" type="button" @click="mode = 'draw'"><Picture /> 绘画</button>
+        <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
       </div>
       <div v-if="pendingAttachments.length" class="attachment-strip">
         <div v-for="attachment in pendingAttachments" :key="attachment.id" class="attachment-preview">
@@ -743,13 +839,12 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
         </div>
       </div>
       <div class="composer-main">
-        <textarea ref="inputRef" v-model="inputText" :disabled="store.loading" :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'" rows="1" enterkeyhint="enter" @paste="handlePaste" @keydown="handleInputKeydown" @input="autoResizeTextarea"></textarea>
-        <button class="fullscreen-toggle" type="button" :disabled="store.loading" aria-label="全屏输入" @click="toggleFullscreenInput"><FullScreen /></button>
         <input ref="fileInputRef" type="file" :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'" multiple hidden @change="handleFileChange">
-        <button class="upload-button" type="button" :disabled="store.loading || uploading" aria-label="添加附件" @click="openFilePicker"><UploadFilled /></button>
-        <button class="send-button" :class="{ disabled: !canSubmit }" type="button" :disabled="!canSubmit" :aria-label="mode === 'draw' ? '生成图片' : '发送消息'" @click="handleSubmit"><Promotion /></button>
+        <button class="upload-button" type="button" :disabled="store.loading || uploading" aria-label="更多创作选项" @click="openComposerExtras"><Plus /></button>
+        <textarea ref="inputRef" v-model="inputText" :disabled="store.loading" :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'" rows="1" enterkeyhint="enter" @paste="handlePaste" @keydown="handleInputKeydown" @input="autoResizeTextarea"></textarea>
+        <button class="send-button" :class="{ disabled: !canSubmit }" type="button" :disabled="!canSubmit" :aria-label="mode === 'draw' ? '生成图片' : '发送消息'" @click="handleSubmit"><span>{{ mode === 'draw' ? '生成' : '发送' }}</span></button>
       </div>
-      <p class="composer-hint">{{ mode === 'draw' ? '可添加参考图，点按右侧按钮开始生成' : '支持图片和文档，点按右侧按钮发送' }}</p>
+      <p class="composer-hint">{{ mode === 'draw' ? '点“+”添加参考图、切换模型和设置参数' : '点“+”添加附件、切换对话模型' }}</p>
     </footer>
 
     <div v-if="fullscreenInput" class="fullscreen-input-overlay">
@@ -770,10 +865,35 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
     </div>
 
     <nav class="bottom-nav" aria-label="移动端主导航">
-      <button :class="{ active: view === 'create' }" type="button" @click="view = 'create'"><ChatDotRound /><span>创作</span></button>
-      <button :class="{ active: view === 'gallery' }" type="button" @click="view = 'gallery'"><Picture /><span>作品</span><em v-if="generatedImages.length">{{ generatedImages.length }}</em></button>
-      <button type="button" @click="historyVisible = true"><Clock /><span>会话</span></button>
+      <button :class="{ active: activeBottomNav === 'create' }" type="button" @click="historyVisible = false; view = 'create'"><ChatDotRound /><span>创作</span></button>
+      <button :class="{ active: activeBottomNav === 'gallery' }" type="button" @click="historyVisible = false; view = 'gallery'"><Picture /><span>作品</span><em v-if="generatedImages.length">{{ generatedImages.length }}</em></button>
+      <button :class="{ active: activeBottomNav === 'sessions' }" type="button" @click="historyVisible = true"><Clock /><span>会话</span></button>
     </nav>
+
+    <el-drawer v-model="composerExtraVisible" direction="btt" size="auto" class="h5-drawer composer-extra-drawer" :with-header="false">
+      <div class="drawer-title compact"><div><strong>创作工具</strong><span>附件、参考图、模型和参数都在这里</span></div></div>
+      <div class="composer-extra-grid">
+        <button type="button" @click="openFilePicker"><UploadFilled /><span>添加附件</span><small>{{ mode === 'draw' ? '上传参考图' : '图片或文档' }}</small></button>
+        <button type="button" :disabled="!historyImages.length" @click="openReferencePicker"><Clock /><span>历史图</span><small>选择已有作品</small></button>
+        <button type="button" @click="openModelPicker"><MagicStick /><span>模型</span><small>{{ selectedProviderLabel }}</small></button>
+        <button type="button" @click="toggleFullscreenInput(); composerExtraVisible = false"><FullScreen /><span>扩展输入</span><small>全屏编辑内容</small></button>
+      </div>
+      <div class="mode-picker">
+        <span>创作模式</span>
+        <div class="mode-switch" aria-label="创作模式">
+          <button :class="{ active: mode === 'draw' }" type="button" @click="mode = 'draw'"><Picture /> 绘画</button>
+          <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
+        </div>
+      </div>
+      <div v-if="mode === 'draw'" class="drawer-draw-options">
+        <span>绘画参数</span>
+        <div class="draw-options-inline-fields">
+          <label><span>尺寸</span><el-select v-model="drawSize"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
+          <label><span>质量</span><el-select v-model="drawQuality"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
+          <label><span>格式</span><el-select v-model="drawFormat"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
+        </div>
+      </div>
+    </el-drawer>
 
     <el-drawer v-model="historyVisible" direction="btt" size="72%" class="h5-drawer" :with-header="false">
       <div class="drawer-title"><div><strong>会话历史</strong><span>选择一个会话继续创作</span></div><button type="button" @click="createNewSession"><Plus /> 新建会话</button></div>
@@ -794,8 +914,7 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
       </div>
       <div class="app-menu">
         <button type="button" @click="openAppPage('profile')"><span class="menu-icon"><User /></span><span><strong>个人中心</strong><small>账户信息与密码设置</small></span><ArrowRight /></button>
-        <button v-if="auth.isAdmin" type="button" @click="openAppPage('admin')"><span class="menu-icon"><Setting /></span><span><strong>系统管理</strong><small>模型、安全、数据与诊断工具</small></span><ArrowRight /></button>
-        <button v-if="auth.isAdmin" type="button" @click="openAppPage('admin-users')"><span class="menu-icon"><UserFilled /></span><span><strong>用户与权限</strong><small>账号、角色与密码维护</small></span><ArrowRight /></button>
+        <button v-if="auth.isAdmin" type="button" @click="openMobileAdmin()"><span class="menu-icon"><Setting /></span><span><strong>移动管理</strong><small>用户、会话和操作日志</small></span><ArrowRight /></button>
         <button type="button" @click="openAppPage('home')"><span class="menu-icon"><Monitor /></span><span><strong>完整工作台</strong><small>进入与 PC 版一致的工作界面</small></span><ArrowRight /></button>
         <button v-if="auth.securityEnabled" class="danger-menu" type="button" @click="handleLogout"><span class="menu-icon"><SwitchButton /></span><span><strong>退出登录</strong><small>安全退出当前账户</small></span><ArrowRight /></button>
       </div>
@@ -840,6 +959,45 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
         <button type="button" class="danger-action" @click="handleMessageAction('delete')"><Delete /><span>删除消息</span></button>
       </div>
     </el-drawer>
+    <section v-if="mobileAdminVisible" class="mobile-admin-overlay" aria-label="移动管理面板">
+      <header class="mobile-admin-header"><button type="button" aria-label="返回" @click="mobileAdminSection === 'menu' ? mobileAdminVisible = false : mobileAdminSection = 'menu'"><ArrowLeft /></button><strong>{{ mobileAdminSection === 'menu' ? '移动管理' : mobileAdminSection === 'users' ? '用户管理' : mobileAdminSection === 'sessions' ? '会话管理' : '操作日志' }}</strong><span></span></header>
+      <main class="mobile-admin-content">
+        <template v-if="mobileAdminSection === 'menu'">
+          <p class="mobile-admin-tip">常用管理可直接在手机完成；模型、安全、数据迁移等复杂操作请使用 PC 端。</p>
+          <div class="mobile-admin-menu">
+            <button type="button" @click="selectMobileAdminSection('users')"><span class="menu-icon"><UserFilled /></span><span><strong>用户管理</strong><small>搜索用户并启用或禁用账号</small></span><ArrowRight /></button>
+            <button type="button" @click="selectMobileAdminSection('sessions')"><span class="menu-icon"><ChatDotRound /></span><span><strong>会话管理</strong><small>查看所有用户的会话</small></span><ArrowRight /></button>
+            <button type="button" @click="selectMobileAdminSection('logs')"><span class="menu-icon"><DataAnalysis /></span><span><strong>操作日志</strong><small>查看近期账号和管理操作</small></span><ArrowRight /></button>
+            <button type="button" @click="showPcOnlyNotice"><span class="menu-icon"><Setting /></span><span><strong>模型与系统设置</strong><small>请在 PC 端操作</small></span><ArrowRight /></button>
+          </div>
+        </template>
+        <template v-else-if="mobileAdminSection === 'users'">
+          <div class="mobile-admin-toolbar"><input v-model="mobileUserSearch" placeholder="搜索用户名、昵称或邮箱"><button type="button" @click="loadMobileUsers">刷新</button></div>
+          <div v-if="mobileUsersLoading" class="mobile-admin-empty">正在加载用户…</div>
+          <div v-else class="mobile-admin-list">
+            <article v-for="user in filteredMobileUsers" :key="user.id ?? user.username" class="mobile-admin-row"><span class="menu-icon"><User /></span><div><strong>{{ user.displayName || user.username }}</strong><small>{{ user.username }} · {{ user.role === 'ADMIN' ? '管理员' : '普通用户' }}</small></div><button type="button" :class="{ danger: user.enabled }" @click="toggleMobileUser(user)">{{ user.enabled ? '禁用' : '启用' }}</button></article>
+            <p v-if="!filteredMobileUsers.length" class="mobile-admin-empty">没有匹配的用户</p>
+          </div>
+        </template>
+        <template v-else-if="mobileAdminSection === 'sessions'">
+          <div class="mobile-admin-toolbar"><span>全部用户会话</span><button type="button" @click="loadMobileSessions">刷新</button></div>
+          <div v-if="mobileSessionsLoading" class="mobile-admin-empty">正在加载会话…</div>
+          <div v-else class="mobile-admin-list">
+            <article v-for="session in mobileManagedSessions" :key="session.id" class="mobile-admin-row session-admin-row"><span class="menu-icon"><ChatDotRound /></span><div><strong>{{ session.title || '新会话' }}</strong><small>用户 #{{ session.userId ?? '—' }} · {{ formatMobileAdminTime(session.updatedAt) }}</small></div><ArrowRight /></article>
+            <p v-if="!mobileManagedSessions.length" class="mobile-admin-empty">暂无会话</p>
+          </div>
+        </template>
+        <template v-else>
+          <div class="mobile-admin-toolbar"><span>最近 50 条</span><button type="button" @click="loadMobileOperationLogs">刷新</button></div>
+          <div v-if="mobileLogsLoading" class="mobile-admin-empty">正在加载日志…</div>
+          <div v-else class="mobile-admin-list">
+            <article v-for="log in mobileOperationLogs" :key="log.id" class="mobile-admin-log"><div><strong>{{ mobileActionLabels[log.action] || log.action }}</strong><small>{{ log.username || '匿名/系统' }} · {{ formatMobileAdminTime(log.createdAt) }}</small></div><p>{{ log.detail || '—' }}</p></article>
+            <p v-if="!mobileOperationLogs.length" class="mobile-admin-empty">暂无操作日志</p>
+          </div>
+        </template>
+      </main>
+    </section>
+
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
   </main>
 </template>
@@ -1045,6 +1203,36 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 .operation-bar .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: #e8a01b; animation: pulse 1s infinite ease-in-out; }
 .operation-bar button { min-height: 28px; margin-left: auto; padding: 0 4px; color: #b36d00; font-size: 11px; font-weight: 800; cursor: pointer; border: 0; background: transparent; }
 
+.mode-toggle-bar {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 3px;
+  border-radius: 11px;
+  background: #f0f2f7;
+}
+.mode-toggle-bar button {
+  display: inline-flex;
+  flex: 1;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  color: #7e899e;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+.mode-toggle-bar button.active {
+  color: #4e62d2;
+  background: #fff;
+  box-shadow: 0 2px 7px rgba(62, 76, 133, .1);
+}
+.mode-toggle-bar button svg { width: 16px; height: 16px; }
 .composer { position: relative; z-index: 8; flex: 0 0 auto; padding: 8px 12px 2px; border-top: 1px solid rgba(223, 228, 239, .94); background: rgba(255, 255, 255, .94); box-shadow: 0 -8px 24px rgba(42, 54, 93, .055); backdrop-filter: blur(18px); }
 .composer-toolbar { display: flex; min-width: 0; align-items: center; gap: 4px; margin-bottom: 6px; }
 .draw-options-inline { margin: -2px 0 8px; padding: 0 2px; }
@@ -1227,6 +1415,110 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 .action-list button :deep(svg) { width: 18px; color: #6d7bd5; }
 .action-list button.danger-action { color: #b95564; background: #fff1f3; }
 .action-list button.danger-action :deep(svg) { color: #cf6572; }
+
+/* WeChat-inspired mobile layout refinements */
+.more-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  color: #56647b;
+  cursor: pointer;
+  border: 0;
+  border-radius: 10px;
+  background: #f2f4f7;
+}
+.more-button svg { width: 20px; height: 20px; }
+.mobile-header {
+  min-height: calc(56px + env(safe-area-inset-top));
+  padding: calc(7px + env(safe-area-inset-top)) 16px 7px;
+  background: rgba(255, 255, 255, .97);
+}
+.brand-icon { width: 34px; height: 34px; font-size: 17px; border-radius: 11px; box-shadow: none; }
+.brand-copy strong { max-width: 48vw; font-size: 16px; font-weight: 750; }
+.brand-copy span { margin-top: 2px; color: #9aa2ae; font-size: 10px; font-weight: 500; }
+.conversation { padding: 22px 20px 16px; background: #f4f5f7; }
+.message-card { max-width: min(86%, 680px); margin-bottom: 22px; }
+.message-meta { gap: 5px; margin: 0 5px 7px; color: #a8afb9; font-size: 10px; }
+.message-meta > span { color: #9199a5; font-weight: 600; }
+.message-meta time { color: #b6bcc5; }
+.message-bubble {
+  padding: 13px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 1px rgba(30, 41, 59, .04);
+}
+.message-card.user { align-self: flex-end; }
+.message-card.user .message-meta { justify-content: flex-end; }
+.message-card.user .message-bubble {
+  color: #fff;
+  border-radius: 12px;
+  background: #5b8ff9;
+  box-shadow: 0 2px 6px rgba(65, 119, 225, .16);
+}
+.message-content { font-size: 14px; line-height: 1.72; }
+.message-attachments { gap: 8px; margin-bottom: 10px; }
+.result-image { border-radius: 12px; }
+.composer {
+  padding: 12px 14px 8px;
+  border-top-color: #e8eaee;
+  background: rgba(255, 255, 255, .98);
+  box-shadow: 0 -4px 16px rgba(37, 49, 72, .04);
+}
+.composer-main { min-height: 48px; gap: 9px; padding: 5px 5px 5px 8px; border: 0; border-radius: 12px; background: #f1f2f4; }
+.composer-main:focus-within { border-color: transparent; box-shadow: 0 0 0 2px rgba(91, 143, 249, .18); }
+.composer-main textarea { padding: 9px 2px 8px; font-size: 15px; line-height: 1.6; }
+.upload-button { width: 34px; height: 34px; color: #657080; border-radius: 9px; background: transparent; }
+.upload-button svg { width: 21px; height: 21px; }
+.send-button { width: auto; min-width: 54px; height: 34px; padding: 0 11px; font-size: 13px; font-weight: 700; border-radius: 9px; background: #5b8ff9; box-shadow: none; }
+.send-button.disabled { color: #a7adb7; background: #e3e5e8; }
+.composer-hint { margin: 6px 3px 0; color: #a3a9b2; font-size: 10px; line-height: 1.45; }
+.bottom-nav { min-height: 62px; padding: 6px 12px calc(6px + env(safe-area-inset-bottom, 0px)); border-top-color: #eceef1; box-shadow: none; }
+.bottom-nav button { min-height: 50px; gap: 3px; color: #8d949e; font-size: 11px; font-weight: 600; border-radius: 0; }
+.bottom-nav button svg { width: 21px; height: 21px; }
+.bottom-nav button.active { color: #3979e8; background: transparent; }
+.bottom-nav button.active::after { position: absolute; right: 50%; bottom: 1px; width: 16px; height: 3px; content: ''; border-radius: 999px; background: currentColor; transform: translateX(50%); }
+.composer-extra-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 15px 0; }
+.composer-extra-grid button { display: flex; min-width: 0; min-height: 92px; align-items: center; justify-content: center; flex-direction: column; gap: 4px; padding: 8px 5px; color: #4e5b6e; cursor: pointer; border: 0; border-radius: 12px; background: #f5f6f8; }
+.composer-extra-grid button:disabled { color: #a9afb8; cursor: not-allowed; opacity: .65; }
+.composer-extra-grid button svg { width: 22px; height: 22px; color: #5b8ff9; }
+.composer-extra-grid button span { overflow: hidden; max-width: 100%; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.composer-extra-grid button small { overflow: hidden; max-width: 100%; color: #9aa1ab; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.mode-picker, .drawer-draw-options { padding: 13px 0; border-top: 1px solid #edf0f3; }
+.mode-picker > span, .drawer-draw-options > span { display: block; margin-bottom: 9px; color: #697485; font-size: 12px; font-weight: 700; }
+.mode-picker .mode-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.mode-picker .mode-switch button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 6px; color: #6e7785; cursor: pointer; border: 0; border-radius: 10px; background: #f3f4f6; }
+.mode-picker .mode-switch button.active { color: #3979e8; background: #eaf2ff; }
+.mode-picker .mode-switch svg { width: 17px; }
+.draw-options-inline-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.draw-options-inline-fields label { display: grid; gap: 5px; min-width: 0; color: #8a93a0; font-size: 10px; }
+.draw-options-inline-fields :deep(.el-select) { width: 100%; }
+/* Mobile administrator workspace remains in-page and never navigates to desktop routes. */
+.mobile-admin-overlay { position: fixed; z-index: 2100; inset: 0; display: flex; flex-direction: column; color: #303744; background: #f5f6f8; }
+.mobile-admin-header { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; flex: 0 0 auto; min-height: calc(56px + env(safe-area-inset-top)); align-items: end; padding: env(safe-area-inset-top) 12px 8px; border-bottom: 1px solid #e8eaed; background: rgba(255, 255, 255, .97); box-sizing: border-box; }
+.mobile-admin-header button { display: grid; width: 36px; height: 36px; place-items: center; color: #4f5b6d; cursor: pointer; border: 0; border-radius: 10px; background: transparent; }
+.mobile-admin-header strong { overflow: hidden; color: #252c36; font-size: 17px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-admin-content { min-height: 0; flex: 1; overflow-y: auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
+.mobile-admin-tip { margin: 0 0 14px; padding: 11px 12px; color: #788291; font-size: 12px; line-height: 1.65; border-radius: 12px; background: #edf3ff; }
+.mobile-admin-menu, .mobile-admin-list { display: grid; gap: 10px; }
+.mobile-admin-menu button { display: grid; grid-template-columns: 40px minmax(0, 1fr) 18px; min-height: 70px; align-items: center; gap: 10px; padding: 10px; color: #596475; text-align: left; cursor: pointer; border: 0; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(31, 41, 55, .04); }
+.mobile-admin-menu button > span:nth-child(2), .mobile-admin-row > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.mobile-admin-menu strong, .mobile-admin-row strong, .mobile-admin-log strong { color: #354052; font-size: 14px; }
+.mobile-admin-menu small, .mobile-admin-row small, .mobile-admin-log small { overflow: hidden; color: #9aa2ad; font-size: 11px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-admin-menu > svg, .session-admin-row > svg { width: 17px; color: #b0b6be; }
+.mobile-admin-toolbar { display: flex; min-height: 40px; align-items: center; gap: 8px; margin-bottom: 13px; color: #717b89; font-size: 13px; }
+.mobile-admin-toolbar input { min-width: 0; flex: 1; height: 40px; padding: 0 12px; color: #3f4856; font: inherit; font-size: 13px; border: 0; border-radius: 10px; outline: 0; background: #fff; box-sizing: border-box; }
+.mobile-admin-toolbar button, .mobile-admin-row > button { min-height: 34px; padding: 0 11px; color: #3979e8; font-size: 12px; font-weight: 650; cursor: pointer; border: 0; border-radius: 8px; background: #eaf2ff; }
+.mobile-admin-row { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; min-height: 64px; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(31, 41, 55, .04); }
+.mobile-admin-row > button.danger { color: #ca5964; background: #fff0f1; }
+.mobile-admin-row.session-admin-row { grid-template-columns: 38px minmax(0, 1fr) 18px; }
+.mobile-admin-empty { margin: 34px 0; color: #9ca4ae; font-size: 13px; text-align: center; }
+.mobile-admin-log { padding: 12px; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(31, 41, 55, .04); }
+.mobile-admin-log > div { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
+.mobile-admin-log p { margin: 7px 0 0; color: #6e7785; font-size: 12px; line-height: 1.6; word-break: break-word; }
+
 @keyframes bounce { 0%, 80%, 100% { opacity: .35; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
 @keyframes pulse { 50% { opacity: .35; transform: scale(.72); } }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1247,16 +1539,14 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 @media (max-width: 390px) {
   .mobile-header { padding-right: 11px; padding-left: 11px; }
   .brand-icon { width: 37px; height: 37px; border-radius: 12px; }
-  .brand-copy strong { max-width: 45vw; }
+  .brand-copy strong { max-width: 38vw; }
   .header-icon-button, .avatar-button { width: 37px; height: 37px; }
   .conversation { padding-right: 11px; padding-left: 11px; }
   .welcome-card { padding: 18px 14px 15px; border-radius: 20px; }
   .welcome-card h1 { font-size: 20px; }
   .composer { padding-right: 9px; padding-left: 9px; }
   .composer-main textarea { font-size: 16px; }
-  .composer-toolbar { gap: 4px; }
-  .mode-switch button, .tool-button { padding-right: 6px; padding-left: 6px; }
-  .model-trigger { max-width: 116px; }
+  .mode-toggle-bar button { font-size: 10px; }
   .composer-hint { display: none; }
   .history-reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .draw-options label { grid-template-columns: 74px minmax(0, 1fr); }
