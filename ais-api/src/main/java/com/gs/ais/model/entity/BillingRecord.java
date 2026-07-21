@@ -60,6 +60,9 @@ public class BillingRecord {
     @Column(name = "description", length = 255)
     private String description;
 
+    @Column(name = "duration_ms")
+    private Long durationMs;
+
     @Column(name = "session_id")
     private Long sessionId;
 
@@ -110,6 +113,8 @@ public class BillingRecord {
     public void setAmount(BigDecimal amount) { this.amount = amount; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
+    public Long getDurationMs() { return durationMs; }
+    public void setDurationMs(Long durationMs) { this.durationMs = durationMs; }
     public Long getSessionId() { return sessionId; }
     public void setSessionId(Long sessionId) { this.sessionId = sessionId; }
     public Long getMessageId() { return messageId; }

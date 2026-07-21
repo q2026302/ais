@@ -208,8 +208,10 @@ public class ImageGenerationQueueService {
                         cleanOption(request.getQuality()),
                         cleanOption(request.getFormat()));
 
+                long genStart = System.currentTimeMillis();
                 byte[] imageData = generateImageWithRetry(prompt, imageProvider, options, referenceImages,
                         assistantMessageId);
+                long genDuration = System.currentTimeMillis() - genStart;
 
                 if (wasCancelled(assistantMessageId)) return;
 
@@ -232,7 +234,7 @@ public class ImageGenerationQueueService {
 
                 // Record billing
                 if (userId != null && imageProvider != null) {
-                    billingService.recordGeneration(imageProvider, userId, sessionId, assistantMessageId);
+                    billingService.recordGeneration(imageProvider, userId, sessionId, assistantMessageId, genDuration);
                 }
 
                 log.info("Image generated successfully for message {} (session {})", assistantMessageId, sessionId);

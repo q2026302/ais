@@ -152,10 +152,12 @@ public class SessionController {
             }
         }
 
+        long chatStart = System.currentTimeMillis();
         ImageGenerationService.ChatMessageResult result = imageGenerationService.chat(
                 id, request.getPrompt(),
                 request.getAttachmentIds(),
                 resolvedChatProviderId != null ? resolvedChatProviderId : request.getChatProviderId());
+        long chatDuration = System.currentTimeMillis() - chatStart;
 
         // Record billing for successful chat
         if (result.status() == MessageStatus.SUCCESS && result.tokenUsage() != null) {
@@ -171,7 +173,8 @@ public class SessionController {
                                 result.tokenUsage().getTotalTokens(),
                                 result.tokenUsage().getCacheReadTokens(),
                                 result.tokenUsage().getCacheWriteTokens(),
-                                result.tokenUsage().getReasoningTokens());
+                                result.tokenUsage().getReasoningTokens(),
+                                chatDuration);
                     }
                 } catch (Exception e) {
                     // Billing recording is non-critical
@@ -267,8 +270,35 @@ public class SessionController {
         checkSessionAccess(session);
         Long chatProviderId = request != null ? request.getChatProviderId() : null;
         Long imageProviderId = request != null ? request.getImageProviderId() : null;
+        long regenStart = System.currentTimeMillis();
         ImageGenerationService.GenerationResult result = imageGenerationService.regenerateMessage(
                 id, messageId, chatProviderId, imageProviderId);
+        long regenDuration = System.currentTimeMillis() - regenStart;
+
+        // Regeneration records billing in ImageGenerationService so direct service callers are covered too.
+        // Keep this controller fallback for paths where the service could not resolve a user for billing.
+        if (result.status() == MessageStatus.SUCCESS && result.tokenUsage() != null && !result.billingRecorded()) {
+            Long userId = getCurrentUserId();
+            if (userId != null) {
+                try {
+                    ModelProvider chatProvider = imageGenerationService.getProviderById(
+                            chatProviderId != null ? chatProviderId : session.getChatProviderId());
+                    if (chatProvider != null) {
+                        billingService.recordChat(chatProvider, userId, id, result.messageId(),
+                                result.tokenUsage().getPromptTokens(),
+                                result.tokenUsage().getCompletionTokens(),
+                                result.tokenUsage().getTotalTokens(),
+                                result.tokenUsage().getCacheReadTokens(),
+                                result.tokenUsage().getCacheWriteTokens(),
+                                result.tokenUsage().getReasoningTokens(),
+                                regenDuration);
+                    }
+                } catch (Exception e) {
+                    // Billing recording is non-critical
+                }
+            }
+        }
+
         TokenUsage tokenUsage = result.tokenUsage();
         return ResponseEntity.ok(new GenerateResponse(
                 result.messageId(), result.optimizedPrompt(), result.imageUrl(), tokenUsage, result.status()));

@@ -28,6 +28,12 @@ public class BillingService {
 
     @Transactional
     public void recordGeneration(ModelProvider provider, Long userId, Long sessionId, Long messageId) {
+        recordGeneration(provider, userId, sessionId, messageId, null);
+    }
+
+    @Transactional
+    public void recordGeneration(ModelProvider provider, Long userId, Long sessionId, Long messageId,
+                                 Long durationMs) {
         if (provider == null || userId == null) return;
 
         String billingMode = provider.getBillingMode();
@@ -54,6 +60,7 @@ public class BillingService {
         record.setAmount(amount);
         record.setSessionId(sessionId);
         record.setMessageId(messageId);
+        record.setDurationMs(durationMs);
         record.setDescription("图片生成 - " + provider.getModelName());
         billingRecordRepository.save(record);
 
@@ -64,13 +71,30 @@ public class BillingService {
     public void recordChat(ModelProvider provider, Long userId, Long sessionId, Long messageId,
                            Integer promptTokens, Integer completionTokens, Integer totalTokens) {
         recordChat(provider, userId, sessionId, messageId, promptTokens, completionTokens, totalTokens,
-                null, null, null);
+                null, null, null, null);
+    }
+
+    @Transactional
+    public void recordChat(ModelProvider provider, Long userId, Long sessionId, Long messageId,
+                           Integer promptTokens, Integer completionTokens, Integer totalTokens,
+                           Long durationMs) {
+        recordChat(provider, userId, sessionId, messageId, promptTokens, completionTokens, totalTokens,
+                null, null, null, durationMs);
     }
 
     @Transactional
     public void recordChat(ModelProvider provider, Long userId, Long sessionId, Long messageId,
                            Integer promptTokens, Integer completionTokens, Integer totalTokens,
                            Integer cacheReadTokens, Integer cacheWriteTokens, Integer reasoningTokens) {
+        recordChat(provider, userId, sessionId, messageId, promptTokens, completionTokens, totalTokens,
+                cacheReadTokens, cacheWriteTokens, reasoningTokens, null);
+    }
+
+    @Transactional
+    public void recordChat(ModelProvider provider, Long userId, Long sessionId, Long messageId,
+                           Integer promptTokens, Integer completionTokens, Integer totalTokens,
+                           Integer cacheReadTokens, Integer cacheWriteTokens, Integer reasoningTokens,
+                           Long durationMs) {
         if (provider == null || userId == null) return;
 
         String billingMode = provider.getBillingMode();
@@ -112,6 +136,7 @@ public class BillingService {
         record.setAmount(amount);
         record.setSessionId(sessionId);
         record.setMessageId(messageId);
+        record.setDurationMs(durationMs);
         record.setDescription("对话 - " + provider.getModelName());
         billingRecordRepository.save(record);
     }

@@ -98,6 +98,31 @@ public class ImageGenerationService {
                 .orElse(null);
     }
 
+    /**
+     * Records chat usage for service-level resend/regenerate flows. These flows can be invoked
+     * outside the HTTP controller, so resolve the authenticated user first and then the session owner.
+     */
+    private boolean recordChatBilling(Session session, ModelProvider provider, Long messageId,
+                                      LlmClient.ChatResult chatResult, Long durationMs) {
+        Long userId = currentUserId();
+        if (userId == null) {
+            userId = session.getUserId();
+        }
+        if (userId == null) {
+            return false;
+        }
+        try {
+            billingService.recordChat(provider, userId, session.getId(), messageId,
+                    chatResult.promptTokens(), chatResult.completionTokens(), chatResult.totalTokens(),
+                    chatResult.cacheReadTokens(), chatResult.cacheWriteTokens(), chatResult.reasoningTokens(),
+                    durationMs);
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to record billing for regenerated chat message {}", messageId, e);
+            return false;
+        }
+    }
+
     private ModelProvider resolveChatProvider(Long sessionChatProviderId) {
         if (sessionChatProviderId != null) {
             return modelProviderService.getById(sessionChatProviderId);
@@ -413,7 +438,9 @@ public class ImageGenerationService {
         message.setErrorMessage(null);
         messageRepository.save(message);
         try {
+            long chatStart = System.currentTimeMillis();
             LlmClient.ChatResult chatResult = llmClient.chat(chatMessages, chatProvider);
+            long chatDuration = System.currentTimeMillis() - chatStart;
             if (wasCancelled(message.getId())) {
                 return new GenerationResult(message.getId(), "AI 请求已由用户终止。", null, null);
             }
@@ -424,10 +451,18 @@ public class ImageGenerationService {
             message.setPromptTokens(chatResult.promptTokens());
             message.setCompletionTokens(chatResult.completionTokens());
             message.setTotalTokens(chatResult.totalTokens());
+            message.setInputTokens(chatResult.promptTokens());
+            message.setOutputTokens(chatResult.completionTokens());
+            message.setCacheReadTokens(chatResult.cacheReadTokens());
+            message.setCacheWriteTokens(chatResult.cacheWriteTokens());
+            message.setReasoningTokens(chatResult.reasoningTokens());
+            boolean billingRecorded = recordChatBilling(session, chatProvider, message.getId(), chatResult, chatDuration);
             messageRepository.save(message);
             return new GenerationResult(message.getId(), chatResult.content(), null,
                     new com.gs.ais.dto.response.TokenUsage(
-                            chatResult.promptTokens(), chatResult.completionTokens(), chatResult.totalTokens()));
+                            chatResult.promptTokens(), chatResult.completionTokens(), chatResult.totalTokens(),
+                            chatResult.cacheReadTokens(), chatResult.cacheWriteTokens(), chatResult.reasoningTokens()),
+                    MessageStatus.SUCCESS, billingRecorded);
         } catch (Exception e) {
             if (wasCancelled(message.getId())) {
                 return new GenerationResult(message.getId(), "AI 请求已由用户终止。", null, null);
@@ -463,7 +498,9 @@ public class ImageGenerationService {
         assistantMessage = messageRepository.save(assistantMessage);
 
         try {
+            long chatStart = System.currentTimeMillis();
             LlmClient.ChatResult chatResult = llmClient.chat(chatMessages, chatProvider);
+            long chatDuration = System.currentTimeMillis() - chatStart;
             if (wasCancelled(assistantMessage.getId())) {
                 return new GenerationResult(
                         assistantMessage.getId(), "AI 请求已由用户终止。", null, null);
@@ -479,13 +516,17 @@ public class ImageGenerationService {
             assistantMessage.setCacheReadTokens(chatResult.cacheReadTokens());
             assistantMessage.setCacheWriteTokens(chatResult.cacheWriteTokens());
             assistantMessage.setReasoningTokens(chatResult.reasoningTokens());
+            boolean billingRecorded = recordChatBilling(
+                    session, chatProvider, assistantMessage.getId(), chatResult, chatDuration);
             messageRepository.save(assistantMessage);
             return new GenerationResult(
                     assistantMessage.getId(),
                     chatResult.content(),
                     null,
                     new com.gs.ais.dto.response.TokenUsage(
-                            chatResult.promptTokens(), chatResult.completionTokens(), chatResult.totalTokens()));
+                            chatResult.promptTokens(), chatResult.completionTokens(), chatResult.totalTokens(),
+                            chatResult.cacheReadTokens(), chatResult.cacheWriteTokens(), chatResult.reasoningTokens()),
+                    MessageStatus.SUCCESS, billingRecorded);
         } catch (Exception e) {
             if (wasCancelled(assistantMessage.getId())) {
                 return new GenerationResult(
@@ -775,10 +816,17 @@ public class ImageGenerationService {
 
     public record GenerationResult(Long messageId, String optimizedPrompt, String imageUrl,
                                    com.gs.ais.dto.response.TokenUsage tokenUsage,
-                                   MessageStatus status) {
+                                   MessageStatus status,
+                                   boolean billingRecorded) {
         public GenerationResult(Long messageId, String optimizedPrompt, String imageUrl,
                                 com.gs.ais.dto.response.TokenUsage tokenUsage) {
-            this(messageId, optimizedPrompt, imageUrl, tokenUsage, MessageStatus.SUCCESS);
+            this(messageId, optimizedPrompt, imageUrl, tokenUsage, MessageStatus.SUCCESS, false);
+        }
+
+        public GenerationResult(Long messageId, String optimizedPrompt, String imageUrl,
+                                com.gs.ais.dto.response.TokenUsage tokenUsage,
+                                MessageStatus status) {
+            this(messageId, optimizedPrompt, imageUrl, tokenUsage, status, false);
         }
     }
 }
