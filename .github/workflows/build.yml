@@ -42,20 +42,15 @@ jobs:
       - name: Install Frontend Dependencies
         working-directory: ais-web
         run: |
-          # Keep the committed lockfile on the domestic mirror for local development,
-          # but use the public npm registry on GitHub-hosted runners.
           sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
-
           for i in 1 2 3; do
             if yarn install --frozen-lockfile --network-timeout 120000; then
               exit 0
             fi
-
             if [ "$i" -eq 3 ]; then
               echo "yarn install failed after ${i} attempts." >&2
               exit 1
             fi
-
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
@@ -68,7 +63,7 @@ jobs:
         with:
           name: ais-api-jar
           path: ais-api/build/libs/*.jar
-          retention-days: 7
+          retention-days: 3
 
   # ============================================================
   # Job 2: GraalVM Native Image 构建
@@ -107,20 +102,15 @@ jobs:
       - name: Install Frontend Dependencies
         working-directory: ais-web
         run: |
-          # Keep the committed lockfile on the domestic mirror for local development,
-          # but use the public npm registry on GitHub-hosted runners.
           sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
-
           for i in 1 2 3; do
             if yarn install --frozen-lockfile --network-timeout 120000; then
               exit 0
             fi
-
             if [ "$i" -eq 3 ]; then
               echo "yarn install failed after ${i} attempts." >&2
               exit 1
             fi
-
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
@@ -138,7 +128,7 @@ jobs:
         with:
           name: ais-native
           path: ais-api/build/native/nativeCompile/ais
-          retention-days: 7
+          retention-days: 3
 
   # ============================================================
   # Job 3: 发布到 GitHub Packages (Maven)
@@ -175,20 +165,15 @@ jobs:
       - name: Install Frontend Dependencies
         working-directory: ais-web
         run: |
-          # Keep the committed lockfile on the domestic mirror for local development,
-          # but use the public npm registry on GitHub-hosted runners.
           sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
-
           for i in 1 2 3; do
             if yarn install --frozen-lockfile --network-timeout 120000; then
               exit 0
             fi
-
             if [ "$i" -eq 3 ]; then
               echo "yarn install failed after ${i} attempts." >&2
               exit 1
             fi
-
             echo "yarn install attempt $i failed, retrying..." >&2
             sleep 5
           done
@@ -198,3 +183,58 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./gradlew publish
         working-directory: ais-api
+
+  # ============================================================
+  # Job 4: 清理旧 artifact（只保留最近 3 次构建）
+  # ============================================================
+  cleanup:
+    name: Cleanup Old Artifacts
+    runs-on: ubuntu-latest
+    needs: [build-jar, build-native]
+    if: always()
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Delete old artifacts (keep last 3 builds)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          WORKFLOW: ${{ github.workflow }}
+          CURRENT_RUN: ${{ github.run_id }}
+        run: |
+          # Get all artifacts for this repo from this workflow, sorted newest first
+          ARTIFACTS=$(gh api "/repos/$OWNER/$REPO/actions/artifacts?per_page=50" --jq '.artifacts | sort_by(.created_at) | reverse')
+
+          # Get the workflow ID from current run's workflow
+          WF_ID=$(gh api "/repos/$OWNER/$REPO/actions/runs/$CURRENT_RUN" --jq '.workflow_id')
+
+          # Filter artifacts from this workflow
+          KEPT=0
+          for row in $(echo "$ARTIFACTS" | jq -c '.[]'); do
+            ARTIFACT_WF_ID=$(echo "$row" | jq -r '.workflow_id // empty')
+            ARTIFACT_ID=$(echo "$row" | jq -r '.id')
+            ARTIFACT_NAME=$(echo "$row" | jq -r '.name')
+            ARTIFACT_CREATED=$(echo "$row" | jq -r '.created_at')
+
+            # Only process artifacts from the same workflow
+            if [ "$ARTIFACT_WF_ID" != "$WF_ID" ]; then
+              continue
+            fi
+
+            KEPT=$((KEPT + 1))
+
+            # Keep the first 6 artifacts (3 builds × 2 artifacts each = JAR + Native)
+            if [ "$KEPT" -le 6 ]; then
+              echo "✅ KEEP  #${KEPT}: $ARTIFACT_NAME (${ARTIFACT_CREATED})"
+              continue
+            fi
+
+            echo "🗑️ DELETE: $ARTIFACT_NAME (${ARTIFACT_CREATED})"
+            gh api -X DELETE "/repos/$OWNER/$REPO/actions/artifacts/$ARTIFACT_ID" --silent
+          done
+
+          echo "---"
+          echo "保留 $KEPT 个 artifact（超过 6 的已删除）"
