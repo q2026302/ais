@@ -6,10 +6,13 @@ import com.gs.ais.config.FeishuProperties;
 import com.gs.ais.config.StoragePaths;
 import com.gs.ais.dto.request.DrawRequest;
 import com.gs.ais.dto.response.UploadResponse;
+import com.gs.ais.model.entity.ModelProvider;
 import com.gs.ais.model.entity.Session;
 import com.gs.ais.model.enums.MessageStatus;
 import com.gs.ais.service.AttachmentService;
+import com.gs.ais.service.BillingService;
 import com.gs.ais.service.ImageGenerationService;
+import com.gs.ais.service.ModelProviderService;
 import com.gs.ais.service.SessionService;
 import com.gs.ais.util.LlmErrorMessageUtils;
 import com.lark.oapi.service.im.v1.model.EventMessage;
@@ -69,6 +72,8 @@ public class FeishuEventService {
     private final SessionService sessionService;
     private final AttachmentService attachmentService;
     private final ImageGenerationService imageGenerationService;
+    private final BillingService billingService;
+    private final ModelProviderService modelProviderService;
     private final StoragePaths storagePaths;
     private final ConcurrentHashMap<String, Instant> receivedEventIds = new ConcurrentHashMap<>();
 
@@ -78,9 +83,11 @@ public class FeishuEventService {
                               FeishuApiClient feishuApiClient,
                               SessionService sessionService,
                               AttachmentService attachmentService,
-                              ImageGenerationService imageGenerationService) {
+                              ImageGenerationService imageGenerationService,
+                              BillingService billingService,
+                              ModelProviderService modelProviderService) {
         this(properties, objectMapper, feishuTaskExecutor, feishuApiClient, sessionService,
-                attachmentService, imageGenerationService, null);
+                attachmentService, imageGenerationService, billingService, modelProviderService, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -91,6 +98,8 @@ public class FeishuEventService {
                               SessionService sessionService,
                               AttachmentService attachmentService,
                               ImageGenerationService imageGenerationService,
+                              BillingService billingService,
+                              ModelProviderService modelProviderService,
                               StoragePaths storagePaths) {
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -99,6 +108,8 @@ public class FeishuEventService {
         this.sessionService = sessionService;
         this.attachmentService = attachmentService;
         this.imageGenerationService = imageGenerationService;
+        this.billingService = billingService;
+        this.modelProviderService = modelProviderService;
         this.storagePaths = storagePaths;
     }
 
@@ -302,8 +313,34 @@ public class FeishuEventService {
                 feishuApiClient.replyText(messageId, "请发送文字与我对话，或发送“绘图：提示词”生成图片。");
                 return;
             }
+            long chatStart = System.currentTimeMillis();
             ImageGenerationService.ChatMessageResult result = imageGenerationService.chat(
                     session.getId(), prompt, attachmentIds, null);
+            long chatDuration = System.currentTimeMillis() - chatStart;
+
+            if (result.status() == MessageStatus.SUCCESS && result.tokenUsage() != null) {
+                try {
+                    Session persistedSession = sessionService.getSession(session.getId());
+                    Long providerId = persistedSession.getChatProviderId();
+                    if (providerId != null) {
+                        ModelProvider provider = modelProviderService.getById(providerId);
+                        if (provider != null && persistedSession.getUserId() != null) {
+                            billingService.recordChat(provider, persistedSession.getUserId(), persistedSession.getId(),
+                                    result.assistantMessageId(),
+                                    result.tokenUsage().getPromptTokens(),
+                                    result.tokenUsage().getCompletionTokens(),
+                                    result.tokenUsage().getTotalTokens(),
+                                    result.tokenUsage().getCacheReadTokens(),
+                                    result.tokenUsage().getCacheWriteTokens(),
+                                    result.tokenUsage().getReasoningTokens(),
+                                    chatDuration);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to record billing for Feishu chat", e);
+                }
+            }
+
             if (result.status() == MessageStatus.SUCCESS) {
                 feishuApiClient.replyText(messageId, result.content());
             } else {

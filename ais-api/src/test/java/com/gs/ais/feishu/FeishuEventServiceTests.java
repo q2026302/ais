@@ -3,7 +3,9 @@ package com.gs.ais.feishu;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gs.ais.config.FeishuProperties;
 import com.gs.ais.service.AttachmentService;
+import com.gs.ais.service.BillingService;
 import com.gs.ais.service.ImageGenerationService;
+import com.gs.ais.service.ModelProviderService;
 import com.gs.ais.service.SessionService;
 import com.lark.oapi.event.model.Header;
 import com.lark.oapi.service.im.v1.model.EventMessage;
@@ -61,7 +63,8 @@ class FeishuEventServiceTests {
         TaskExecutor executor = Runnable::run;
         FeishuEventService service = new FeishuEventService(
                 properties, new ObjectMapper(), executor, client,
-                mock(SessionService.class), mock(AttachmentService.class), mock(ImageGenerationService.class));
+                mock(SessionService.class), mock(AttachmentService.class), mock(ImageGenerationService.class),
+                mock(BillingService.class), mock(ModelProviderService.class));
         String firstDelivery = "{\"header\":{\"event_type\":\"im.message.receive_v1\",\"event_id\":\"evt-first\"},"
                 + "\"event\":{\"sender\":{\"sender_type\":\"user\"},\"message\":{\"message_id\":\"om-same\","
                 + "\"chat_id\":\"oc-1\",\"message_type\":\"text\",\"content\":\"{\\\"text\\\":\\\"帮助\\\"}\"}}}";
@@ -79,7 +82,8 @@ class FeishuEventServiceTests {
         FeishuApiClient client = mock(FeishuApiClient.class);
         FeishuEventService service = new FeishuEventService(
                 properties, new ObjectMapper(), Runnable::run, client,
-                mock(SessionService.class), mock(AttachmentService.class), mock(ImageGenerationService.class));
+                mock(SessionService.class), mock(AttachmentService.class), mock(ImageGenerationService.class),
+                mock(BillingService.class), mock(ModelProviderService.class));
         String httpDelivery = "{\"header\":{\"event_type\":\"im.message.receive_v1\",\"event_id\":\"evt-http\"},"
                 + "\"event\":{\"sender\":{\"sender_type\":\"user\"},\"message\":{\"message_id\":\"om-shared\","
                 + "\"chat_id\":\"oc-1\",\"message_type\":\"text\",\"content\":\"{\\\"text\\\":\\\"帮助\\\"}\"}}}";
@@ -146,6 +150,8 @@ class FeishuEventServiceTests {
                 mock(FeishuApiClient.class),
                 mock(SessionService.class),
                 mock(AttachmentService.class),
-                mock(ImageGenerationService.class));
+                mock(ImageGenerationService.class),
+                mock(BillingService.class),
+                mock(ModelProviderService.class));
     }
 }
