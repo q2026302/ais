@@ -11,7 +11,7 @@ fi
 if [[ -e "$NATIVE_FILE" ]]; then
   NATIVE_FILE="$(cd "$(dirname "$NATIVE_FILE")" && pwd)/$(basename "$NATIVE_FILE")"
 fi
-SERVICE_NAME="ais.service"
+SERVICE_NAME="ai-image-studio.service"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_FILE="$UNIT_DIR/$SERVICE_NAME"
 
@@ -42,6 +42,16 @@ fi
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "未找到 systemctl；当前系统可能不支持 systemd。" >&2
   exit 1
+fi
+
+# 兼容处理：如果存在旧名称 ais.service，先停止并删除
+if systemctl --user --quiet is-enabled ais.service 2>/dev/null; then
+  echo "检测到旧服务名称 ais.service，正在迁移到 ai-image-studio.service..."
+  systemctl --user disable --now ais.service >/dev/null 2>&1 || true
+  rm -f "$UNIT_DIR/ais.service"
+  systemctl --user daemon-reload
+  systemctl --user reset-failed ais.service >/dev/null 2>&1 || true
+  echo "已清理旧服务 ais.service"
 fi
 
 if [[ ! -f "$NATIVE_FILE" || ! -x "$NATIVE_FILE" ]]; then
@@ -91,7 +101,7 @@ fi
 
 cat >"$UNIT_FILE" <<EOF_UNIT
 [Unit]
-Description=AIS service
+Description=AI Image Studio service
 After=network-online.target
 Wants=network-online.target
 
