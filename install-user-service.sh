@@ -99,7 +99,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$BASE_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$NATIVE_FILE
+ExecStart=$NATIVE_FILE -R:MaxHeapSize=128m -R:GC=serial
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=20s
