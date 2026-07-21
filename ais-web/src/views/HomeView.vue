@@ -471,7 +471,8 @@ function fillExample(text: string) {
 </script>
 
 <template>
-  <div class="home-view" v-loading="store.loading || sending">
+  <!-- Avoid fullscreen Element Plus mask while waiting for the model — it feels like a white screen. -->
+  <div class="home-view" :class="{ 'is-busy': store.loading || sending }">
     <SessionSidebar :mobile-open="sidebarOpen" @close="sidebarOpen = false" />
     <div class="chat-area">
       <!-- Chat header with view and model controls -->
@@ -561,11 +562,17 @@ function fillExample(text: string) {
         </button>
       </Transition>
 
-      <!-- Chat Input -->
-      <div v-if="store.canCancel" class="operation-status">
-        <span class="operation-spinner"></span>
-        <span>{{ store.operationStage || '正在处理请求...' }}</span>
-        <el-button text type="danger" size="small" @click="store.cancelActiveRequest">终止</el-button>
+      <!-- Non-blocking in-place progress (no full-page white mask). -->
+      <div v-if="store.loading || sending || store.canCancel" class="operation-status" role="status" aria-live="polite">
+        <span class="operation-spinner" aria-hidden="true"></span>
+        <span class="operation-status-text">{{ store.operationStage || (store.canCancel ? '正在等待模型回应…' : '请求处理中…') }}</span>
+        <el-button
+          v-if="store.canCancel"
+          text
+          type="danger"
+          size="small"
+          @click="store.cancelActiveRequest"
+        >终止</el-button>
       </div>
       <ChatInput
         ref="chatInputRef"
@@ -705,15 +712,20 @@ function fillExample(text: string) {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 clamp(18px, 4vw, 52px);
-  padding: 8px 12px;
-  color: #9a6200;
+  margin: 0 clamp(12px, 3vw, 36px);
+  padding: 9px 12px;
+  color: #6b5a1a;
   font-size: 12px;
-  border: 1px solid #ffe0a5;
-  border-radius: 12px 12px 0 0;
-  background: #fffaf0;
+  font-weight: 600;
+  border: 1px solid #ffe2a8;
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  background: linear-gradient(180deg, #fff8e8, #fffaf0);
+  box-shadow: 0 -2px 10px rgba(180, 130, 20, .06);
 }
-.operation-spinner { width: 13px; height: 13px; border: 2px solid #f5d797; border-top-color: #df9400; border-radius: 50%; animation: operation-spin .8s linear infinite; }
+.operation-status-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operation-spinner { flex: 0 0 auto; width: 13px; height: 13px; border: 2px solid #f5d797; border-top-color: #df9400; border-radius: 50%; animation: operation-spin .8s linear infinite; }
+.home-view.is-busy .chat-area { cursor: progress; }
 @keyframes operation-spin { to { transform: rotate(360deg); } }
 
 .scroll-bottom-button {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MagicStick, Setting, SwitchButton, User } from '@element-plus/icons-vue'
+import { ArrowLeft, MagicStick, Setting, SwitchButton, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -11,9 +11,15 @@ const isEmbedded = computed(() => route.meta.embedded === true)
 const showChrome = computed(() => !isEmbedded.value && route.name !== 'login')
 const isFeishuContext = computed(() => route.path === '/feishu' || route.query.source === 'feishu')
 const workspaceLocation = computed(() => isFeishuContext.value ? { name: 'feishu-h5' } : { name: 'home' })
+const isWorkspaceRoute = computed(() => route.name === 'home' || route.name === 'feishu-h5')
+const showBackToWorkspace = computed(() => showChrome.value && !isWorkspaceRoute.value)
 
 function appLocation(name: 'admin' | 'profile') {
   return isFeishuContext.value ? { name, query: { source: 'feishu' } } : { name }
+}
+
+function goWorkspace() {
+  void router.push(workspaceLocation.value)
 }
 
 async function handleLogout() {
@@ -26,20 +32,33 @@ async function handleLogout() {
   <div id="app-container">
     <el-container class="app-shell">
       <el-header v-if="showChrome" class="app-header" height="64px">
-        <button class="brand" type="button" aria-label="返回创作工作台" @click="router.push(workspaceLocation)">
-          <span class="brand-mark"><MagicStick /></span>
-          <span class="brand-copy">
-            <strong>AIS</strong>
-            <small>AI 创作工作台</small>
-          </span>
-        </button>
+        <div class="header-left">
+          <button
+            v-if="showBackToWorkspace"
+            class="back-to-workspace"
+            type="button"
+            aria-label="返回创作"
+            title="返回创作"
+            @click="goWorkspace"
+          >
+            <ArrowLeft />
+            <span>返回创作</span>
+          </button>
+          <button class="brand" type="button" aria-label="返回创作工作台" @click="goWorkspace">
+            <span class="brand-mark"><MagicStick /></span>
+            <span class="brand-copy">
+              <strong>AIS</strong>
+              <small>{{ isFeishuContext ? '移动创作' : 'AI 创作工作台' }}</small>
+            </span>
+          </button>
+        </div>
         <nav class="header-nav" aria-label="主导航">
           <el-button
             class="nav-button"
-            :class="{ active: route.path === '/' || route.path === '/feishu' }"
+            :class="{ active: isWorkspaceRoute }"
             text
             title="创作工作台"
-            @click="router.push(workspaceLocation)"
+            @click="goWorkspace"
           >
             <MagicStick />
             创作
@@ -79,6 +98,18 @@ async function handleLogout() {
         </nav>
       </el-header>
       <el-main class="app-main" :class="{ 'app-main--embedded': isEmbedded || route.name === 'login' }">
+        <div
+          v-if="showBackToWorkspace"
+          class="mobile-return-bar"
+          role="navigation"
+          aria-label="返回创作"
+        >
+          <button type="button" class="mobile-return-button" @click="goWorkspace">
+            <ArrowLeft />
+            <span>返回创作对话</span>
+          </button>
+          <span class="mobile-return-hint">当前在{{ route.path.startsWith('/admin') ? '管理页' : route.path === '/profile' ? '个人中心' : '应用页' }}</span>
+        </div>
         <router-view v-slot="{ Component }">
           <keep-alive include="HomeView">
             <component :is="Component" />
@@ -233,11 +264,39 @@ a:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 0 28px;
   border-bottom: 1px solid rgba(222, 226, 244, .92);
   background: rgba(255, 255, 255, .9);
   box-shadow: 0 3px 18px rgba(40, 54, 113, .05);
   backdrop-filter: blur(16px);
+}
+
+.header-left {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.back-to-workspace {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  padding: 0 10px 0 8px;
+  color: #4f62d6;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #dbe1ff;
+  border-radius: 999px;
+  background: #eef1ff;
+}
+
+.back-to-workspace :deep(svg) {
+  width: 15px;
+  height: 15px;
 }
 
 .brand {
@@ -249,6 +308,50 @@ a:focus-visible,
   border: 0;
   background: transparent;
   cursor: pointer;
+}
+
+.mobile-return-bar {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e6eaf6;
+  background: rgba(246, 248, 255, .97);
+  backdrop-filter: blur(12px);
+}
+
+.mobile-return-button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 10px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #5267f6, #7b5cf0);
+  box-shadow: 0 6px 14px rgba(82, 103, 246, .22);
+}
+
+.mobile-return-button :deep(svg) {
+  width: 16px;
+  height: 16px;
+}
+
+.mobile-return-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: #8a93aa;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand-mark {
@@ -280,10 +383,15 @@ a:focus-visible,
   .app-header { height: calc(56px + env(safe-area-inset-top)) !important; padding: env(safe-area-inset-top) 12px 0; }
   .app-main { height: calc(100vh - 56px - env(safe-area-inset-top)); height: calc(100dvh - 56px - env(safe-area-inset-top)); }
   .header-nav { gap: 1px; padding: 3px; }
+  .header-left { gap: 6px; }
+  .back-to-workspace { display: inline-flex; padding: 0 8px; font-size: 12px; }
+  .back-to-workspace span { max-width: 4.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .brand-copy small { display: none; }
   .brand-copy strong { font-size: 16px; }
   .brand-mark { width: 34px; height: 34px; }
   .nav-button { width: 34px; padding: 0; font-size: 0; }
   .nav-button :deep(.el-icon) { margin-right: 0; font-size: 16px; }
+  /* Explicit return strip — icon-only top nav is easy to miss on phones. */
+  .mobile-return-bar { display: flex; }
 }
 </style>

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ChatDotRound, Lock, Picture, User } from '@element-plus/icons-vue'
+import { ArrowLeft, ChatDotRound, Lock, Picture, User } from '@element-plus/icons-vue'
 import { authApi, type UserProfile } from '@/api/auth'
 import { providerApi } from '@/api/providers'
 import { billingApi, userDefaultsApi } from '@/api/billing'
@@ -10,6 +10,7 @@ import type { BillingRecord, ModelProvider } from '@/types'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const loading = ref(false)
 const saving = ref(false)
@@ -18,6 +19,11 @@ const profile = reactive({ displayName: '', email: '' })
 const account = ref<UserProfile | null>(null)
 const password = reactive({ current: '', next: '', confirm: '' })
 const activeTab = ref('profile')
+const fromMobileWorkspace = computed(() => route.query.source === 'feishu')
+
+function goBackToWorkspace() {
+  void router.push(fromMobileWorkspace.value ? { name: 'feishu-h5' } : { name: 'home' })
+}
 
 // Model selectors
 const chatModels = ref<ModelProvider[]>([])
@@ -27,13 +33,13 @@ const defaultImageModelId = ref<number | null>(null)
 const loadingModels = ref(false)
 const savingModels = ref(false)
 
-// Billing logs
+// Billing logs — default to last 7 days so recent usage is visible without manual date tweaks
 const billingLogs = ref<BillingRecord[]>([])
 const billingLogsLoading = ref(false)
 const billingLogsPage = ref(0)
 const billingLogsTotal = ref(0)
-const billingFrom = ref(new Date().toISOString().slice(0, 10))
-const billingTo = ref(billingFrom.value)
+const billingTo = ref(new Date().toISOString().slice(0, 10))
+const billingFrom = ref(new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10))
 
 async function load() {
   loading.value = true
@@ -116,6 +122,24 @@ function formatTime(value: string) {
   return new Date(value).toLocaleString()
 }
 
+function formatDuration(ms: number | null | undefined) {
+  if (ms == null || ms < 0) return '—'
+  if (ms < 1000) return `${ms} ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 2 : 1)} s`
+  const minutes = Math.floor(seconds / 60)
+  const remain = Math.round(seconds % 60)
+  return `${minutes}m ${remain}s`
+}
+
+function isPerCallBilling(mode: string | null | undefined) {
+  return mode === 'PER_CALL' || mode === 'per_request' || mode === 'per_call'
+}
+
+function isPerTokenBilling(mode: string | null | undefined) {
+  return mode === 'PER_TOKEN' || mode === 'per_token'
+}
+
 function applyBillingFilter() {
   if (!billingFrom.value || !billingTo.value) return ElMessage.warning('请选择完整的日志日期范围')
   const span = (new Date(billingTo.value).getTime() - new Date(billingFrom.value).getTime()) / 86400000
@@ -178,7 +202,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="profile-view" v-loading="loading">
+  <div class="profile-view" :class="{ 'is-loading': loading }">
+    <div v-if="loading" class="profile-loading" role="status" aria-live="polite">
+      <span class="profile-loading-dot" aria-hidden="true"></span>
+      正在加载个人中心…
+    </div>
     <div class="profile-header">
       <div class="profile-identity">
         <div class="profile-avatar" aria-hidden="true">
@@ -195,9 +223,15 @@ onMounted(async () => {
           </div>
         </div>
       </div>
-      <el-tag v-if="account" :type="account.role === 'ADMIN' ? 'warning' : 'primary'" effect="light">
-        {{ account.role === 'ADMIN' ? '管理员' : '普通用户' }}
-      </el-tag>
+      <div class="profile-header-actions">
+        <el-button class="return-workspace-btn" @click="goBackToWorkspace">
+          <el-icon><ArrowLeft /></el-icon>
+          返回创作
+        </el-button>
+        <el-tag v-if="account" :type="account.role === 'ADMIN' ? 'warning' : 'primary'" effect="light">
+          {{ account.role === 'ADMIN' ? '管理员' : '普通用户' }}
+        </el-tag>
+      </div>
     </div>
 
     <el-tabs v-model="activeTab" class="profile-tabs" @tab-change="(tab: string) => { if (tab === 'billing') loadBillingLogs() }">
@@ -301,9 +335,9 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="计费模式" width="120">
               <template #default="{ row }">
-                <el-tag v-if="row.billingMode === 'per_request'" size="small">按次</el-tag>
-                <el-tag v-else-if="row.billingMode === 'per_token'" type="warning" size="small">按 Token</el-tag>
-                <span v-else class="muted">—</span>
+                <el-tag v-if="isPerCallBilling(row.billingMode)" size="small">按次</el-tag>
+                <el-tag v-else-if="isPerTokenBilling(row.billingMode)" type="warning" size="small">按 Token</el-tag>
+                <span v-else class="muted">未配置</span>
               </template>
             </el-table-column>
             <el-table-column label="Token 用量" min-width="230">
@@ -311,6 +345,9 @@ onMounted(async () => {
               输入 {{ row.inputTokens ?? row.promptTokens ?? 0 }} · 输出 {{ row.outputTokens ?? row.completionTokens ?? 0 }} · 缓存读取 {{ row.cacheReadTokens ?? 0 }}
             </template>
           </el-table-column>
+          <el-table-column label="耗时" width="100">
+              <template #default="{ row }">{{ formatDuration(row.durationMs) }}</template>
+            </el-table-column>
           <el-table-column label="费用" width="100">
               <template #default="{ row }">
                 {{ row.amount != null ? row.amount : row.totalTokens != null ? `${row.totalTokens} tokens` : '—' }}
@@ -376,6 +413,47 @@ onMounted(async () => {
   box-shadow: 0 12px 30px rgba(56, 69, 139, .08);
 }
 
+.profile-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.return-workspace-btn {
+  min-height: 36px;
+  border-radius: 999px !important;
+  font-weight: 700;
+}
+
+.profile-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  color: #5b6a88;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid #e4e9f8;
+  border-radius: 12px;
+  background: #f5f7ff;
+}
+
+.profile-loading-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5267f6;
+  animation: profile-pulse 1s infinite ease-in-out;
+}
+
+@keyframes profile-pulse {
+  0%, 100% { opacity: .35; transform: scale(.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
 .profile-identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .profile-avatar {
   display: grid;
@@ -432,13 +510,18 @@ h1 { margin: 5px 0 4px; color: #273453; font-size: clamp(24px, 3vw, 30px); lette
 @media (max-width: 760px) {
   .profile-grid { grid-template-columns: 1fr; }
   .profile-header { flex-direction: column; }
+  .profile-header-actions { width: 100%; flex-direction: row; align-items: center; justify-content: space-between; }
   .profile-header :deep(.el-tag) { margin-top: 0; }
   .default-selectors { grid-template-columns: 1fr; }
+  .return-workspace-btn { flex: 1; }
 }
 
 @media (max-width: 460px) {
+  .profile-view { padding: 14px 12px 28px; }
   .profile-identity { align-items: flex-start; }
   .profile-avatar { width: 48px; height: 48px; font-size: 20px; border-radius: 15px; }
+  .billing-filter { flex-wrap: wrap; }
+  .billing-filter :deep(.el-date-editor) { width: 100%; max-width: 100%; }
   .profile-card :deep(.el-card__body), .profile-card :deep(.el-card__header) { padding-right: 16px; padding-left: 16px; }
 }
 </style>

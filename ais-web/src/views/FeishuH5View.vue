@@ -762,7 +762,10 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
             </template>
           </div>
           <CollapsibleMessageText v-if="messageText(message) && message.status !== 'PENDING'" class="message-content" :content="messageText(message)" />
-          <div v-if="message.status === 'PENDING'" class="message-loading"><span></span><span></span><span></span></div>
+          <div v-if="message.status === 'PENDING'" class="message-loading" role="status" aria-live="polite">
+            <span class="message-loading-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <em>{{ mode === 'draw' || message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST' ? '正在生成…' : '正在思考…' }}</em>
+          </div>
           <button
             v-if="message.imageUrl"
             type="button"
@@ -820,10 +823,15 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
       </div>
     </section>
 
-    <div v-if="view === 'create' && store.canCancel" class="operation-bar">
-      <span class="pulse-dot"></span>
-      <span>{{ store.operationStage || '请求处理中…' }}</span>
-      <button type="button" @click="store.cancelActiveRequest">终止</button>
+    <div
+      v-if="view === 'create' && (store.loading || store.canCancel)"
+      class="operation-bar"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="pulse-dot" aria-hidden="true"></span>
+      <span class="operation-bar-text">{{ store.operationStage || (mode === 'draw' ? '正在生成图片…' : '正在等待模型回应…') }}</span>
+      <button v-if="store.canCancel" type="button" @click="store.cancelActiveRequest">终止</button>
     </div>
 
     <footer v-if="view === 'create'" class="composer">
@@ -912,10 +920,11 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
         <span class="account-avatar"><UserFilled /></span>
         <div><strong>应用与账户</strong><span>{{ accountRoleLabel }} · 移动工作台</span></div>
       </div>
+      <p class="account-tip">进入个人中心或管理页后，可用顶部「返回创作」回到对话。</p>
       <div class="app-menu">
-        <button type="button" @click="openAppPage('profile')"><span class="menu-icon"><User /></span><span><strong>个人中心</strong><small>账户信息与密码设置</small></span><ArrowRight /></button>
+        <button type="button" @click="openAppPage('profile')"><span class="menu-icon"><User /></span><span><strong>个人中心</strong><small>资料、模型偏好与消费记录</small></span><ArrowRight /></button>
         <button v-if="auth.isAdmin" type="button" @click="openMobileAdmin()"><span class="menu-icon"><Setting /></span><span><strong>移动管理</strong><small>用户、会话和操作日志</small></span><ArrowRight /></button>
-        <button type="button" @click="openAppPage('home')"><span class="menu-icon"><Monitor /></span><span><strong>完整工作台</strong><small>进入与 PC 版一致的工作界面</small></span><ArrowRight /></button>
+        <button type="button" @click="openAppPage('home')"><span class="menu-icon"><Monitor /></span><span><strong>完整工作台</strong><small>进入桌面版界面（可返回）</small></span><ArrowRight /></button>
         <button v-if="auth.securityEnabled" class="danger-menu" type="button" @click="handleLogout"><span class="menu-icon"><SwitchButton /></span><span><strong>退出登录</strong><small>安全退出当前账户</small></span><ArrowRight /></button>
       </div>
     </el-drawer>
@@ -930,11 +939,11 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
         </button>
       </div>
     </el-drawer>
-    <el-drawer v-model="modelVisible" direction="btt" size="auto" class="h5-drawer model-drawer" :with-header="false">
+    <el-drawer v-model="modelVisible" direction="btt" size="68%" class="h5-drawer model-drawer" :with-header="false">
       <div class="drawer-title compact"><div><strong>选择{{ mode === 'draw' ? '绘画' : '对话' }}模型</strong><span>模型选择会保存到当前会话</span></div></div>
       <div class="model-list">
-        <button class="model-row" :class="{ active: selectedProviderId === null }" type="button" @click="selectModel(null)"><span><strong>系统默认模型</strong><small>使用后台配置的默认模型</small></span><Check v-if="selectedProviderId === null" /></button>
-        <button v-for="provider in currentProviders" :key="provider.id" class="model-row" :class="{ active: provider.id === selectedProviderId }" type="button" @click="selectModel(provider.id)"><span><strong>{{ provider.name || provider.providerId }}</strong><small>#{{ provider.id }} · {{ provider.modelName }}</small></span><Check v-if="provider.id === selectedProviderId" /></button>
+        <button class="model-row" :class="{ active: selectedProviderId === null }" type="button" @click="selectModel(null)"><span><strong>系统默认模型</strong><small>使用后台配置的默认模型</small></span><span v-if="selectedProviderId === null" class="model-check" aria-hidden="true"><Check /></span></button>
+        <button v-for="provider in currentProviders" :key="provider.id" class="model-row" :class="{ active: provider.id === selectedProviderId }" type="button" @click="selectModel(provider.id)"><span><strong>{{ provider.name || provider.providerId }}</strong><small>#{{ provider.id }} · {{ provider.modelName }}</small></span><span v-if="provider.id === selectedProviderId" class="model-check" aria-hidden="true"><Check /></span></button>
       </div>
     </el-drawer>
     <el-drawer v-model="editVisible" direction="btt" size="auto" class="h5-drawer edit-drawer" :with-header="false">
@@ -1154,10 +1163,29 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 .message-image-trigger img, .gallery-image-trigger img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .message-file { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 7px 9px; overflow: hidden; color: #5366d3; font-size: 11px; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; border: 1px solid #e3e7f5; border-radius: 9px; background: #f7f8ff; }
 .message-card.user .message-file { color: #fff; border-color: rgba(255, 255, 255, .25); background: rgba(255, 255, 255, .12); }
-.message-loading { display: flex; gap: 4px; padding: 6px 3px; }
-.message-loading span { width: 6px; height: 6px; border-radius: 50%; background: #8995b1; animation: bounce 1.2s infinite ease-in-out; }
-.message-loading span:nth-child(2) { animation-delay: .15s; }
-.message-loading span:nth-child(3) { animation-delay: .3s; }
+.message-loading {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  color: #6d7893;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+}
+.message-loading em { font-style: normal; }
+.message-loading-dots { display: inline-flex; gap: 4px; }
+.message-loading-dots i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7f8db0;
+  animation: bounce 1.2s infinite ease-in-out;
+}
+.message-loading-dots i:nth-child(2) { animation-delay: .15s; }
+.message-loading-dots i:nth-child(3) { animation-delay: .3s; }
 .result-image { position: relative; width: min(100%, 480px); margin-top: 10px; overflow: hidden; border: 0; border-radius: 13px; background: #f1f3f8; }
 .result-image img { display: block; width: 100%; max-height: 60vh; object-fit: contain; }
 .error-text { margin: 8px 0 0; color: #e15d6d; font-size: 11px; }
@@ -1199,9 +1227,45 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 .gallery-empty { height: calc(100% - 58px); }
 .gallery-empty button { min-height: 38px; margin-top: 7px; padding: 0 16px; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; border: 0; border-radius: 11px; background: var(--mobile-primary); }
 
-.operation-bar { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin: 0 12px 7px; padding: 8px 11px; color: #936000; font-size: 11px; border: 1px solid #f4d99f; border-radius: 12px; background: #fff9ec; }
-.operation-bar .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: #e8a01b; animation: pulse 1s infinite ease-in-out; }
-.operation-bar button { min-height: 28px; margin-left: auto; padding: 0 4px; color: #b36d00; font-size: 11px; font-weight: 800; cursor: pointer; border: 0; background: transparent; }
+.operation-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  color: #6f5a16;
+  font-size: 12px;
+  font-weight: 650;
+  border: 1px solid #f0d48a;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff8e8, #fffaf0);
+  box-shadow: 0 4px 14px rgba(180, 130, 20, .08);
+}
+.operation-bar-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operation-bar .pulse-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #e8a01b; animation: pulse 1s infinite ease-in-out; }
+.operation-bar button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  margin-left: 2px;
+  padding: 0 10px;
+  color: #b36d00;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  border: 1px solid #f0d48a;
+  border-radius: 999px;
+  background: #fff;
+}
+.account-tip {
+  margin: 0 0 4px;
+  padding: 10px 12px;
+  color: #6d7890;
+  font-size: 12px;
+  line-height: 1.55;
+  border-radius: 12px;
+  background: #eef3ff;
+}
 
 .mode-toggle-bar {
   display: flex;
@@ -1357,13 +1421,28 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 
 :deep(.h5-drawer.el-drawer) { max-width: 760px; margin: 0 auto; border-radius: 24px 24px 0 0; background: #fff; box-shadow: 0 -18px 50px rgba(30, 42, 78, .2); }
 :deep(.h5-drawer .el-drawer__body) { padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); overflow-y: auto; }
+/* Model picker: fixed panel height + internal list scroll so many models stay selectable on short screens. */
+:deep(.model-drawer.el-drawer) {
+  height: 68% !important;
+  max-height: min(78vh, 720px);
+}
+:deep(.model-drawer .el-drawer__body) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 14px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
 .drawer-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 2px 15px; border-bottom: 1px solid #edf0f5; }
 .drawer-title > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .drawer-title strong { color: #303d58; font-size: 17px; }
 .drawer-title span { color: #929bad; font-size: 11px; }
 .drawer-title > button { display: inline-flex; flex: 0 0 auto; min-height: 36px; align-items: center; gap: 5px; padding: 0 11px; color: #5064d2; font-size: 12px; font-weight: 700; cursor: pointer; border: 0; border-radius: 10px; background: #edf0ff; }
-.drawer-title.compact { padding-bottom: 13px; }
-.session-list, .model-list { padding-top: 9px; }
+.drawer-title.compact { flex: 0 0 auto; padding-bottom: 13px; }
+.session-list { padding-top: 9px; }
 .session-row, .model-row { display: flex; width: 100%; min-height: 58px; align-items: center; gap: 8px; padding: 7px 6px 7px 10px; color: #51607b; text-align: left; border: 0; border-bottom: 1px solid #eff1f5; background: transparent; }
 .session-row.active { border-radius: 12px; background: #f2f4ff; }
 .session-select { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; padding: 6px 0; color: inherit; text-align: left; cursor: pointer; border: 0; background: transparent; }
@@ -1371,11 +1450,67 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 .session-select small { color: #9ba4b6; font-size: 10px; }
 .session-action { display: grid; flex: 0 0 auto; width: 34px; height: 34px; padding: 0; place-items: center; color: #919caf; cursor: pointer; border: 0; border-radius: 10px; background: #f3f5f8; }
 .session-action.danger { color: #d0717d; background: #fff2f4; }
-.session-row > svg, .model-row > svg { flex: 0 0 auto; color: #6072db; }
-.model-row { justify-content: space-between; min-height: 62px; margin-bottom: 8px; padding: 10px 12px; cursor: pointer; border: 1px solid #e9ecf2; border-radius: 13px; }
-.model-row > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.model-row strong { color: #46526d; font-size: 13px; }
-.model-row small { overflow: hidden; color: #96a0b2; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.session-row > svg { flex: 0 0 auto; width: 18px; height: 18px; color: #6072db; }
+.model-list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding-top: 10px;
+  padding-bottom: 4px;
+}
+.model-row {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  min-height: 48px;
+  max-height: 64px;
+  margin-bottom: 0;
+  padding: 8px 12px;
+  cursor: pointer;
+  border: 1px solid #e9ecf2;
+  border-radius: 12px;
+}
+.model-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  color: #6072db;
+}
+.model-check :deep(svg),
+.model-row > svg {
+  display: block;
+  width: 18px !important;
+  height: 18px !important;
+  max-width: 18px;
+  max-height: 18px;
+  flex: 0 0 auto;
+  color: #6072db;
+}
+.model-row > span { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.model-row strong {
+  overflow: hidden;
+  color: #46526d;
+  font-size: 13px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-row small {
+  overflow: hidden;
+  color: #96a0b2;
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .model-row.active { border-color: #ced6ff; background: #f1f4ff; }
 .model-row.active strong { color: #4f62d2; }
 
@@ -1558,6 +1693,11 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
   .composer-hint { display: none; }
   .bottom-nav { min-height: 52px; }
   .bottom-nav button { min-height: 43px; }
+  :deep(.model-drawer.el-drawer) {
+    height: 78% !important;
+    max-height: 90vh;
+  }
+  .model-row { min-height: 44px; padding: 6px 10px; }
 }
 
 @media (hover: hover) and (pointer: fine) {

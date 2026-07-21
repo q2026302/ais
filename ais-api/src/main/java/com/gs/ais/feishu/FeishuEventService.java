@@ -9,6 +9,7 @@ import com.gs.ais.dto.response.UploadResponse;
 import com.gs.ais.model.entity.ModelProvider;
 import com.gs.ais.model.entity.Session;
 import com.gs.ais.model.enums.MessageStatus;
+import com.gs.ais.model.enums.ProviderType;
 import com.gs.ais.service.AttachmentService;
 import com.gs.ais.service.BillingService;
 import com.gs.ais.service.ImageGenerationService;
@@ -318,23 +319,27 @@ public class FeishuEventService {
                     session.getId(), prompt, attachmentIds, null);
             long chatDuration = System.currentTimeMillis() - chatStart;
 
-            if (result.status() == MessageStatus.SUCCESS && result.tokenUsage() != null) {
+            if (result.status() == MessageStatus.SUCCESS) {
                 try {
                     Session persistedSession = sessionService.getSession(session.getId());
                     Long providerId = persistedSession.getChatProviderId();
-                    if (providerId != null) {
-                        ModelProvider provider = modelProviderService.getById(providerId);
-                        if (provider != null && persistedSession.getUserId() != null) {
-                            billingService.recordChat(provider, persistedSession.getUserId(), persistedSession.getId(),
-                                    result.assistantMessageId(),
-                                    result.tokenUsage().getPromptTokens(),
-                                    result.tokenUsage().getCompletionTokens(),
-                                    result.tokenUsage().getTotalTokens(),
-                                    result.tokenUsage().getCacheReadTokens(),
-                                    result.tokenUsage().getCacheWriteTokens(),
-                                    result.tokenUsage().getReasoningTokens(),
-                                    chatDuration);
-                        }
+                    ModelProvider provider = providerId != null
+                            ? modelProviderService.getById(providerId)
+                            : null;
+                    if (provider == null) {
+                        provider = modelProviderService.getActiveProvider(ProviderType.CHAT);
+                    }
+                    if (provider != null && persistedSession.getUserId() != null) {
+                        var usage = result.tokenUsage();
+                        billingService.recordChat(provider, persistedSession.getUserId(), persistedSession.getId(),
+                                result.assistantMessageId(),
+                                usage != null ? usage.getPromptTokens() : null,
+                                usage != null ? usage.getCompletionTokens() : null,
+                                usage != null ? usage.getTotalTokens() : null,
+                                usage != null ? usage.getCacheReadTokens() : null,
+                                usage != null ? usage.getCacheWriteTokens() : null,
+                                usage != null ? usage.getReasoningTokens() : null,
+                                chatDuration);
                     }
                 } catch (Exception e) {
                     log.warn("Failed to record billing for Feishu chat", e);

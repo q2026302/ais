@@ -146,6 +146,23 @@ public class ImageGenerationService {
         }
     }
 
+    /** Same resolution order as live chat/image calls — used by billing fallback paths. */
+    public ModelProvider resolveChatProviderForBilling(Long sessionChatProviderId) {
+        try {
+            return resolveChatProvider(sessionChatProviderId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public ModelProvider resolveImageProviderForBilling(Long sessionImageProviderId) {
+        try {
+            return resolveImageProvider(sessionImageProviderId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // ===================== Flow A: Chat message =====================
 
     /**

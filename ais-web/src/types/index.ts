@@ -301,6 +301,7 @@ export interface BillingRecord {
   cacheReadPricePerMillion?: number | null
   amount: number | null
   description: string | null
+  durationMs?: number | null
   sessionId: number | null
   messageId: number | null
   createdAt: string
