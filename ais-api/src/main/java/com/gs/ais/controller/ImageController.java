@@ -81,8 +81,9 @@ public class ImageController {
             PureThumbnail.writeLongestEdgePng(imageData, thumbPath, THUMB_MAX_EDGE);
         } catch (IOException e) {
             log.warn("Failed to read original image for thumbnail {}: {}", original, e.getMessage());
-        } catch (Exception e) {
-            log.warn("Failed to generate thumbnail for {}: {}", original, e.getMessage());
+        } catch (Throwable e) {
+            // Catch Error as well (e.g. NoClassDefFoundError from AWT in native image)
+            log.warn("Failed to generate thumbnail for {}: {}", original, e.toString());
         }
     }
 
