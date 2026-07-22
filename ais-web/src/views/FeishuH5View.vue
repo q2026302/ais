@@ -475,12 +475,17 @@ function openImageAction(url: string, filename = 'ai-image.png') {
   imageActionUrl.value = url
   imageActionFilename.value = filename
   imageActionVisible.value = true
+  // Long-press can leave a browser text selection that highlights the first drawer button.
+  window.getSelection()?.removeAllRanges()
+  nextTick(() => window.getSelection()?.removeAllRanges())
 }
 function startLongPress(_event: TouchEvent, action: () => void) {
   cancelLongPress()
   longPressTriggered.value = false
   longPressTimer = window.setTimeout(() => {
     longPressTriggered.value = true
+    // Clear any text selection created by the long-press gesture before opening menus.
+    window.getSelection()?.removeAllRanges()
     action()
     window.setTimeout(() => { longPressTriggered.value = false }, 1000)
   }, 560)
@@ -502,6 +507,9 @@ async function downloadImageAction() {
 function openMessageAction(message: Message) {
   messageActionTarget.value = message
   messageActionVisible.value = true
+  // Long-press can leave a browser text selection that highlights the first drawer button.
+  window.getSelection()?.removeAllRanges()
+  nextTick(() => window.getSelection()?.removeAllRanges())
 }
 async function handleMessageAction(action: 'copy' | 'edit' | 'resend' | 'download' | 'delete') {
   const message = messageActionTarget.value
@@ -545,19 +553,34 @@ async function copyText(text: string) {
     ElMessage.error('复制失败，请手动选择复制')
   }
 }
+function triggerDownload(url: string, filename: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.rel = 'noopener'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
 async function downloadImage(url: string, filename = 'ai-image.png') {
+  if (!url) return
   try {
     const response = await fetch(url)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const blob = await response.blob()
     const objectUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = objectUrl
-    link.download = filename
-    link.click()
+    triggerDownload(objectUrl, filename)
     URL.revokeObjectURL(objectUrl)
     ElMessage.success('图片下载已开始')
   } catch {
-    window.open(url, '_blank', 'noopener')
+    // Fall back to a normal browser download if fetch is blocked (same as ChatMessage/ImageGallery).
+    try {
+      triggerDownload(url, filename)
+      ElMessage.success('图片下载已开始')
+    } catch {
+      ElMessage.error('下载失败')
+    }
   }
 }
 async function deleteMessage(message: Message) {
