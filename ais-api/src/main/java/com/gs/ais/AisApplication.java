@@ -13,8 +13,6 @@ import com.gs.ais.config.HibernateNativeHints;
 public class AisApplication {
 
 	public static void main(String[] args) {
-		// GraalVM / server environments: AWT thumbnail generation must run headless.
-		System.setProperty("java.awt.headless", "true");
 		SpringApplication.run(AisApplication.class, args);
 	}
 

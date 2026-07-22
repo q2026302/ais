@@ -60,6 +60,8 @@ dependencies {
 	runtimeOnly 'org.xerial:sqlite-jdbc'
 	implementation 'org.hibernate.orm:hibernate-community-dialects'
 	implementation 'org.hibernate.orm:hibernate-graalvm'
+	implementation 'org.apache.commons:commons-imaging:1.0.0-alpha5'
+	implementation 'ar.com.hjg:pngj:2.1.12'
 	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
