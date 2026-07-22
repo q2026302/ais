@@ -66,6 +66,7 @@ function newModel(type: 'CHAT' | 'IMAGE'): ProviderModelRequest {
     maxRetries: type === 'IMAGE' ? 2 : null,
     retryBackoffSeconds: type === 'IMAGE' ? 20 : null,
     adapterType: type === 'IMAGE' ? 'AUTO' : undefined,
+    imageQueueConcurrency: null,
     configJson: '',
   }
 }
@@ -97,6 +98,7 @@ function open(provider?: ProviderAccount | null) {
         maxRetries: model.maxRetries ?? (model.type === 'IMAGE' ? 2 : null),
         retryBackoffSeconds: model.retryBackoffSeconds ?? (model.type === 'IMAGE' ? 20 : null),
         adapterType: model.adapterType || (model.type === 'IMAGE' ? 'AUTO' : undefined),
+        imageQueueConcurrency: model.imageQueueConcurrency ?? null,
         configJson: model.configJson || '',
         supportsTextToImage: model.supportsTextToImage,
         supportsImageToImage: model.supportsImageToImage,
@@ -191,6 +193,7 @@ function handleTypeChange(model: ProviderModelRequest) {
   model.maxRetries = defaults.maxRetries
   model.retryBackoffSeconds = defaults.retryBackoffSeconds
   model.adapterType = model.type === 'IMAGE' && isGrsai.value ? 'GRS_AI' : defaults.adapterType
+  model.imageQueueConcurrency = defaults.imageQueueConcurrency
   if (model.type !== 'IMAGE') clearImageMetadata(model)
 }
 
@@ -618,6 +621,10 @@ defineExpose({ open })
               <el-input-number v-model="model.retryBackoffSeconds" :min="1" :max="120" controls-position="right" />
               <span class="retry-text">秒</span>
             </div>
+          </el-form-item>
+          <el-form-item v-if="model.type === 'IMAGE'" label="并发上限">
+            <el-input-number v-model="model.imageQueueConcurrency" :min="1" :max="10" controls-position="right" />
+            <small style="color:#8d97ac;font-size:12px;margin-left:8px;white-space:nowrap;">同时生图数</small>
           </el-form-item>
           <el-form-item label="计费模式">
             <el-select v-model="model.billingMode" clearable placeholder="不收费（默认）" @change="handleBillingModeChange(model)">

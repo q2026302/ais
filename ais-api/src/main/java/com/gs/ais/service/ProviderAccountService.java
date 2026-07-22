@@ -196,6 +196,8 @@ public class ProviderAccountService {
         } else {
             model.setAdapterType(null);
         }
+        model.setImageQueueConcurrency(request.getType() == ProviderType.IMAGE
+                ? normalizeImageQueueConcurrency(request.getImageQueueConcurrency()) : null);
         model.setConfigJson(request.getConfigJson());
         model.setSupportsTextToImage(request.getType() == ProviderType.IMAGE
                 ? request.getSupportsTextToImage() : null);
@@ -332,5 +334,12 @@ public class ProviderAccountService {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private Integer normalizeImageQueueConcurrency(Integer value) {
+        if (value == null || value <= 0) {
+            return null;
+        }
+        return value;
     }
 }

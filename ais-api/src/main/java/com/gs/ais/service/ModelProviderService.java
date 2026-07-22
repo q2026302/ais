@@ -186,6 +186,7 @@ public class ModelProviderService {
         model.setMaxRetries(request.getMaxRetries());
         model.setRetryBackoffSeconds(request.getRetryBackoffSeconds());
         model.setAdapterType(request.getAdapterType());
+        model.setImageQueueConcurrency(request.getImageQueueConcurrency());
         model.setConfigJson(request.getConfigJson());
         model.setBillingMode(request.getBillingMode());
         model.setPricePerUnit(request.getPricePerUnit());
@@ -210,6 +211,7 @@ public class ModelProviderService {
         model.setMaxRetries(source.getMaxRetries());
         model.setRetryBackoffSeconds(source.getRetryBackoffSeconds());
         model.setAdapterType(source.getAdapterType());
+        model.setImageQueueConcurrency(source.getImageQueueConcurrency());
         model.setConfigJson(source.getConfigJson());
         model.setBillingMode(source.getBillingMode());
         model.setPricePerUnit(source.getPricePerUnit());
@@ -233,6 +235,8 @@ public class ModelProviderService {
                 ? defaultPositive(request.getRetryBackoffSeconds(), ModelProviderDefaults.IMAGE_RETRY_BACKOFF_SECONDS) : null);
         provider.setAdapterType(request.getType() == ProviderType.IMAGE
                 ? defaultText(request.getAdapterType(), ModelProviderDefaults.IMAGE_ADAPTER_TYPE) : null);
+        provider.setImageQueueConcurrency(request.getType() == ProviderType.IMAGE
+                ? normalizeImageQueueConcurrency(request.getImageQueueConcurrency()) : null);
         provider.setConfigJson(request.getConfigJson());
         provider.setBillingMode(request.getBillingMode());
         provider.setPricePerUnit(request.getPricePerUnit());
@@ -246,4 +250,11 @@ public class ModelProviderService {
     private int defaultNonNegative(Integer value, int fallback) { return value == null || value < 0 ? fallback : value; }
     private String defaultText(String value, String fallback) { return hasText(value) ? value.trim() : fallback; }
     private boolean hasText(String value) { return value != null && !value.isBlank(); }
+
+    private Integer normalizeImageQueueConcurrency(Integer value) {
+        if (value == null || value <= 0) {
+            return null;
+        }
+        return value;
+    }
 }

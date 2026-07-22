@@ -38,6 +38,8 @@ public class ModelProviderResponseMapper {
                 ? ModelProviderDefaults.retryBackoffSeconds(provider) : null);
         response.setAdapterType(provider.getType() == ProviderType.IMAGE
                 ? ModelProviderDefaults.adapterType(provider) : null);
+        response.setImageQueueConcurrency(provider.getType() == ProviderType.IMAGE
+                ? provider.getImageQueueConcurrency() : null);
         response.setConfigJson(provider.getConfigJson());
         response.setSupportsTextToImage(provider.getSupportsTextToImage());
         response.setSupportsImageToImage(provider.getSupportsImageToImage());

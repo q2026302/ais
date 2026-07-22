@@ -52,7 +52,7 @@ maintenance:
 ais:
   image:
     queue:
-      max-concurrent: ${AIS_QUEUE_MAX_CONCURRENCY:2}
+      default-max-concurrent: ${AIS_QUEUE_DEFAULT_CONCURRENCY:1}
 
 app:
   base-dir: ${APP_BASE_DIR:.}

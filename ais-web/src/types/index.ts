@@ -72,6 +72,7 @@ export interface ModelProvider {
   maxRetries?: number | null
   retryBackoffSeconds?: number | null
   adapterType?: string | null
+  imageQueueConcurrency?: number | null
   configJson?: string | null
   supportsTextToImage?: boolean | null
   supportsImageToImage?: boolean | null
@@ -102,6 +103,7 @@ export interface ModelProviderRequest {
   maxRetries?: number | null
   retryBackoffSeconds?: number | null
   adapterType?: string
+  imageQueueConcurrency?: number | null
   configJson?: string
   supportsTextToImage?: boolean | null
   supportsImageToImage?: boolean | null
@@ -129,6 +131,7 @@ export interface ProviderModelRequest {
   maxRetries?: number | null
   retryBackoffSeconds?: number | null
   adapterType?: string
+  imageQueueConcurrency?: number | null
   configJson?: string
   supportsTextToImage?: boolean | null
   supportsImageToImage?: boolean | null
