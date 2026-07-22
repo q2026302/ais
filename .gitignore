@@ -31,3 +31,6 @@ Thumbs.db
 
 # Generated build info
 ais-api/src/main/resources/version.properties
+
+# Internal requirements docs
+/requirements/
