@@ -42,6 +42,8 @@ public class ModelProviderResponse {
     private Integer maxRetries;
     private Integer retryBackoffSeconds;
     private String adapterType;
+    @Schema(description = "图像模型并发上限，留空/0 则使用全局默认值")
+    private Integer imageQueueConcurrency;
     private String configJson;
     private Boolean supportsTextToImage;
     private Boolean supportsImageToImage;
@@ -159,6 +161,8 @@ public class ModelProviderResponse {
     public void setRetryBackoffSeconds(Integer value) { this.retryBackoffSeconds = value; }
     public String getAdapterType() { return adapterType; }
     public void setAdapterType(String value) { this.adapterType = value; }
+    public Integer getImageQueueConcurrency() { return imageQueueConcurrency; }
+    public void setImageQueueConcurrency(Integer value) { this.imageQueueConcurrency = value; }
     public String getConfigJson() { return configJson; }
     public void setConfigJson(String value) { this.configJson = value; }
     public Boolean getSupportsTextToImage() { return supportsTextToImage; }

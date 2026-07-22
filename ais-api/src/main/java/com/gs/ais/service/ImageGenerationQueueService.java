@@ -44,14 +44,20 @@ public class ImageGenerationQueueService {
     private final Path uploadDir;
     private final Path attachmentDir;
 
-    @Value("${ais.image.queue.max-concurrent:2}")
-    private int maxConcurrent;
+    @Value("${ais.image.queue.default-max-concurrent:1}")
+    private int defaultMaxConcurrent;
 
-    private final AtomicInteger activeCount = new AtomicInteger(0);
     private final ExecutorService executor = Executors.newCachedThreadPool();
-    private final Map<Long, CompletableFuture<Void>> pendingFutures = new ConcurrentHashMap<>();
+    /** Per ModelProvider.id image generation queues. Key 0 is used when provider id is unknown. */
+    private final ConcurrentHashMap<Long, ProviderQueueState> providerQueues = new ConcurrentHashMap<>();
     /** Latest human-readable queue stage for each pending message. */
     private final Map<Long, String> processingInfo = new ConcurrentHashMap<>();
+
+    private record ProviderQueueState(
+            AtomicInteger activeCount,
+            int maxConcurrent,
+            ConcurrentHashMap<Long, CompletableFuture<Void>> pendingFutures
+    ) {}
 
     public ImageGenerationQueueService(LlmClient llmClient,
                                        ModelProviderService modelProviderService,
@@ -73,12 +79,47 @@ public class ImageGenerationQueueService {
 
     @PostConstruct
     public void init() {
-        log.info("Image generation queue initialized with maxConcurrent={}", maxConcurrent);
+        log.info("Image generation queue initialized with defaultMaxConcurrent={}", defaultMaxConcurrent);
+        recoverOrphanPendingDraws();
     }
 
     @PreDestroy
     public void shutdown() {
+        for (ProviderQueueState state : providerQueues.values()) {
+            for (CompletableFuture<Void> future : state.pendingFutures().values()) {
+                if (future != null && !future.isDone()) {
+                    future.cancel(true);
+                }
+            }
+            state.pendingFutures().clear();
+        }
+
+        List<Message> pending = messageRepository.findByMessageTypeAndStatus(
+                MessageType.DRAW_RESPONSE, MessageStatus.PENDING);
+        for (Message message : pending) {
+            message.setStatus(MessageStatus.FAILED);
+            message.setErrorMessage("服务关闭，出图任务已终止。");
+            messageRepository.save(message);
+            log.warn("Marked pending draw message {} as FAILED on shutdown", message.getId());
+        }
+
+        processingInfo.clear();
+        providerQueues.clear();
         executor.shutdownNow();
+    }
+
+    private void recoverOrphanPendingDraws() {
+        List<Message> orphans = messageRepository.findByMessageTypeAndStatus(
+                MessageType.DRAW_RESPONSE, MessageStatus.PENDING);
+        for (Message message : orphans) {
+            message.setStatus(MessageStatus.FAILED);
+            message.setErrorMessage("服务重启，出图任务已终止，请重新提交。");
+            messageRepository.save(message);
+            log.warn("Recovered orphan pending draw message {} as FAILED on startup", message.getId());
+        }
+        if (!orphans.isEmpty()) {
+            log.warn("Recovered {} orphan DRAW_RESPONSE PENDING message(s) after restart", orphans.size());
+        }
     }
 
     private void initUploadDir() {
@@ -145,7 +186,7 @@ public class ImageGenerationQueueService {
 
         Runnable task = () -> processDraw(sessionId, userMessageId, assistantMessageId,
                 finalPrompt, imageProviderId, safeRequest, finalUserId, null);
-        submitAfterCommit(assistantMessageId, task);
+        submitAfterCommit(assistantMessageId, imageProviderId, task);
 
         return assistantMessageId;
     }
@@ -169,18 +210,21 @@ public class ImageGenerationQueueService {
 
         Runnable task = () -> processDraw(sessionId, userMessageId, assistantMessageId,
                 finalPrompt, imageProviderId, safeRequest, userId, previousImageUrl);
-        submitAfterCommit(assistantMessageId, task);
+        submitAfterCommit(assistantMessageId, imageProviderId, task);
         return assistantMessageId;
     }
 
     private void processDraw(Long sessionId, Long userMessageId, Long assistantMessageId, String prompt,
                              Long imageProviderId, DrawRequest request, Long userId,
                              String previousImageUrl) {
+        ProviderQueueState state = getOrCreateQueue(imageProviderId);
+        boolean acquired = false;
         try {
-            // Wait for capacity
+            // Wait for per-provider capacity
             while (true) {
-                int current = activeCount.get();
-                if (current < maxConcurrent && activeCount.compareAndSet(current, current + 1)) {
+                int current = state.activeCount().get();
+                if (current < state.maxConcurrent() && state.activeCount().compareAndSet(current, current + 1)) {
+                    acquired = true;
                     break;
                 }
                 updateOperationStage(assistantMessageId, "正在排队");
@@ -240,7 +284,9 @@ public class ImageGenerationQueueService {
 
                 log.info("Image generated successfully for message {} (session {})", assistantMessageId, sessionId);
             } finally {
-                activeCount.decrementAndGet();
+                if (acquired) {
+                    state.activeCount().decrementAndGet();
+                }
             }
         } catch (Exception e) {
             try {
@@ -261,14 +307,15 @@ public class ImageGenerationQueueService {
                 log.error("Failed to update failed message status", ex);
             }
         } finally {
-            pendingFutures.remove(assistantMessageId);
+            state.pendingFutures().remove(assistantMessageId);
         }
     }
 
-    private void submitAfterCommit(Long messageId, Runnable task) {
+    private void submitAfterCommit(Long messageId, Long imageProviderId, Runnable task) {
         Runnable submit = () -> {
+            ProviderQueueState state = getOrCreateQueue(imageProviderId);
             CompletableFuture<Void> future = CompletableFuture.runAsync(task, executor);
-            pendingFutures.put(messageId, future);
+            state.pendingFutures().put(messageId, future);
         };
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -360,10 +407,13 @@ public class ImageGenerationQueueService {
                         : "AI 请求已终止。您可以点击重新生成再次尝试。");
                 messageRepository.save(pending);
 
-                // Cancel any pending future
-                CompletableFuture<Void> future = pendingFutures.remove(pending.getId());
-                if (future != null) {
-                    future.cancel(true);
+                // Cancel any pending future across provider queues
+                for (ProviderQueueState state : providerQueues.values()) {
+                    CompletableFuture<Void> future = state.pendingFutures().remove(pending.getId());
+                    if (future != null) {
+                        future.cancel(true);
+                        break;
+                    }
                 }
                 return pending.getId();
             }
@@ -491,6 +541,35 @@ public class ImageGenerationQueueService {
             }
         }
         return references;
+    }
+
+
+    private ProviderQueueState getOrCreateQueue(Long imageProviderId) {
+        Long key = queueKey(imageProviderId);
+        return providerQueues.computeIfAbsent(key, pid -> {
+            int concurrency = resolveConcurrency(imageProviderId);
+            return new ProviderQueueState(new AtomicInteger(0), concurrency, new ConcurrentHashMap<>());
+        });
+    }
+
+    private Long queueKey(Long imageProviderId) {
+        return imageProviderId != null ? imageProviderId : 0L;
+    }
+
+    private int resolveConcurrency(Long imageProviderId) {
+        if (imageProviderId != null) {
+            try {
+                ModelProvider provider = modelProviderService.getById(imageProviderId);
+                Integer concurrency = provider.getImageQueueConcurrency();
+                if (concurrency != null && concurrency > 0) {
+                    return concurrency;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to resolve image queue concurrency for provider {}: {}",
+                        imageProviderId, e.getMessage());
+            }
+        }
+        return defaultMaxConcurrent > 0 ? defaultMaxConcurrent : 1;
     }
 
     private ModelProvider resolveImageProvider(Long imageProviderId) {

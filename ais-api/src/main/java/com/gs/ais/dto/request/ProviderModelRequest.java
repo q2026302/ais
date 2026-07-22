@@ -22,6 +22,8 @@ public class ProviderModelRequest {
     private Integer maxRetries;
     private Integer retryBackoffSeconds;
     private String adapterType;
+    /** Image model concurrent generation limit; null/0 uses global default. */
+    private Integer imageQueueConcurrency;
     private String configJson;
     private Boolean supportsTextToImage;
     private Boolean supportsImageToImage;
@@ -56,6 +58,8 @@ public class ProviderModelRequest {
     public void setRetryBackoffSeconds(Integer retryBackoffSeconds) { this.retryBackoffSeconds = retryBackoffSeconds; }
     public String getAdapterType() { return adapterType; }
     public void setAdapterType(String adapterType) { this.adapterType = adapterType; }
+    public Integer getImageQueueConcurrency() { return imageQueueConcurrency; }
+    public void setImageQueueConcurrency(Integer imageQueueConcurrency) { this.imageQueueConcurrency = imageQueueConcurrency; }
     public String getConfigJson() { return configJson; }
     public void setConfigJson(String configJson) { this.configJson = configJson; }
     public Boolean getSupportsTextToImage() { return supportsTextToImage; }

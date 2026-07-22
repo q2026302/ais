@@ -70,6 +70,10 @@ public class ModelProvider {
     @Column(name = "max_retries")
     private Integer maxRetries;
 
+    /** Concurrent image generation slots for this IMAGE model; null = use global default. */
+    @Column(name = "image_queue_concurrency")
+    private Integer imageQueueConcurrency;
+
     @Column(name = "retry_backoff_seconds")
     private Integer retryBackoffSeconds;
 
@@ -228,6 +232,9 @@ public class ModelProvider {
 
     public Integer getMaxRetries() { return maxRetries; }
     public void setMaxRetries(Integer maxRetries) { this.maxRetries = maxRetries; }
+
+    public Integer getImageQueueConcurrency() { return imageQueueConcurrency; }
+    public void setImageQueueConcurrency(Integer imageQueueConcurrency) { this.imageQueueConcurrency = imageQueueConcurrency; }
 
     public Integer getRetryBackoffSeconds() { return retryBackoffSeconds; }
     public void setRetryBackoffSeconds(Integer retryBackoffSeconds) { this.retryBackoffSeconds = retryBackoffSeconds; }
