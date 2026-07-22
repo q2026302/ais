@@ -17,6 +17,7 @@ import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.util.LlmErrorMessageUtils;
+import com.gs.ais.util.PureThumbnail;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,14 +25,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import javax.imageio.ImageIO;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -396,37 +392,11 @@ public class ImageGenerationService {
             throw new RuntimeException("Failed to save image file", e);
         }
 
-        // Generate thumbnail (longest edge 256px, PNG with _thumb suffix)
-        try {
-            BufferedImage originalImage = ImageIO.read(new ByteArrayInputStream(imageData));
-            if (originalImage != null) {
-                int thumbWidth = 256;
-                int thumbHeight = (int) ((double) originalImage.getHeight() / originalImage.getWidth() * thumbWidth);
-                if (thumbHeight > 256) {
-                    thumbHeight = 256;
-                    thumbWidth = (int) ((double) originalImage.getWidth() / originalImage.getHeight() * thumbHeight);
-                }
-                // Guard against zero dimensions from extreme aspect ratios
-                thumbWidth = Math.max(1, thumbWidth);
-                thumbHeight = Math.max(1, thumbHeight);
-                int imageType = originalImage.getColorModel().hasAlpha()
-                        ? BufferedImage.TYPE_INT_ARGB
-                        : BufferedImage.TYPE_INT_RGB;
-                BufferedImage thumbImage = new BufferedImage(thumbWidth, thumbHeight, imageType);
-                Graphics2D g2d = thumbImage.createGraphics();
-                g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                g2d.drawImage(originalImage, 0, 0, thumbWidth, thumbHeight, null);
-                g2d.dispose();
-                int lastDot = imgFilename.lastIndexOf('.');
-                String thumbFilename = (lastDot >= 0 ? imgFilename.substring(0, lastDot) : imgFilename) + "_thumb.png";
-                Path thumbPath = uploadDir.resolve(thumbFilename);
-                Files.createDirectories(thumbPath.getParent());
-                ImageIO.write(thumbImage, "png", thumbPath.toFile());
-                log.info("Thumbnail saved: {}", thumbPath);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to generate thumbnail for {}: {}", imgFilename, e.getMessage());
-        }
+        // Generate thumbnail using PureThumbnail (native-safe, no AWT/ImageIO)
+        int lastDot = imgFilename.lastIndexOf('.');
+        String thumbFilename = (lastDot >= 0 ? imgFilename.substring(0, lastDot) : imgFilename) + "_thumb.png";
+        Path thumbPath = uploadDir.resolve(thumbFilename);
+        PureThumbnail.writeLongestEdgePng(imageData, thumbPath, 256);
 
         return "/api/images/" + imgFilename;
     }
