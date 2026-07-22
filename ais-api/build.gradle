@@ -95,35 +95,25 @@ publishing {
 
 // ---- Build Info ----
 tasks.register('generateVersionProperties') {
-	def outputDir = layout.buildDirectory.dir('generated-resources/version')
-	outputs.dir(outputDir)
 	doLast {
-		def dir = outputDir.get().asFile
-		dir.mkdirs()
 		def gitCommit = 'unknown'
 		try {
 			def proc = ['git', 'rev-parse', '--short', 'HEAD'].execute(null, rootProject.projectDir)
 			proc.waitFor()
 			if (proc.exitValue() == 0) {
 				gitCommit = proc.text.trim()
-				if (gitCommit.isEmpty()) {
-					gitCommit = 'unknown'
-				}
+				if (gitCommit.isEmpty()) gitCommit = 'unknown'
 			}
-		} catch (Exception ignored) {
-		}
+		} catch (Exception ignored) {}
 		def props = new Properties()
 		props.setProperty('app.version', project.version.toString())
 		props.setProperty('app.build.time', new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC')))
 		props.setProperty('app.commit', gitCommit)
+		def dir = new File(projectDir, 'src/main/resources')
 		def file = new File(dir, 'version.properties')
-		file.withWriter('UTF-8') { writer ->
-			props.store(writer, 'Build version info')
-		}
+		file.withWriter('UTF-8') { writer -> props.store(writer, 'Build version info') }
+		logger.lifecycle("Generated version.properties: version={}, commit={}, buildTime={}",
+			project.version, gitCommit, new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC')))
 	}
 }
-
-tasks.named('processResources') {
-	dependsOn tasks.named('generateVersionProperties')
-	from(layout.buildDirectory.dir('generated-resources/version'))
-}
+processResources.dependsOn generateVersionProperties
