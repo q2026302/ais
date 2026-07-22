@@ -8,6 +8,7 @@ import { providerApi } from '@/api/providers'
 import { billingApi, userDefaultsApi } from '@/api/billing'
 import type { BillingRecord, ModelProvider } from '@/types'
 import { useAuthStore } from '@/stores/auth'
+import client from '@/api/client'
 
 const router = useRouter()
 const route = useRoute()
@@ -17,6 +18,7 @@ const saving = ref(false)
 const changingPassword = ref(false)
 const profile = reactive({ displayName: '', email: '' })
 const account = ref<UserProfile | null>(null)
+const buildInfo = ref({ version: '', commit: '', buildTime: '' })
 const password = reactive({ current: '', next: '', confirm: '' })
 const activeTab = ref('profile')
 const fromMobileWorkspace = computed(() => route.query.source === 'feishu')
@@ -198,6 +200,12 @@ async function changePassword() {
 onMounted(async () => {
   await load()
   await loadModels()
+  try {
+    const { data } = await client.get<{ version: string; commit: string; buildTime: string }>('/api/version')
+    buildInfo.value = data
+  } catch {
+    // ignore version lookup failures
+  }
 })
 </script>
 
@@ -372,6 +380,10 @@ onMounted(async () => {
         </el-card>
       </el-tab-pane>
     </el-tabs>
+
+    <div v-if="buildInfo.version" class="build-info">
+      v{{ buildInfo.version }} · {{ buildInfo.commit }} · {{ buildInfo.buildTime }}
+    </div>
   </div>
 </template>
 
@@ -523,5 +535,14 @@ h1 { margin: 5px 0 4px; color: #273453; font-size: clamp(24px, 3vw, 30px); lette
   .billing-filter { flex-wrap: wrap; }
   .billing-filter :deep(.el-date-editor) { width: 100%; max-width: 100%; }
   .profile-card :deep(.el-card__body), .profile-card :deep(.el-card__header) { padding-right: 16px; padding-left: 16px; }
+}
+
+.build-info {
+  margin-top: 28px;
+  text-align: center;
+  font-size: 12px;
+  color: #9aa3b5;
+  letter-spacing: 0.02em;
+  user-select: text;
 }
 </style>
