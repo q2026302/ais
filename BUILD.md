@@ -43,51 +43,19 @@ ais-api/build/native/nativeCompile/ais
 
 ## 部署为 systemd 用户服务
 
-生产环境部署在 `149.28.14.51`，服务名 `ai-image-studio`（`systemctl --user`）。
-
-### 服务管理
-
-```bash
-# 查看状态
-systemctl --user status ai-image-studio
-
-# 查看实时日志
-journalctl --user -u ai-image-studio -f
-
-# 重启
-systemctl --user restart ai-image-studio
-
-# 停止
-systemctl --user stop ai-image-studio
-```
-
-### 通过 CI 更新部署
-
-项目使用 GitHub Actions 构建 Native Image，构建成功后在**目标服务器上**直接拉取 artifact 部署。
-
-```bash
-# 在目标服务器上执行（需要 GITHUB_TOKEN，有 actions:read 权限）
-GITHUB_TOKEN=ghs_xxx ./deploy.sh <github-run-id>
-```
-
-`deploy.sh` 自动完成：
-
-1. 从 GitHub Actions 获取 Native Image artifact ID
-2. 下载 artifact（处理 GitHub → Azure Blob 重定向）
-3. 备份旧二进制（`ais.build-<run-id>.bak`）
-4. 替换二进制 → `chmod +x`
-5. 重启 `ai-image-studio` 服务并验证版本 API
-
-> 注意：`deploy.sh` 依赖 Python 3 标准库（`urllib`、`zipfile`），无需额外依赖。
+项目提供免 `sudo` 的用户级 systemd 服务脚本。
 
 ### 初次部署
 
-1. 在部署目录准备目录结构：
+1. 将 Native Image 可执行文件 + 同目录 `.so` 依赖库复制到部署目录：
 
 ```
 ais/
 ├── bin/
-│   └── ais               # Native Image 可执行文件
+│   ├── ais               # Native Image 可执行文件
+│   ├── libjava.so        # GraalVM 依赖库
+│   ├── libjvm.so
+│   └── ...
 ├── config/
 │   └── application.env    # 环境变量配置
 ├── data/                   # SQLite + 上传文件
@@ -99,11 +67,36 @@ ais/
 2. 安装并启动服务：
 
 ```bash
-# 创建必要的目录
 mkdir -p ais/bin ais/config ais/data ais/logs
-
-# 放置二进制后安装服务
 ./install-user-service.sh
+```
+
+### 服务管理
+
+```bash
+# 查看状态
+systemctl --user status ais
+
+# 查看实时日志
+journalctl --user -u ais -f
+
+# 重启
+systemctl --user restart ais
+
+# 停止
+systemctl --user stop ais
+```
+
+> 可根据需要自定义服务名，修改 `install-user-service.sh` 中的 `SERVICE_NAME`。
+
+### 更新部署
+
+替换二进制后重启即可：
+
+```bash
+cp ais-new ais/bin/ais
+chmod +x ais/bin/ais
+systemctl --user restart ais
 ```
 
 ### 卸载
@@ -169,13 +162,6 @@ cd ais-web && yarn dev
 ```
 
 前端开发服务器通过 `VITE_APP_CONTEXT_PATH` 指定代理上下文，默认 `/ais`。
-
----
-
-## 验证码
-
-应用使用 SVG 数据图生成验证码，不依赖 AWT，适用于 GraalVM Native Image。
-验证码接口：`GET /api/auth/captcha`（相对于当前上下文路径）。
 
 ---
 
