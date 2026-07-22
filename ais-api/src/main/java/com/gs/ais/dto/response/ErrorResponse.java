@@ -17,17 +17,17 @@ public class ErrorResponse {
     private String message;
 
     @Schema(description = "错误发生时间")
-    private LocalDateTime timestamp;
+    private String timestamp;
 
     public ErrorResponse() {
-        this.timestamp = LocalDateTime.now();
+        this.timestamp = LocalDateTime.now().toString();
     }
 
     public ErrorResponse(int status, String error, String message) {
         this.status = status;
         this.error = error;
         this.message = message;
-        this.timestamp = LocalDateTime.now();
+        this.timestamp = LocalDateTime.now().toString();
     }
 
     public int getStatus() {
@@ -54,11 +54,11 @@ public class ErrorResponse {
         this.message = message;
     }
 
-    public LocalDateTime getTimestamp() {
+    public String getTimestamp() {
         return timestamp;
     }
 
-    public void setTimestamp(LocalDateTime timestamp) {
+    public void setTimestamp(String timestamp) {
         this.timestamp = timestamp;
     }
 }
