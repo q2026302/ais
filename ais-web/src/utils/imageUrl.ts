@@ -1,13 +1,13 @@
+import { resolveAppUrl } from '@/utils/appBasePath'
+
 /**
- * Derive thumbnail URL from original image URL by naming convention:
- * /api/images/generated/2026/07/22/abc123.png
- * → /api/images/generated/2026/07/22/abc123_thumb.png
+ * Thumbnail URL for a message image:
+ * /api/images/{id}/thumbnail
+ *
+ * The backend resolves the original image from the message record and
+ * serves (or lazily generates) the thumbnail file.
  */
-export function getThumbnailUrl(imageUrl: string | null | undefined): string {
-  if (!imageUrl) return ''
-  const [path = '', query] = imageUrl.split('?', 2)
-  const extIndex = path.lastIndexOf('.')
-  if (extIndex === -1) return imageUrl
-  const thumbPath = path.substring(0, extIndex) + '_thumb.png'
-  return query !== undefined ? `${thumbPath}?${query}` : thumbPath
+export function getThumbnailUrl(messageId: number | null | undefined): string {
+  if (messageId == null) return ''
+  return resolveAppUrl(`/api/images/${messageId}/thumbnail`) || ''
 }

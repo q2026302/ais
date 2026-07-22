@@ -24,7 +24,7 @@ const emit = defineEmits<{
 
 const editContent = ref('')
 const thumbFailed = ref(false)
-const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.imageUrl))
+const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.id))
 function onThumbError() { thumbFailed.value = true }
 
 const displayName = computed(() => {
