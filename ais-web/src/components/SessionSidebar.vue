@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { Close, Delete, Plus } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useSessionStore } from '@/stores/session'
+import { formatRelativeSessionTime } from '@/utils/dateTime'
 
 const store = useSessionStore()
 
@@ -40,13 +41,7 @@ async function handleDelete(id: number) {
 }
 
 function formatTime(dateStr: string): string {
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  if (diff < 86400000) {
-    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  }
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
+  return formatRelativeSessionTime(dateStr, '')
 }
 </script>
 

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, DataAnalysis, Lock, Monitor, Plus, Refresh, Search, UserFilled } from '@element-plus/icons-vue'
 import { usersApi, type ManagedUser } from '@/api/users'
 import type { AuthRole } from '@/api/auth'
+import { formatDateTime } from '@/utils/dateTime'
 
 const router = useRouter()
 
@@ -167,7 +168,7 @@ async function submitReset() {
 
 function roleLabel(role: AuthRole) { return role === 'ADMIN' ? '管理员' : '普通用户' }
 function roleType(role: AuthRole) { return role === 'ADMIN' ? 'warning' : 'primary' }
-function formatTime(value: string | null) { return value ? new Date(value).toLocaleString() : '—' }
+function formatTime(value: string | null) { return formatDateTime(value, '—') }
 
 onMounted(load)
 </script>
