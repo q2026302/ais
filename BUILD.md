@@ -43,15 +43,55 @@ ais-api/build/native/nativeCompile/ais
 
 ## 部署为 systemd 用户服务
 
-项目提供免 `sudo` 的用户级 systemd 服务脚本。
+生产环境部署在 `149.28.14.51`，服务名 `ai-image-studio`（`systemctl --user`）。
+
+### 服务管理
+
+```bash
+# 查看状态
+systemctl --user status ai-image-studio
+
+# 查看实时日志
+journalctl --user -u ai-image-studio -f
+
+# 重启
+systemctl --user restart ai-image-studio
+
+# 停止
+systemctl --user stop ai-image-studio
+```
+
+### 通过 CI 更新部署
+
+项目使用 GitHub Actions 构建 Native Image，构建成功后在**目标服务器上**直接拉取 artifact 部署。
+
+```bash
+# 在目标服务器上执行（需要 GITHUB_TOKEN，有 actions:read 权限）
+GITHUB_TOKEN=ghs_xxx ./deploy.sh <github-run-id>
+```
+
+`deploy.sh` 自动完成：
+
+1. 从 GitHub Actions 获取 Native Image artifact ID
+2. 下载 artifact（处理 GitHub → Azure Blob 重定向）
+3. 备份旧二进制（`ais.build-<run-id>.bak`）
+4. 替换二进制 → `chmod +x`
+5. 重启 `ai-image-studio` 服务并验证版本 API
+
+> 注意：`deploy.sh` 依赖 Python 3 标准库（`urllib`、`zipfile`），无需额外依赖。
 
 ### 初次部署
 
-1. 将 Native Image 可执行文件复制到独立部署目录，与服务脚本放在同一目录：
+1. 在部署目录准备目录结构：
 
 ```
 ais/
-├── ais               # Native Image 可执行文件
+├── bin/
+│   └── ais               # Native Image 可执行文件
+├── config/
+│   └── application.env    # 环境变量配置
+├── data/                   # SQLite + 上传文件
+├── logs/                   # 应用日志
 ├── install-user-service.sh
 └── uninstall-user-service.sh
 ```
@@ -59,35 +99,11 @@ ais/
 2. 安装并启动服务：
 
 ```bash
+# 创建必要的目录
+mkdir -p ais/bin ais/config ais/data ais/logs
+
+# 放置二进制后安装服务
 ./install-user-service.sh
-```
-
-脚本会自动创建目录结构（`config/`、`data/`、`logs/`）并启动服务。
-
-### 服务管理
-
-```bash
-# 查看状态
-systemctl --user status ais
-
-# 查看日志
-journalctl --user -u ais -f
-
-# 重启
-systemctl --user restart ais
-
-# 停止
-systemctl --user stop ais
-```
-
-### 更新部署
-
-```bash
-# 在构建机器上
-rsync -avz ais-api/build/native/nativeCompile/ user@host:~/ais/bin/
-
-# 在目标机器上重启
-systemctl --user restart ais
 ```
 
 ### 卸载
