@@ -127,6 +127,9 @@ public class SessionService {
                 Path imagePath = uploadDir.resolve(filename);
                 try {
                     Files.deleteIfExists(imagePath);
+                    int lastDot = filename.lastIndexOf('.');
+                    String thumbFilename = (lastDot >= 0 ? filename.substring(0, lastDot) : filename) + "_thumb.png";
+                    Files.deleteIfExists(uploadDir.resolve(thumbFilename));
                 } catch (IOException e) {
                     log.warn("Failed to delete image file: {}", imagePath, e);
                 }

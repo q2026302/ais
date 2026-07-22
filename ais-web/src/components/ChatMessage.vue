@@ -4,6 +4,7 @@ import type { Message, ModelProvider } from '@/types'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Edit, Refresh, Delete, Download } from '@element-plus/icons-vue'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
+import { getThumbnailUrl } from '@/utils/imageUrl'
 
 const props = defineProps<{
   message: Message
@@ -22,6 +23,9 @@ const emit = defineEmits<{
 }>()
 
 const editContent = ref('')
+const thumbFailed = ref(false)
+const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.imageUrl))
+function onThumbError() { thumbFailed.value = true }
 
 const displayName = computed(() => {
   if (props.message.role === 'USER') return '我'
@@ -214,11 +218,12 @@ function formatDateTime(dateStr: string): string {
         <!-- Generated image (assistant messages) -->
         <div v-if="message.imageUrl && isImageUrl(message.imageUrl)" class="image-container">
           <el-image
-            :src="message.imageUrl"
+            :src="thumbUrl"
             fit="contain"
             :preview-src-list="[message.imageUrl]"
             preview-teleported
             class="generated-image"
+            @error="onThumbError"
           />
           <div class="image-info">
             <span v-if="message.drawSize">尺寸：{{ message.drawSize }}</span>

@@ -2,6 +2,7 @@ package com.gs.ais.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.CacheControl;
 import org.springframework.util.StringUtils;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -10,6 +11,7 @@ import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
@@ -51,9 +53,12 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        CacheControl imageCache = CacheControl.maxAge(365, TimeUnit.DAYS).cachePublic();
         registry.addResourceHandler("/api/images/**")
-                .addResourceLocations("file:" + storagePaths.uploadDir().toString() + "/");
+                .addResourceLocations("file:" + storagePaths.uploadDir().toString() + "/")
+                .setCacheControl(imageCache);
         registry.addResourceHandler("/api/attachments/**")
-                .addResourceLocations("file:" + storagePaths.attachmentDir().toString() + "/");
+                .addResourceLocations("file:" + storagePaths.attachmentDir().toString() + "/")
+                .setCacheControl(imageCache);
     }
 }
