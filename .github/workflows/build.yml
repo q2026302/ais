@@ -131,60 +131,6 @@ jobs:
           retention-days: 3
 
   # ============================================================
-  # Job 3: 发布到 GitHub Packages (Maven)
-  # ============================================================
-  publish:
-    name: Publish
-    runs-on: ubuntu-latest
-    needs: build-jar
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-    permissions:
-      packages: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 25
-        uses: actions/setup-java@v4
-        with:
-          java-version: "25"
-          distribution: "temurin"
-          cache: gradle
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: yarn
-          cache-dependency-path: ais-web/yarn.lock
-
-      - name: Enable Corepack Yarn
-        run: corepack enable
-
-      - name: Install Frontend Dependencies
-        working-directory: ais-web
-        run: |
-          sed -i 's#https://mirrors.cloud.tencent.com/npm/#https://registry.npmjs.org/#g' yarn.lock
-          for i in 1 2 3; do
-            if yarn install --frozen-lockfile --network-timeout 120000; then
-              exit 0
-            fi
-            if [ "$i" -eq 3 ]; then
-              echo "yarn install failed after ${i} attempts." >&2
-              exit 1
-            fi
-            echo "yarn install attempt $i failed, retrying..." >&2
-            sleep 5
-          done
-
-      - name: Publish to GitHub Packages
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew publish
-        working-directory: ais-api
-
-  # ============================================================
   # Job 4: 清理旧 artifact（只保留最近 3 次构建）
   # ============================================================
   cleanup:
