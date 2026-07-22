@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Select } from '@element-plus/icons-vue'
 import type { Message } from '@/types'
 import { getThumbnailUrl } from '@/utils/imageUrl'
+import { downloadImage as downloadImageAsset } from '@/utils/downloadImage'
 import { formatDateTime, formatLocalDateKey } from '@/utils/dateTime'
 
 const props = defineProps<{ messages: Message[] }>()
@@ -49,22 +50,8 @@ function toggleAll() {
 
 async function download(message: Message) {
   if (!message.imageUrl) return
-  try {
-    const response = await fetch(message.imageUrl)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const blob = await response.blob()
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename(message)
-    link.click()
-    URL.revokeObjectURL(url)
-  } catch {
-    const link = document.createElement('a')
-    link.href = message.imageUrl
-    link.download = filename(message)
-    link.click()
-  }
+  const result = await downloadImageAsset(message.imageUrl, filename(message))
+  if (result.mode === 'cancelled') return
 }
 
 async function downloadSelected() {
