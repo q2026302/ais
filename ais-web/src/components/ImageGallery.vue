@@ -3,10 +3,20 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Select } from '@element-plus/icons-vue'
 import type { Message } from '@/types'
+import { getThumbnailUrl } from '@/utils/imageUrl'
 
 const props = defineProps<{ messages: Message[] }>()
 const selectedIds = ref<number[]>([])
 const downloading = ref(false)
+const thumbFailedIds = ref<Set<number>>(new Set())
+
+function onThumbError(message: Message) {
+  thumbFailedIds.value.add(message.id)
+}
+
+function displayUrl(message: Message): string {
+  return thumbFailedIds.value.has(message.id) ? (message.imageUrl || '') : getThumbnailUrl(message.imageUrl || '')
+}
 
 const images = computed(() => props.messages.filter((message) => !!message.imageUrl))
 const groups = computed(() => {
@@ -114,11 +124,12 @@ async function copyPrompt(message: Message) {
               <span class="sr-only">选择图片</span>
             </el-checkbox>
             <el-image
-              :src="message.imageUrl || ''"
+              :src="displayUrl(message)"
               fit="cover"
               class="gallery-image"
               :preview-src-list="[message.imageUrl || '']"
               preview-teleported
+              @error="onThumbError(message)"
             />
           </div>
           <div class="gallery-meta">
