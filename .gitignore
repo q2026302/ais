@@ -28,3 +28,6 @@ Thumbs.db
 # Environment
 .env
 *.env.local
+
+# Generated build info
+ais-api/src/main/resources/version.properties
