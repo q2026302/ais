@@ -179,6 +179,9 @@ public final class HibernateNativeHints implements RuntimeHintsRegistrar {
 
 	@Override
 	public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
+		// Ensure /api/version can read build metadata in GraalVM Native Image.
+		hints.resources().registerPattern("META-INF/build-info.properties");
+		hints.resources().registerPattern("version.properties");
 		registerAnnotationImplementations(hints, classLoader);
 		for (String annotationType : DIALECT_OVERRIDE_ANNOTATIONS) {
 			hints.reflection().registerType(

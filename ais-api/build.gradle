@@ -93,27 +93,79 @@ publishing {
 	}
 }
 
-// ---- Build Info ----
-tasks.register('generateVersionProperties') {
-	doLast {
-		def gitCommit = 'unknown'
-		try {
-			def proc = ['git', 'rev-parse', '--short', 'HEAD'].execute(null, rootProject.projectDir)
-			proc.waitFor()
-			if (proc.exitValue() == 0) {
-				gitCommit = proc.text.trim()
-				if (gitCommit.isEmpty()) gitCommit = 'unknown'
-			}
-		} catch (Exception ignored) {}
-		def props = new Properties()
-		props.setProperty('app.version', project.version.toString())
-		props.setProperty('app.build.time', new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC')))
-		props.setProperty('app.commit', gitCommit)
-		def dir = new File(projectDir, 'src/main/resources')
-		def file = new File(dir, 'version.properties')
-		file.withWriter('UTF-8') { writer -> props.store(writer, 'Build version info') }
-		logger.lifecycle("Generated version.properties: version={}, commit={}, buildTime={}",
-			project.version, gitCommit, new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'", TimeZone.getTimeZone('UTC')))
+// ---- Build Info (version / commit / buildTime for GET /api/version) ----
+def gitWorkingDir = {
+	def dir = rootProject.projectDir
+	if (new File(dir, '.git').exists()) {
+		return dir
+	}
+	if (dir.parentFile != null && new File(dir.parentFile, '.git').exists()) {
+		return dir.parentFile
+	}
+	return dir
+}()
+
+def runGit = { List<String> args ->
+	try {
+		def proc = (['git'] + args).execute(null, gitWorkingDir)
+		proc.waitFor()
+		if (proc.exitValue() == 0) {
+			def text = proc.text.trim()
+			return text.isEmpty() ? null : text
+		}
+	} catch (Exception ignored) {
+	}
+	return null
+}
+
+def resolveGitCommit = {
+	def fromGit = runGit(['rev-parse', '--short', 'HEAD'])
+	if (fromGit != null) {
+		return fromGit
+	}
+	def sha = System.getenv('GIT_COMMIT') ?: System.getenv('GITHUB_SHA')
+	if (sha != null && !sha.isBlank()) {
+		return sha.length() > 7 ? sha.substring(0, 7) : sha
+	}
+	return 'unknown'
+}
+
+def resolveBuildVersion = {
+	def fromEnv = System.getenv('APP_VERSION') ?: System.getenv('VERSION')
+	if (fromEnv != null && !fromEnv.isBlank()) {
+		return fromEnv.trim()
+	}
+	if ('tag' == System.getenv('GITHUB_REF_TYPE')) {
+		def tag = System.getenv('GITHUB_REF_NAME')
+		if (tag != null && !tag.isBlank()) {
+			return tag.startsWith('v') ? tag.substring(1) : tag
+		}
+	}
+	// Exact tag on HEAD (e.g. v1.2.3).
+	def exactTag = runGit(['describe', '--tags', '--exact-match'])
+	if (exactTag != null) {
+		return exactTag.startsWith('v') ? exactTag.substring(1) : exactTag
+	}
+	// No tag / CI version: fall back to Gradle project version.
+	return project.version.toString()
+}
+
+def buildVersion = resolveBuildVersion()
+def gitCommit = resolveGitCommit()
+
+springBoot {
+	buildInfo {
+		properties {
+			version = buildVersion
+			additional = [
+				'git.commit': gitCommit
+			]
+		}
 	}
 }
-processResources.dependsOn generateVersionProperties
+
+tasks.named('bootBuildInfo') {
+	doLast {
+		logger.lifecycle("Build info: version={}, commit={}", buildVersion, gitCommit)
+	}
+}
