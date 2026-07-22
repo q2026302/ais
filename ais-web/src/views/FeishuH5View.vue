@@ -13,6 +13,7 @@ import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
+import { downloadImage as downloadImageAsset, shareImage as shareImageAsset } from '@/utils/downloadImage'
 import { formatDateTime, formatTimeHm } from '@/utils/dateTime'
 
 const store = useSessionStore()
@@ -50,9 +51,16 @@ const imageViewerIndex = ref(0)
 const imageActionVisible = ref(false)
 const imageActionUrl = ref('')
 const imageActionFilename = ref('ai-image.png')
+const saveHelperVisible = ref(false)
+const saveHelperUrl = ref('')
+const saveHelperFilename = ref('ai-image.png')
 const messageActionVisible = ref(false)
 const messageActionTarget = ref<Message | null>(null)
 let longPressTimer: number | null = null
+let pendingLongPressAction: (() => void) | null = null
+let longPressStartX = 0
+let longPressStartY = 0
+let selectionGuardCleanup: (() => void) | null = null
 const longPressTriggered = ref(false)
 const editVisible = ref(false)
 const editTargetId = ref<number | null>(null)
@@ -471,33 +479,119 @@ function handleImageClick(images: string[], index = 0) {
   }
   openImageViewer(images, index)
 }
+function clearResidualSelection() {
+  // Long-press leaves sticky text selection on mobile WebViews; clear across layout frames.
+  const clear = () => {
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0) selection.removeAllRanges()
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body && typeof active.blur === 'function') {
+      // Avoid stealing focus from inputs the user is actively editing.
+      if (active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA' && !active.isContentEditable) {
+        active.blur()
+      }
+    }
+  }
+  clear()
+  void nextTick(() => {
+    clear()
+    window.setTimeout(clear, 0)
+    window.setTimeout(clear, 80)
+    window.setTimeout(clear, 180)
+  })
+}
+function setSelectionSuppressed(active: boolean) {
+  if (typeof document === 'undefined') return
+  if (active) {
+    if (selectionGuardCleanup) return
+    const root = document.documentElement
+    root.classList.add('h5-suppress-selection')
+    const kill = () => {
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) selection.removeAllRanges()
+    }
+    kill()
+    document.addEventListener('selectionchange', kill)
+    selectionGuardCleanup = () => {
+      document.removeEventListener('selectionchange', kill)
+      root.classList.remove('h5-suppress-selection')
+      selectionGuardCleanup = null
+    }
+  } else if (selectionGuardCleanup) {
+    selectionGuardCleanup()
+  }
+}
 function openImageAction(url: string, filename = 'ai-image.png') {
   imageActionUrl.value = url
   imageActionFilename.value = filename
   imageActionVisible.value = true
-  // Long-press can leave a browser text selection that highlights the first drawer button.
-  window.getSelection()?.removeAllRanges()
-  nextTick(() => window.getSelection()?.removeAllRanges())
+  clearResidualSelection()
+  window.setTimeout(() => {
+    clearResidualSelection()
+    setSelectionSuppressed(false)
+  }, 320)
 }
-function startLongPress(_event: TouchEvent, action: () => void) {
-  cancelLongPress()
+function startLongPress(event: TouchEvent, action: () => void) {
+  cancelLongPress(true)
   longPressTriggered.value = false
+  pendingLongPressAction = null
+  const touch = event.touches[0]
+  longPressStartX = touch?.clientX ?? 0
+  longPressStartY = touch?.clientY ?? 0
+  // Open only after the finger lifts so the drawer title is not selected under the still-down touch.
   longPressTimer = window.setTimeout(() => {
+    longPressTimer = null
     longPressTriggered.value = true
-    // Clear any text selection created by the long-press gesture before opening menus.
-    window.getSelection()?.removeAllRanges()
-    action()
-    window.setTimeout(() => { longPressTriggered.value = false }, 1000)
-  }, 560)
+    pendingLongPressAction = action
+    setSelectionSuppressed(true)
+    clearResidualSelection()
+    try {
+      navigator.vibrate?.(12)
+    } catch {
+      // ignore
+    }
+  }, 480)
 }
-function cancelLongPress() {
+function moveLongPress(event: TouchEvent) {
+  if (longPressTimer == null && !pendingLongPressAction) return
+  const touch = event.touches[0]
+  if (!touch) return
+  const dx = touch.clientX - longPressStartX
+  const dy = touch.clientY - longPressStartY
+  if ((dx * dx) + (dy * dy) > 120) {
+    cancelLongPress(true)
+  }
+}
+function cancelLongPress(resetTriggered = false) {
   if (longPressTimer != null) {
     window.clearTimeout(longPressTimer)
     longPressTimer = null
   }
+  pendingLongPressAction = null
+  if (resetTriggered) {
+    longPressTriggered.value = false
+    setSelectionSuppressed(false)
+  }
 }
 function finishLongPress() {
-  cancelLongPress()
+  if (longPressTimer != null) {
+    window.clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+  const action = pendingLongPressAction
+  pendingLongPressAction = null
+  if (!action) {
+    setSelectionSuppressed(false)
+    return
+  }
+  clearResidualSelection()
+  action()
+  clearResidualSelection()
+  window.setTimeout(() => {
+    clearResidualSelection()
+    setSelectionSuppressed(false)
+    longPressTriggered.value = false
+  }, 360)
 }
 async function downloadImageAction() {
   const url = imageActionUrl.value
@@ -507,9 +601,11 @@ async function downloadImageAction() {
 function openMessageAction(message: Message) {
   messageActionTarget.value = message
   messageActionVisible.value = true
-  // Long-press can leave a browser text selection that highlights the first drawer button.
-  window.getSelection()?.removeAllRanges()
-  nextTick(() => window.getSelection()?.removeAllRanges())
+  clearResidualSelection()
+  window.setTimeout(() => {
+    clearResidualSelection()
+    setSelectionSuppressed(false)
+  }, 320)
 }
 async function handleMessageAction(action: 'copy' | 'edit' | 'resend' | 'download' | 'delete') {
   const message = messageActionTarget.value
@@ -553,34 +649,41 @@ async function copyText(text: string) {
     ElMessage.error('复制失败，请手动选择复制')
   }
 }
-function triggerDownload(url: string, filename: string) {
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.rel = 'noopener'
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
+function openSaveHelper(url: string, filename = 'ai-image.png') {
+  saveHelperUrl.value = url
+  saveHelperFilename.value = filename
+  saveHelperVisible.value = true
+}
+
+function closeSaveHelper() {
+  saveHelperVisible.value = false
 }
 
 async function downloadImage(url: string, filename = 'ai-image.png') {
   if (!url) return
   try {
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const blob = await response.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    triggerDownload(objectUrl, filename)
-    URL.revokeObjectURL(objectUrl)
-    ElMessage.success('图片下载已开始')
-  } catch {
-    // Fall back to a normal browser download if fetch is blocked (same as ChatMessage/ImageGallery).
-    try {
-      triggerDownload(url, filename)
-      ElMessage.success('图片下载已开始')
-    } catch {
-      ElMessage.error('下载失败')
-    }
+    const result = await downloadImageAsset(url, filename, {
+      // In Feishu/WeChat, openForSave is preferred automatically (avoids "无法下载").
+      openForSave: (absoluteUrl, safeName) => openSaveHelper(absoluteUrl, safeName),
+    })
+    if (result.mode === 'cancelled') return
+    if (result.mode === 'opened') ElMessage.info(result.message)
+    else ElMessage.success(result.message)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '下载失败，请长按图片保存到相册')
+    // Still open the long-press surface so users are not stuck.
+    openSaveHelper(url, filename)
+  }
+}
+
+async function shareFromHelper() {
+  if (!saveHelperUrl.value) return
+  try {
+    const result = await shareImageAsset(saveHelperUrl.value, saveHelperFilename.value)
+    if (result.mode === 'cancelled') return
+    ElMessage.success(result.message)
+  } catch (error: any) {
+    ElMessage.warning(error?.message || '系统分享不可用，请长按上方图片保存')
   }
 }
 async function deleteMessage(message: Message) {
@@ -741,7 +844,7 @@ watch(inputText, () => void nextTick(() => autoResizeTextarea()))
 watch(mode, () => { if (mode.value === 'chat' && selectedChatProviderId.value == null) selectedChatProviderId.value = defaultProviderId(store.chatProviders); if (mode.value === 'draw' && selectedImageProviderId.value == null) selectedImageProviderId.value = defaultProviderId(store.imageProviders); syncDrawOptions() })
 watch([selectedImageProviderId, () => store.imageProviders.length], syncDrawOptions)
 onMounted(() => { document.title = 'AI 创作'; void initialize() })
-onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
+onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); document.title = originalTitle })
 </script>
 
 <template>
@@ -799,7 +902,7 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
             <button type="button" title="删除消息" aria-label="删除消息" @click="deleteMessage(message)"><Delete /></button>
           </div>
         </div>
-        <div class="message-bubble" @touchstart="startLongPress($event, () => openMessageAction(message))" @touchmove="cancelLongPress" @touchend="finishLongPress" @touchcancel="finishLongPress" @contextmenu.prevent.stop="openMessageAction(message)">
+        <div class="message-bubble" @touchstart="startLongPress($event, () => openMessageAction(message))" @touchmove="moveLongPress" @touchend="finishLongPress" @touchcancel="cancelLongPress(true)" @contextmenu.prevent.stop="openMessageAction(message)">
           <div v-if="message.attachments?.length" class="message-attachments">
             <template v-for="attachment in message.attachments" :key="attachment.id">
               <button
@@ -809,9 +912,9 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
                 aria-label="查看图片"
                 @click.stop="handleImageClick(imageAttachmentUrls(message), imageAttachmentUrls(message).indexOf(attachment.fileUrl))"
                 @touchstart.stop="startLongPress($event, () => openImageAction(attachment.fileUrl, attachment.originalName || 'image.png'))"
-                @touchmove.stop="cancelLongPress"
+                @touchmove.stop="moveLongPress"
                 @touchend.stop="finishLongPress"
-                @touchcancel.stop="finishLongPress"
+                @touchcancel.stop="cancelLongPress(true)"
                 @contextmenu.prevent.stop="openImageAction(attachment.fileUrl, attachment.originalName || 'image.png')"
               >
                 <img :src="attachment.fileUrl" alt="消息图片" loading="lazy">
@@ -831,9 +934,9 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
             aria-label="查看生成图片"
             @click.stop="handleImageClick(generatedImages.map((item) => item.imageUrl || ''), generatedImages.findIndex((item) => item.id === message.id))"
             @touchstart.stop="startLongPress($event, () => openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`))"
-            @touchmove.stop="cancelLongPress"
+            @touchmove.stop="moveLongPress"
             @touchend.stop="finishLongPress"
-            @touchcancel.stop="finishLongPress"
+            @touchcancel.stop="cancelLongPress(true)"
             @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`)"
           >
             <img :src="messageDisplayUrl(message)" alt="AI 生成图片" loading="lazy" @error="onMessageThumbError(message.id)">
@@ -856,9 +959,9 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
             aria-label="查看作品图片"
             @click="handleImageClick(generatedImages.map((item) => item.imageUrl || ''), generatedImages.findIndex((item) => item.id === message.id))"
             @touchstart.stop="startLongPress($event, () => openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`))"
-            @touchmove.stop="cancelLongPress"
+            @touchmove.stop="moveLongPress"
             @touchend.stop="finishLongPress"
-            @touchcancel.stop="finishLongPress"
+            @touchcancel.stop="cancelLongPress(true)"
             @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`)"
           >
             <img :src="galleryDisplayUrl(message)" alt="AI 作品" loading="lazy" @error="onGalleryThumbError(message.id)">
@@ -1065,6 +1168,28 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
       </main>
     </section>
 
+    <Teleport to="body">
+      <Transition name="save-helper-fade">
+        <div v-if="saveHelperVisible" class="save-image-helper" role="dialog" aria-modal="true" aria-label="保存图片">
+          <div class="save-image-helper-backdrop" @click="closeSaveHelper"></div>
+          <div class="save-image-helper-panel">
+            <header>
+              <strong>保存图片</strong>
+              <button type="button" aria-label="关闭" @click="closeSaveHelper"><Close /></button>
+            </header>
+            <p class="save-image-helper-tip">飞书等内置浏览器不支持直接下载。请<strong>长按下方图片</strong>，在弹出菜单中选择“保存图片 / 存储到相册”。也可尝试“系统分享”。</p>
+            <div class="save-image-helper-preview">
+              <img :src="saveHelperUrl" :alt="saveHelperFilename" draggable="false">
+            </div>
+            <div class="save-image-helper-actions">
+              <button type="button" class="primary" @click="shareFromHelper">系统分享</button>
+              <button type="button" @click="copyText(saveHelperUrl)">复制图片链接</button>
+              <button type="button" @click="closeSaveHelper">关闭</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
   </main>
 </template>
@@ -1494,10 +1619,20 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
   box-sizing: border-box;
 }
-.drawer-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 2px 15px; border-bottom: 1px solid #edf0f5; }
+.drawer-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 2px 15px;
+  border-bottom: 1px solid #edf0f5;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 .drawer-title > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.drawer-title strong { color: #303d58; font-size: 17px; }
-.drawer-title span { color: #929bad; font-size: 11px; }
+.drawer-title strong { color: #303d58; font-size: 17px; -webkit-user-select: none; user-select: none; }
+.drawer-title span { color: #929bad; font-size: 11px; -webkit-user-select: none; user-select: none; }
 .drawer-title > button { display: inline-flex; flex: 0 0 auto; min-height: 36px; align-items: center; gap: 5px; padding: 0 11px; color: #5064d2; font-size: 12px; font-weight: 700; cursor: pointer; border: 0; border-radius: 10px; background: #edf0ff; }
 .drawer-title.compact { flex: 0 0 auto; padding-bottom: 13px; }
 .session-list { padding-top: 9px; }
@@ -1603,11 +1738,43 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 .edit-footer button { min-width: 72px; min-height: 38px; padding: 0 12px; color: #65718c; font-size: 12px; font-weight: 700; cursor: pointer; border: 0; border-radius: 10px; background: #eef1f6; }
 .edit-footer button.primary { color: #fff; background: linear-gradient(140deg, #536bea, #7657d4); box-shadow: 0 4px 10px rgba(83, 96, 229, .2); }
 
-.action-list { display: grid; gap: 7px; padding-top: 11px; }
-.action-list button { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 10px; padding: 0 13px; color: #53617c; font-size: 13px; font-weight: 700; text-align: left; cursor: pointer; border: 0; border-radius: 12px; background: #f5f7fb; }
+.action-list { display: grid; gap: 7px; padding-top: 11px; -webkit-user-select: none; user-select: none; }
+.action-list button {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 13px;
+  color: #53617c;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  border: 0;
+  border-radius: 12px;
+  background: #f5f7fb;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.action-list button span { -webkit-user-select: none; user-select: none; }
 .action-list button :deep(svg) { width: 18px; color: #6d7bd5; }
 .action-list button.danger-action { color: #b95564; background: #fff1f3; }
 .action-list button.danger-action :deep(svg) { color: #cf6572; }
+:deep(.action-drawer .el-drawer__body),
+:deep(.action-drawer .el-drawer__body *) {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+:deep(.action-drawer .drawer-title),
+:deep(.action-drawer .drawer-title strong),
+:deep(.action-drawer .drawer-title span) {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
 
 /* WeChat-inspired mobile layout refinements */
 .more-button {
@@ -1725,7 +1892,12 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 
 @media (max-width: 700px) {
   .action-list button,
-  .action-list button span {
+  .action-list button span,
+  .drawer-title,
+  .drawer-title strong,
+  .drawer-title span,
+  .mobile-image-trigger,
+  .mobile-image-trigger img {
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
@@ -1734,7 +1906,12 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 
 @media (max-width: 600px) {
   .message-actions { display: none; }
-  .message-bubble { -webkit-user-select: none; user-select: none; }
+  .message-bubble,
+  .message-bubble * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
   .composer-main textarea, .edit-textarea { font-size: 16px; }
 }
 
@@ -1777,5 +1954,121 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
 @media (prefers-reduced-motion: reduce) {
   .message-loading span, .pulse-dot, .state-orb.loading { animation: none; }
   .quick-prompts button, .app-menu > button { transition: none; }
+}
+
+/* Feishu / restricted WebView save surface: keep native long-press callout enabled. */
+.save-image-helper {
+  position: fixed;
+  inset: 0;
+  z-index: 3200;
+  display: grid;
+  place-items: end center;
+  padding: 0;
+}
+.save-image-helper-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(12, 16, 28, .55);
+}
+.save-image-helper-panel {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 560px);
+  max-height: min(88vh, 760px);
+  overflow: auto;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  border-radius: 22px 22px 0 0;
+  background: #fff;
+  box-shadow: 0 -16px 40px rgba(20, 30, 60, .22);
+  -webkit-overflow-scrolling: touch;
+}
+.save-image-helper-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.save-image-helper-panel header strong {
+  color: #303d58;
+  font-size: 17px;
+}
+.save-image-helper-panel header button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: #6b7690;
+  cursor: pointer;
+  border: 0;
+  border-radius: 10px;
+  background: #f1f3f8;
+}
+.save-image-helper-tip {
+  margin: 0 0 12px;
+  color: #6b7690;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.save-image-helper-tip strong { color: #3f4f7d; }
+.save-image-helper-preview {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  max-height: 52vh;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 14px;
+  background: #f4f6fb;
+}
+.save-image-helper-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 48vh;
+  object-fit: contain;
+  /* Allow native long-press "save image" menus in Feishu / iOS. */
+  -webkit-user-select: auto;
+  user-select: auto;
+  -webkit-touch-callout: default;
+  pointer-events: auto;
+}
+.save-image-helper-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.save-image-helper-actions button {
+  min-height: 44px;
+  padding: 0 12px;
+  color: #53617c;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 0;
+  border-radius: 12px;
+  background: #f1f4f9;
+}
+.save-image-helper-actions button.primary {
+  color: #fff;
+  background: linear-gradient(140deg, #536bea, #7657d4);
+  box-shadow: 0 6px 14px rgba(83, 96, 229, .22);
+}
+.save-helper-fade-enter-active,
+.save-helper-fade-leave-active { transition: opacity .18s ease; }
+.save-helper-fade-enter-active .save-image-helper-panel,
+.save-helper-fade-leave-active .save-image-helper-panel { transition: transform .2s ease; }
+.save-helper-fade-enter-from,
+.save-helper-fade-leave-to { opacity: 0; }
+.save-helper-fade-enter-from .save-image-helper-panel,
+.save-helper-fade-leave-to .save-image-helper-panel { transform: translateY(18px); }
+
+
+/* While a long-press is armed / opening menus, kill sticky text selection in WebViews. */
+:global(html.h5-suppress-selection),
+:global(html.h5-suppress-selection body),
+:global(html.h5-suppress-selection body *) {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
 }
 </style>

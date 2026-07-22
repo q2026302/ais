@@ -6,6 +6,7 @@ import { CopyDocument, Edit, Refresh, Delete, Download } from '@element-plus/ico
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import { getThumbnailUrl } from '@/utils/imageUrl'
 import { formatDateTimeSeconds } from '@/utils/dateTime'
+import { downloadImage as downloadImageAsset } from '@/utils/downloadImage'
 
 const props = defineProps<{
   message: Message
@@ -87,26 +88,13 @@ async function downloadImage() {
   if (!url) return
   const filename = imageFilename(url)
   try {
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const blob = await response.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    triggerDownload(objectUrl, filename)
-    URL.revokeObjectURL(objectUrl)
-  } catch (e) {
-    // Fall back to a normal browser download if fetch is blocked.
-    triggerDownload(url, filename)
+    const result = await downloadImageAsset(url, filename)
+    if (result.mode === 'cancelled') return
+    if (result.mode === 'opened') ElMessage.info(result.message)
+    else ElMessage.success(result.message)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '下载失败，请长按图片保存')
   }
-}
-
-function triggerDownload(url: string, filename: string) {
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.rel = 'noopener'
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
 }
 
 
