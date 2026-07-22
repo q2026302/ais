@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { Paperclip, Picture } from '@element-plus/icons-vue'
 import type { Message, ModelProvider, UploadResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
+import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 
 const props = defineProps<{
   visible: boolean
@@ -37,10 +38,28 @@ const format = ref('png')
 const selectedProviderId = ref<number | null>(null)
 const uploadTaskCount = ref(0)
 const uploading = computed(() => uploadTaskCount.value > 0)
-const historyImportingId = ref<number | null>(null)
-const historySelectedIds = ref<number[]>([])
+const historyImportingId = ref<string | null>(null)
+const historySelectedIds = ref<string[]>([])
+const historyThumbFailedIds = ref<Set<string>>(new Set())
 const isDraggingReference = ref(false)
 let referenceDragDepth = 0
+
+interface HistoryImageItem {
+  id: string
+  url: string
+  thumbUrl: string
+  label: string
+  format: string
+  sourceKey: string
+}
+
+function onHistoryThumbError(id: string) {
+  historyThumbFailedIds.value = new Set(historyThumbFailedIds.value).add(id)
+}
+function historyDisplayUrl(item: HistoryImageItem) {
+  if (historyThumbFailedIds.value.has(item.id)) return item.url
+  return item.thumbUrl || item.url
+}
 
 function resolveDefaultImageProviderId() {
   if (
@@ -77,10 +96,37 @@ const isGptImageModel = computed(() => {
     && (model.includes('gpt-image') || model.includes('gpt image'))
 })
 const isReferenceMode = computed(() => references.value.length > 0)
-const historyImages = computed(() => props.historyMessages
-  .filter((message) => !!message.imageUrl && message.status !== 'FAILED')
-  .slice()
-  .reverse())
+const historyImages = computed<HistoryImageItem[]>(() => {
+  const items: HistoryImageItem[] = []
+  for (const message of props.historyMessages) {
+    if (message.imageUrl && message.status !== 'FAILED') {
+      items.push({
+        id: `gen-${message.id}`,
+        url: message.imageUrl,
+        thumbUrl: getThumbnailUrl(message.id),
+        label: message.drawPrompt || '历史图片',
+        format: message.drawFormat || 'png',
+        sourceKey: `gen-${message.id}`,
+      })
+    }
+    if (message.attachments?.length) {
+      for (const attachment of message.attachments) {
+        if (attachment.contentType?.startsWith('image/') && !attachment.originalName?.startsWith('history-')) {
+          const ext = attachment.originalName?.split('.').pop() || 'png'
+          items.push({
+            id: `att-${attachment.id}`,
+            url: attachment.fileUrl,
+            thumbUrl: getAttachmentThumbnailUrl(attachment.id),
+            label: attachment.originalName || '用户上传图片',
+            format: ext,
+            sourceKey: `att-${attachment.id}`,
+          })
+        }
+      }
+    }
+  }
+  return items.reverse()
+})
 
 const sizeOptions = computed(() => usesRatioOptions.value
   ? ['1:1', '16:9', '9:16', '4:3', '3:4']
@@ -343,29 +389,29 @@ function removeReference(id: number) {
   references.value = references.value.filter((item) => item.id !== id)
 }
 
-function historyImageFilename(message: Message) {
-  const url = message.imageUrl || ''
+function historyImageFilename(item: HistoryImageItem) {
+  const url = item.url || ''
   const raw = (url.split('?')[0] || url).split('/').filter(Boolean).pop()
   if (raw?.includes('.')) return raw
-  return `history-${message.id}.${message.drawFormat || 'png'}`
+  return `history-${item.id}.${item.format || 'png'}`
 }
 
-async function selectHistoryImage(message: Message) {
-  if (!message.imageUrl || historyImportingId.value != null) return
-  if (historySelectedIds.value.includes(message.id)) {
+async function selectHistoryImage(item: HistoryImageItem) {
+  if (!item.url || historyImportingId.value != null) return
+  if (historySelectedIds.value.includes(item.id)) {
     ElMessage.info('这张图片已经添加为参考图')
     return
   }
 
-  historyImportingId.value = message.id
+  historyImportingId.value = item.id
   uploadTaskCount.value += 1
   try {
     const uploaded = await sessionApi.uploadImageReference(
-      message.imageUrl,
-      historyImageFilename(message),
+      item.url,
+      historyImageFilename(item),
     )
     references.value.push(uploaded)
-    historySelectedIds.value.push(message.id)
+    historySelectedIds.value.push(item.id)
     ElMessage.success('已从会话历史添加参考图')
   } catch (error: any) {
     ElMessage.error(error?.message || '历史图片添加失败')
@@ -477,19 +523,19 @@ function handleGenerate() {
               </div>
               <div class="history-image-grid">
                 <button
-                  v-for="message in historyImages"
-                  :key="message.id"
+                  v-for="item in historyImages"
+                  :key="item.id"
                   type="button"
                   class="history-image-card"
-                  :class="{ selected: historySelectedIds.includes(message.id) }"
+                  :class="{ selected: historySelectedIds.includes(item.id) }"
                   :disabled="historyImportingId != null || loading"
-                  :title="message.drawPrompt || '会话历史图片'"
-                  @click="selectHistoryImage(message)"
+                  :title="item.label || '会话历史图片'"
+                  @click="selectHistoryImage(item)"
                 >
-                  <el-image :src="message.imageUrl || ''" fit="cover" />
-                  <span v-if="historyImportingId === message.id" class="history-image-loading">正在添加…</span>
-                  <span v-else-if="historySelectedIds.includes(message.id)" class="history-image-selected">已添加</span>
-                  <span class="history-image-caption">{{ message.drawPrompt || '历史图片' }}</span>
+                  <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
+                  <span v-if="historyImportingId === item.id" class="history-image-loading">正在添加…</span>
+                  <span v-else-if="historySelectedIds.includes(item.id)" class="history-image-selected">已添加</span>
+                  <span class="history-image-caption">{{ item.label || '历史图片' }}</span>
                 </button>
               </div>
             </div>

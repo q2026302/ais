@@ -11,6 +11,7 @@ import type {
   Session,
   SystemModelSettings,
 } from '@/types'
+import { formatDateTime } from '@/utils/dateTime'
 import { providerAccountApi } from '@/api/providers'
 import {
   adminApi,
@@ -213,7 +214,7 @@ function securityEventTagType(eventType: LoginSecurityEvent['eventType']) {
 }
 
 function formatSecurityEventTime(value: string | null) {
-  return value ? new Date(value).toLocaleString() : '—'
+  return formatDateTime(value, '—')
 }
 
 async function handleExport() {
@@ -439,7 +440,7 @@ function sessionUserLabel(userId: number | null | undefined) {
 }
 
 function formatSessionTime(value: string) {
-  return value ? new Date(value).toLocaleString() : '—'
+  return formatDateTime(value, '—')
 }
 
 async function loadManagedSessions() {
@@ -670,7 +671,7 @@ function operationActionLabel(action: string) {
 }
 
 function formatTime(value: string) {
-  return new Date(value).toLocaleString()
+  return formatDateTime(value, '')
 }
 </script>
 

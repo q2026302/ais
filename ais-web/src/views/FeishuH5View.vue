@@ -12,6 +12,8 @@ import type { Message, ModelProvider, Session, UploadResponse } from '@/types'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
+import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
+import { formatDateTime, formatTimeHm } from '@/utils/dateTime'
 
 const store = useSessionStore()
 const auth = useAuthStore()
@@ -62,16 +64,44 @@ const drawQuality = ref('auto')
 const drawFormat = ref('png')
 const originalTitle = document.title
 
-const activeSession = computed(() => store.sessions.find((item) => item.id === store.activeSessionId) || null)
-const generatedImages = computed(() => store.messages.filter((message) => Boolean(message.imageUrl)))
-
 interface HistoryImageItem {
   id: string
   url: string
+  thumbUrl: string
   label: string
   format: string
   messageId: number
+  attachmentId?: number
 }
+
+const messageThumbFailedIds = ref<Set<number>>(new Set())
+const galleryThumbFailedIds = ref<Set<number>>(new Set())
+const historyThumbFailedIds = ref<Set<string>>(new Set())
+
+function onMessageThumbError(id: number) {
+  messageThumbFailedIds.value = new Set(messageThumbFailedIds.value).add(id)
+}
+function onGalleryThumbError(id: number) {
+  galleryThumbFailedIds.value = new Set(galleryThumbFailedIds.value).add(id)
+}
+function onHistoryThumbError(id: string) {
+  historyThumbFailedIds.value = new Set(historyThumbFailedIds.value).add(id)
+}
+function messageDisplayUrl(message: Message) {
+  if (!message.imageUrl) return ''
+  return messageThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id)
+}
+function galleryDisplayUrl(message: Message) {
+  if (!message.imageUrl) return ''
+  return galleryThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id)
+}
+function historyDisplayUrl(item: HistoryImageItem) {
+  if (historyThumbFailedIds.value.has(item.id)) return item.url
+  return item.thumbUrl || item.url
+}
+
+const activeSession = computed(() => store.sessions.find((item) => item.id === store.activeSessionId) || null)
+const generatedImages = computed(() => store.messages.filter((message) => Boolean(message.imageUrl)))
 
 const historyImages = computed<HistoryImageItem[]>(() => {
   const items: HistoryImageItem[] = []
@@ -80,6 +110,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
       items.push({
         id: `gen-${message.id}`,
         url: message.imageUrl,
+        thumbUrl: getThumbnailUrl(message.id),
         label: message.drawPrompt || 'AI 生成图片',
         format: message.drawFormat || 'png',
         messageId: message.id,
@@ -92,9 +123,11 @@ const historyImages = computed<HistoryImageItem[]>(() => {
           items.push({
             id: `att-${message.id}-${attachment.id}`,
             url: attachment.fileUrl,
+            thumbUrl: getAttachmentThumbnailUrl(attachment.id),
             label: attachment.originalName || '用户上传图片',
             format: ext,
             messageId: message.id,
+            attachmentId: attachment.id,
           })
         }
       }
@@ -504,8 +537,11 @@ async function copyText(text: string) {
   if (!text.trim()) return
   try {
     await navigator.clipboard.writeText(text)
+    // Avoid residual selection highlight on action-drawer buttons after copy.
+    window.getSelection()?.removeAllRanges()
     ElMessage.success('内容已复制')
   } catch {
+    window.getSelection()?.removeAllRanges()
     ElMessage.error('复制失败，请手动选择复制')
   }
 }
@@ -572,7 +608,7 @@ async function deleteSession(sessionId: number, title: string) {
     // 用户取消操作
   }
 }
-function formatTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date) }
+function formatTime(value: string) { return formatTimeHm(value, '') }
 
 function openComposerExtras() {
   composerExtraVisible.value = true
@@ -593,8 +629,7 @@ function openModelPicker() {
 }
 
 function formatMobileAdminTime(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN')
+  return formatDateTime(value, '—')
 }
 
 async function loadMobileUsers() {
@@ -778,7 +813,7 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
             @touchcancel.stop="finishLongPress"
             @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`)"
           >
-            <img :src="message.imageUrl" alt="AI 生成图片" loading="lazy">
+            <img :src="messageDisplayUrl(message)" alt="AI 生成图片" loading="lazy" @error="onMessageThumbError(message.id)">
           </button>
           <p v-if="message.status === 'FAILED'" class="error-text">{{ message.errorMessage || '请求失败，请稍后重试' }}</p>
         </div>
@@ -803,7 +838,7 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
             @touchcancel.stop="finishLongPress"
             @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`)"
           >
-            <img :src="message.imageUrl || ''" alt="AI 作品" loading="lazy">
+            <img :src="galleryDisplayUrl(message)" alt="AI 作品" loading="lazy" @error="onGalleryThumbError(message.id)">
           </button>
           <div class="image-info">
             <time>{{ formatTime(message.createdAt) }}</time>
@@ -933,7 +968,7 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
       <div class="drawer-title compact"><div><strong>选择历史图片</strong><span>添加到当前绘画的参考图</span></div></div>
       <div class="history-reference-grid">
         <button v-for="item in historyImages" :key="item.id" type="button" class="history-reference-tile" :disabled="referenceImportingId != null || store.loading" @click="selectHistoryImage(item)">
-          <el-image :src="item.url" fit="cover" />
+          <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
           <span v-if="referenceImportingId === item.messageId" class="history-reference-status">添加中…</span>
           <small>{{ item.label }}</small>
         </button>
@@ -1663,6 +1698,15 @@ onBeforeUnmount(() => { cancelLongPress(); document.title = originalTitle })
   .composer { padding-right: max(18px, calc((100vw - 760px) / 2)); padding-left: max(18px, calc((100vw - 760px) / 2)); }
   .bottom-nav { padding-right: max(12px, calc((100vw - 620px) / 2)); padding-left: max(12px, calc((100vw - 620px) / 2)); }
   .image-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 700px) {
+  .action-list button,
+  .action-list button span {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
 }
 
 @media (max-width: 600px) {

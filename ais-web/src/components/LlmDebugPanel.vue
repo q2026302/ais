@@ -7,6 +7,7 @@ import type {
   LlmDebugExchangeSummary,
   LlmDebugStatus,
 } from '@/types'
+import { formatDateTime } from '@/utils/dateTime'
 
 const status = ref<LlmDebugStatus>({ enabled: false, recordCount: 0, maxRecords: 20 })
 const exchanges = ref<LlmDebugExchangeSummary[]>([])
@@ -94,15 +95,7 @@ async function clearExchanges() {
 }
 
 function formatTime(value: string) {
-  if (!value) return '-'
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(new Date(value))
+  return formatDateTime(value, '-')
 }
 
 function formatBytes(value: number | null) {

@@ -9,6 +9,7 @@ import { billingApi, userDefaultsApi } from '@/api/billing'
 import type { BillingRecord, ModelProvider } from '@/types'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/api/client'
+import { formatDateTime } from '@/utils/dateTime'
 
 const router = useRouter()
 const route = useRoute()
@@ -121,7 +122,7 @@ async function loadBillingLogs() {
 }
 
 function formatTime(value: string) {
-  return new Date(value).toLocaleString()
+  return formatDateTime(value, '')
 }
 
 function formatDuration(ms: number | null | undefined) {

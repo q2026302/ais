@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Select } from '@element-plus/icons-vue'
 import type { Message } from '@/types'
 import { getThumbnailUrl } from '@/utils/imageUrl'
+import { formatDateTime, formatLocalDateKey } from '@/utils/dateTime'
 
 const props = defineProps<{ messages: Message[] }>()
 const selectedIds = ref<number[]>([])
@@ -22,7 +23,7 @@ const images = computed(() => props.messages.filter((message) => !!message.image
 const groups = computed(() => {
   const result = new Map<string, Message[]>()
   for (const message of images.value) {
-    const day = message.createdAt ? message.createdAt.slice(0, 10) : '未知日期'
+    const day = formatLocalDateKey(message.createdAt) || '未知日期'
     const group = result.get(day) || []
     group.push(message)
     result.set(day, group)
@@ -37,8 +38,7 @@ function filename(message: Message) {
 }
 
 function formatTime(value: string) {
-  if (!value) return ''
-  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+  return formatDateTime(value, '')
 }
 
 function toggleAll() {
