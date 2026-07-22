@@ -7,8 +7,6 @@ spring:
     name: ais
   jackson:
     time-zone: UTC
-    serialization:
-      write-dates-as-timestamps: false
   profiles:
     default: sqlite
   jpa:
