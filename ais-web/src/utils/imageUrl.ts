@@ -5,7 +5,7 @@
  */
 export function getThumbnailUrl(imageUrl: string | null | undefined): string {
   if (!imageUrl) return ''
-  const [path, query] = imageUrl.split('?', 2)
+  const [path = '', query] = imageUrl.split('?', 2)
   const extIndex = path.lastIndexOf('.')
   if (extIndex === -1) return imageUrl
   const thumbPath = path.substring(0, extIndex) + '_thumb.png'
