@@ -4,6 +4,8 @@ import com.gs.ais.model.entity.AppUser;
 import com.gs.ais.security.AuthRole;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 public record UserResponse(
         Long id,
@@ -24,6 +26,6 @@ public record UserResponse(
     }
 
     private static String format(LocalDateTime value) {
-        return value == null ? null : value.toString();
+        return value == null ? null : DateTimeFormatter.ISO_INSTANT.format(value.atZone(ZoneId.systemDefault()).toInstant());
     }
 }

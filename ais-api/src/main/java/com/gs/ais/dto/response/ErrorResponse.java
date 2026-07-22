@@ -2,7 +2,7 @@ package com.gs.ais.dto.response;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Schema(description = "全局错误响应")
 public class ErrorResponse {
@@ -20,14 +20,14 @@ public class ErrorResponse {
     private String timestamp;
 
     public ErrorResponse() {
-        this.timestamp = LocalDateTime.now().toString();
+        this.timestamp = Instant.now().toString();
     }
 
     public ErrorResponse(int status, String error, String message) {
         this.status = status;
         this.error = error;
         this.message = message;
-        this.timestamp = LocalDateTime.now().toString();
+        this.timestamp = Instant.now().toString();
     }
 
     public int getStatus() {

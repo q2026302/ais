@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { CopyDocument, Edit, Refresh, Delete, Download } from '@element-plus/icons-vue'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import { getThumbnailUrl } from '@/utils/imageUrl'
+import { formatDateTimeSeconds } from '@/utils/dateTime'
 
 const props = defineProps<{
   message: Message
@@ -147,11 +148,7 @@ function formatTokens(tokens: number | null | undefined): string {
 }
 
 function formatDateTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  if (Number.isNaN(date.getTime())) return dateStr
-
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  return formatDateTimeSeconds(dateStr, dateStr)
 }
 </script>
 

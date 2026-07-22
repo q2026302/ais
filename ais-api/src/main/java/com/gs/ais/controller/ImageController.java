@@ -1,7 +1,9 @@
 package com.gs.ais.controller;
 
 import com.gs.ais.config.StoragePaths;
+import com.gs.ais.model.entity.Attachment;
 import com.gs.ais.model.entity.Message;
+import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.util.PureThumbnail;
 import org.slf4j.Logger;
@@ -21,26 +23,36 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Serves generated image thumbnails. Historical images may lack a prebuilt
- * {@code *_thumb.png}; this endpoint generates one on demand via {@link PureThumbnail}.
+ * Serves generated image and attachment thumbnails. Historical images may lack a
+ * prebuilt {@code *_thumb.png}; this endpoint generates one on demand via
+ * {@link PureThumbnail}. Generation failures fall back to the original file so
+ * clients can still render something.
  */
 @RestController
 public class ImageController {
 
     private static final Logger log = LoggerFactory.getLogger(ImageController.class);
     private static final String IMAGE_URL_PREFIX = "/api/images/";
+    private static final String ATTACHMENT_URL_PREFIX = "/api/attachments/";
     private static final int THUMB_MAX_EDGE = 256;
 
     private final MessageRepository messageRepository;
+    private final AttachmentRepository attachmentRepository;
     private final Path uploadDir;
+    private final Path attachmentDir;
 
-    public ImageController(MessageRepository messageRepository, StoragePaths storagePaths) {
+    public ImageController(
+            MessageRepository messageRepository,
+            AttachmentRepository attachmentRepository,
+            StoragePaths storagePaths) {
         this.messageRepository = messageRepository;
+        this.attachmentRepository = attachmentRepository;
         this.uploadDir = storagePaths.uploadDir();
+        this.attachmentDir = storagePaths.attachmentDir();
     }
 
     @GetMapping("/api/images/{id}/thumbnail")
-    public ResponseEntity<Resource> thumbnail(@PathVariable("id") Long id) {
+    public ResponseEntity<Resource> messageThumbnail(@PathVariable("id") Long id) {
         Message message = messageRepository.findById(id).orElse(null);
         if (message == null) {
             return ResponseEntity.notFound().build();
@@ -52,12 +64,42 @@ public class ImageController {
         }
 
         String relative = imageUrl.substring(IMAGE_URL_PREFIX.length());
-        if (relative.isBlank() || relative.contains("..")) {
+        return serveThumbnail(uploadDir, relative);
+    }
+
+    /**
+     * Thumbnail for a user-uploaded attachment image. Resolves the file from the
+     * attachment record and lazily builds a longest-edge PNG when missing.
+     */
+    @GetMapping("/api/attachments/{id}/thumbnail")
+    public ResponseEntity<Resource> attachmentThumbnail(@PathVariable("id") Long id) {
+        Attachment attachment = attachmentRepository.findById(id).orElse(null);
+        if (attachment == null) {
             return ResponseEntity.notFound().build();
         }
 
-        Path original = uploadDir.resolve(relative).normalize();
-        if (!original.startsWith(uploadDir) || !Files.isRegularFile(original)) {
+        String contentType = attachment.getContentType();
+        if (contentType != null && !contentType.isBlank() && !contentType.toLowerCase().startsWith("image/")) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String fileUrl = attachment.getFileUrl();
+        if (fileUrl == null || fileUrl.isBlank() || !fileUrl.startsWith(ATTACHMENT_URL_PREFIX)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String relative = fileUrl.substring(ATTACHMENT_URL_PREFIX.length());
+        return serveThumbnail(attachmentDir, relative);
+    }
+
+    private ResponseEntity<Resource> serveThumbnail(Path rootDir, String relative) {
+        if (relative == null || relative.isBlank() || relative.contains("..")) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Path root = rootDir.normalize();
+        Path original = root.resolve(relative).normalize();
+        if (!original.startsWith(root) || !Files.isRegularFile(original)) {
             return ResponseEntity.notFound().build();
         }
 
