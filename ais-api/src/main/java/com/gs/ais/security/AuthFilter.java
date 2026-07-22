@@ -131,6 +131,7 @@ public class AuthFilter extends OncePerRequestFilter {
     }
 
     private boolean isPublic(String path, String method) {
+        if ("/api/version".equals(path) && HttpMethod.GET.matches(method)) return true;
         if ("/api/auth/captcha".equals(path) && HttpMethod.GET.matches(method)) return true;
         if ("/api/auth/password-key".equals(path) && HttpMethod.GET.matches(method)) return true;
         if ("/api/auth/login".equals(path) && HttpMethod.POST.matches(method)) return true;
