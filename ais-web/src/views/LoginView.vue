@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, MagicStick, Refresh } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { md5Hex } from '@/utils/passwordCrypto'
+import {
+  scrollElementIntoVisualViewport,
+  subscribeVisualViewport,
+} from '@/utils/visualViewport'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -19,8 +23,22 @@ const captchaImage = ref('')
 const captchaEnabled = ref(true)
 const loading = ref(false)
 const captchaLoading = ref(false)
+const pageRef = ref<HTMLElement | null>(null)
+let stopVisualViewport: (() => void) | null = null
+
+function onFieldFocus(event: FocusEvent) {
+  const target = event.target
+  if (!(target instanceof HTMLElement)) return
+  scrollElementIntoVisualViewport(target, { block: 'center', behavior: 'smooth' })
+}
 
 onMounted(async () => {
+  if (typeof window !== 'undefined') {
+    // Keep login form within the visual viewport while the soft keyboard is open.
+    stopVisualViewport = subscribeVisualViewport(() => {}, {
+      cssTarget: () => pageRef.value,
+    })
+  }
   if (!auth.bootstrapped) {
     await auth.bootstrap()
   }
@@ -32,6 +50,11 @@ onMounted(async () => {
   if (captchaEnabled.value) {
     await refreshCaptcha()
   }
+})
+
+onBeforeUnmount(() => {
+  stopVisualViewport?.()
+  stopVisualViewport = null
 })
 
 async function refreshCaptcha() {
@@ -98,7 +121,7 @@ async function redirectAfterLogin() {
 </script>
 
 <template>
-  <main class="login-page">
+  <main ref="pageRef" class="login-page">
     <div class="login-layout">
       <section class="login-intro" aria-label="产品介绍">
         <div class="intro-brand">
@@ -120,7 +143,7 @@ async function redirectAfterLogin() {
         </ul>
       </section>
 
-      <form class="login-card" @submit.prevent="handleLogin">
+      <form class="login-card" @submit.prevent="handleLogin" @focusin="onFieldFocus">
         <div class="card-heading">
           <span class="card-kicker">WELCOME BACK</span>
           <h2>登录工作台</h2>
@@ -195,12 +218,25 @@ async function redirectAfterLogin() {
 
 <style scoped>
 .login-page {
+  --vv-height: 100dvh;
+  --vv-offset-top: 0px;
   position: relative;
+  box-sizing: border-box;
+  /* Prefer visual viewport height when JS has measured it (soft keyboard safe). */
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: var(--vv-height, 100dvh);
+  max-height: none;
   display: grid;
   place-items: center;
-  overflow: hidden;
+  /* Allow scrolling so focused fields / submit are never permanently covered. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 48px 28px 34px;
+  /* Extra bottom room so the submit button can scroll above the keyboard. */
+  padding-bottom: max(34px, calc(env(safe-area-inset-bottom, 0px) + 24px));
   background:
     radial-gradient(circle at 5% 12%, rgba(91, 111, 248, .2), transparent 28rem),
     radial-gradient(circle at 92% 9%, rgba(169, 94, 246, .18), transparent 24rem),
@@ -316,8 +352,18 @@ async function redirectAfterLogin() {
 .login-footer { position: absolute; z-index: 1; bottom: 13px; margin: 0; color: #9aa3ba; font-size: 11px; }
 
 @media (max-width: 760px) {
-  .login-page { padding: 24px 16px 42px; }
-  .login-layout { display: block; min-height: 0; border-radius: 22px; }
+  .login-page {
+    align-content: start;
+    place-items: stretch center;
+    padding: 24px 16px calc(42px + env(safe-area-inset-bottom, 0px));
+  }
+  .login-layout {
+    display: block;
+    min-height: 0;
+    max-width: 100%;
+    overflow: visible;
+    border-radius: 22px;
+  }
   .login-intro { padding: 26px 24px 24px; }
   .intro-copy { margin-top: 34px; }
   .intro-copy h1 { margin: 10px 0; font-size: 30px; }
@@ -325,6 +371,8 @@ async function redirectAfterLogin() {
   .intro-features { display: none; }
   .login-card { padding: 30px 24px 28px; }
   .card-heading { margin-bottom: 24px; }
+  /* Keep footer from colliding with the last field when the page is short. */
+  .login-footer { position: static; margin-top: 18px; text-align: center; }
 }
 @media (max-width: 420px) {
   .login-page { padding-inline: 12px; }
