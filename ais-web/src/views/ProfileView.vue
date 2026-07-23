@@ -10,6 +10,7 @@ import type { BillingRecord, ModelProvider } from '@/types'
 import { useAuthStore } from '@/stores/auth'
 import client from '@/api/client'
 import { formatDateTime } from '@/utils/dateTime'
+import { getMobileWorkspaceSource, mobileWorkspaceLocation } from '@/utils/mobileWorkspace'
 
 const router = useRouter()
 const route = useRoute()
@@ -22,10 +23,10 @@ const account = ref<UserProfile | null>(null)
 const buildInfo = ref({ version: '', commit: '', buildTime: '' })
 const password = reactive({ current: '', next: '', confirm: '' })
 const activeTab = ref('profile')
-const fromMobileWorkspace = computed(() => route.query.source === 'feishu')
+const mobileSource = computed(() => getMobileWorkspaceSource(route))
 
 function goBackToWorkspace() {
-  void router.push(fromMobileWorkspace.value ? { name: 'feishu-h5' } : { name: 'home' })
+  void router.push(mobileSource.value ? mobileWorkspaceLocation(mobileSource.value) : { name: 'home' })
 }
 
 // Model selectors
