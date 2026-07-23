@@ -18,7 +18,7 @@ import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
-import { downloadImage as downloadImageAsset, shareImage as shareImageAsset } from '@/utils/downloadImage'
+import { downloadImage as downloadImageAsset, isRestrictedWebView, shareImage as shareImageAsset } from '@/utils/downloadImage'
 import { formatDateTime, formatTimeHm } from '@/utils/dateTime'
 
 const store = useSessionStore()
@@ -64,6 +64,12 @@ const saveHelperUrl = ref('')
 const saveHelperFilename = ref('ai-image.png')
 const messageActionVisible = ref(false)
 const messageActionTarget = ref<Message | null>(null)
+const deferredInstallPrompt = ref<DeferredInstallPromptEvent | null>(null)
+const isPwaStandalone = ref(false)
+const isRestrictedBrowser = ref(false)
+const isIosSafari = ref(false)
+const iosInstallGuideVisible = ref(false)
+let standaloneMediaQuery: MediaQueryList | null = null
 let longPressTimer: number | null = null
 let pendingLongPressAction: (() => void) | null = null
 let longPressStartX = 0
@@ -79,6 +85,11 @@ const drawSize = ref('1024x1024')
 const drawQuality = ref('auto')
 const drawFormat = ref('png')
 const originalTitle = document.title
+
+interface DeferredInstallPromptEvent extends Event {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
 
 interface HistoryImageItem {
   id: string
@@ -184,6 +195,9 @@ const canSubmit = computed(() => !store.loading && (inputText.value.trim().lengt
 const activeSessionTitle = computed(() => activeSession.value?.title || '新会话')
 const accountRoleLabel = computed(() => auth.isAdmin ? '管理员' : '普通用户')
 const activeBottomNav = computed(() => historyVisible.value ? 'sessions' : view.value)
+const showPwaInstall = computed(() => !isPwaStandalone.value && !isRestrictedBrowser.value && deferredInstallPrompt.value != null)
+const showIosInstallGuide = computed(() => !isPwaStandalone.value && !isRestrictedBrowser.value && isIosSafari.value)
+const showBrowserInstallHint = computed(() => !isPwaStandalone.value && isRestrictedBrowser.value)
 const filteredMobileUsers = computed(() => {
   const keyword = mobileUserSearch.value.trim().toLowerCase()
   if (!keyword) return mobileUsers.value
@@ -646,16 +660,79 @@ async function saveEdit() {
     ElMessage.error(error.message || '保存消息失败')
   }
 }
-async function copyText(text: string) {
+async function copyText(text: string, successMessage = '内容已复制') {
   if (!text.trim()) return
   try {
     await navigator.clipboard.writeText(text)
     // Avoid residual selection highlight on action-drawer buttons after copy.
     window.getSelection()?.removeAllRanges()
-    ElMessage.success('内容已复制')
+    ElMessage.success(successMessage)
   } catch {
     window.getSelection()?.removeAllRanges()
     ElMessage.error('复制失败，请手动选择复制')
+  }
+}
+
+function getMobileInstallUrl() {
+  if (typeof window === 'undefined') return mobileWorkspacePath('mobile')
+  const url = new URL(window.location.href)
+  const currentPath = url.pathname.replace(/\/$/, '')
+  url.pathname = /\/(?:mobile|feishu)$/.test(currentPath)
+    ? `${currentPath.replace(/\/(?:mobile|feishu)$/, '')}/mobile`
+    : mobileWorkspacePath('mobile')
+  url.search = ''
+  url.hash = ''
+  return url.href
+}
+
+async function copyMobileInstallUrl() {
+  await copyText(getMobileInstallUrl(), '安装链接已复制')
+}
+
+function detectPwaStandalone() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
+  const navigatorStandalone = Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  return navigatorStandalone || window.matchMedia?.('(display-mode: standalone)').matches === true
+}
+
+function detectIosSafari() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  const isIos = /iPad|iPhone|iPod/i.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  return isIos && /Safari/i.test(ua)
+    && !/(CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|GSA|DuckDuckGo|FBAN|FBAV|Instagram|Line|MicroMessenger|Lark|Feishu)/i.test(ua)
+}
+
+function updatePwaDisplayMode() {
+  isPwaStandalone.value = detectPwaStandalone()
+  if (isPwaStandalone.value) deferredInstallPrompt.value = null
+}
+
+function handleBeforeInstallPrompt(event: Event) {
+  event.preventDefault()
+  if (isPwaStandalone.value || isRestrictedBrowser.value) return
+  const installEvent = event as DeferredInstallPromptEvent
+  if (typeof installEvent.prompt === 'function') deferredInstallPrompt.value = installEvent
+}
+
+function handleAppInstalled() {
+  deferredInstallPrompt.value = null
+  isPwaStandalone.value = true
+  ElMessage.success('AIS 已安装')
+}
+
+async function promptPwaInstall() {
+  const installEvent = deferredInstallPrompt.value
+  if (!installEvent) return
+  try {
+    await installEvent.prompt()
+    const { outcome } = await installEvent.userChoice
+    deferredInstallPrompt.value = null
+    if (outcome === 'accepted') ElMessage.success('正在安装 AIS')
+    else ElMessage.info('已取消安装')
+  } catch {
+    ElMessage.warning('暂时无法打开安装提示')
   }
 }
 function openSaveHelper(url: string, filename = 'ai-image.png') {
@@ -866,8 +943,30 @@ watch(() => store.activeSessionId, syncProviderSelection)
 watch(inputText, () => void nextTick(() => autoResizeTextarea()))
 watch(mode, () => { if (mode.value === 'chat' && selectedChatProviderId.value == null) selectedChatProviderId.value = defaultProviderId(store.chatProviders); if (mode.value === 'draw' && selectedImageProviderId.value == null) selectedImageProviderId.value = defaultProviderId(store.imageProviders); syncDrawOptions() })
 watch([selectedImageProviderId, () => store.imageProviders.length], syncDrawOptions)
-onMounted(() => { document.title = 'AI 创作'; void initialize() })
-onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); document.title = originalTitle })
+onMounted(() => {
+  document.title = 'AI 创作'
+  if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+    isRestrictedBrowser.value = isRestrictedWebView()
+    isIosSafari.value = !isRestrictedBrowser.value && detectIosSafari()
+    updatePwaDisplayMode()
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    window.addEventListener('appinstalled', handleAppInstalled)
+    standaloneMediaQuery = window.matchMedia?.('(display-mode: standalone)') ?? null
+    standaloneMediaQuery?.addEventListener('change', updatePwaDisplayMode)
+  }
+  void initialize()
+})
+onBeforeUnmount(() => {
+  cancelLongPress(true)
+  setSelectionSuppressed(false)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    window.removeEventListener('appinstalled', handleAppInstalled)
+  }
+  standaloneMediaQuery?.removeEventListener('change', updatePwaDisplayMode)
+  standaloneMediaQuery = null
+  document.title = originalTitle
+})
 </script>
 
 <template>
@@ -1135,11 +1234,23 @@ onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); do
       </div>
       <p class="account-tip">进入个人中心或管理页后，可用顶部「返回创作」回到对话。</p>
       <div class="app-menu">
+        <button v-if="showPwaInstall" type="button" aria-label="安装 AIS" @click="promptPwaInstall"><span class="menu-icon"><Download /></span><span><strong>安装 AIS</strong><small>添加到设备主屏幕</small></span><ArrowRight /></button>
+        <button v-else-if="showIosInstallGuide" type="button" aria-label="查看添加到主屏幕说明" @click="iosInstallGuideVisible = true"><span class="menu-icon"><Promotion /></span><span><strong>添加到主屏幕</strong><small>使用 Safari 分享菜单</small></span><ArrowRight /></button>
+        <button v-else-if="showBrowserInstallHint" type="button" aria-label="复制浏览器安装链接" @click="copyMobileInstallUrl"><span class="menu-icon"><CopyDocument /></span><span><strong>在浏览器中打开以安装</strong><small>复制安装链接后在浏览器打开</small></span><ArrowRight /></button>
         <button type="button" @click="openAppPage('profile')"><span class="menu-icon"><User /></span><span><strong>个人中心</strong><small>资料、模型偏好与消费记录</small></span><ArrowRight /></button>
         <button v-if="auth.isAdmin" type="button" @click="openMobileAdmin()"><span class="menu-icon"><Setting /></span><span><strong>移动管理</strong><small>用户、会话和操作日志</small></span><ArrowRight /></button>
         <button type="button" @click="openAppPage('home')"><span class="menu-icon"><Monitor /></span><span><strong>完整工作台</strong><small>进入桌面版界面（可返回）</small></span><ArrowRight /></button>
         <button v-if="auth.securityEnabled" class="danger-menu" type="button" @click="handleLogout"><span class="menu-icon"><SwitchButton /></span><span><strong>退出登录</strong><small>安全退出当前账户</small></span><ArrowRight /></button>
       </div>
+    </el-drawer>
+
+    <el-drawer v-model="iosInstallGuideVisible" direction="btt" size="auto" class="h5-drawer install-guide-drawer" :with-header="false">
+      <div class="drawer-title compact"><div><strong>添加到主屏幕</strong><span>请在 Safari 中完成安装</span></div><button type="button" aria-label="关闭添加到主屏幕说明" @click="iosInstallGuideVisible = false"><Close /></button></div>
+      <div class="install-guide-steps">
+        <p><span>1</span>点击 Safari 的分享按钮</p>
+        <p><span>2</span>选择「添加到主屏幕」</p>
+      </div>
+      <button type="button" class="install-guide-confirm" aria-label="关闭添加到主屏幕说明" @click="iosInstallGuideVisible = false">我知道了</button>
     </el-drawer>
 
     <el-drawer v-model="referenceVisible" direction="btt" size="auto" class="h5-drawer reference-drawer" :with-header="false">
@@ -1785,6 +1896,10 @@ onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); do
 .app-menu button > svg { width: 16px; color: #a1a9b9; }
 .app-menu .danger-menu .menu-icon { color: #cf6572; background: #fff0f2; }
 .app-menu .danger-menu strong { color: #b95564; }
+.install-guide-steps { display: grid; gap: 9px; padding: 15px 1px 4px; }
+.install-guide-steps p { display: flex; align-items: center; gap: 9px; margin: 0; color: #56627c; font-size: 13px; font-weight: 650; }
+.install-guide-steps span { display: grid; width: 23px; height: 23px; flex: 0 0 auto; place-items: center; color: #5368d8; font-size: 11px; font-weight: 800; border-radius: 50%; background: #edf0ff; }
+.install-guide-confirm { width: 100%; min-height: 40px; margin-top: 17px; color: #fff; font-size: 13px; font-weight: 750; cursor: pointer; border: 0; border-radius: 11px; background: linear-gradient(140deg, #536bea, #7657d4); }
 
 .history-reference-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; max-height: min(46vh, 330px); overflow-y: auto; padding-top: 11px; }
 .history-reference-tile { position: relative; min-width: 0; padding: 0; overflow: hidden; text-align: left; cursor: pointer; border: 1px solid #e5e9f2; border-radius: 11px; background: #f5f6fa; }
