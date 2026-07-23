@@ -6,6 +6,7 @@ import {
   mobileWorkspacePath,
   withMobileSource,
 } from '@/utils/mobileWorkspace'
+import { subscribeVisualViewport } from '@/utils/visualViewport'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight, ChatDotRound, Check, Clock, Close, CopyDocument, DataAnalysis, Delete, Download, EditPen, FullScreen, MagicStick, Monitor, MoreFilled, Paperclip, Picture, Plus, Promotion, RefreshRight, Setting, SwitchButton, UploadFilled, User, UserFilled } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
@@ -29,6 +30,9 @@ const mobileSource = computed(() => getMobileWorkspaceSource(route) ?? 'mobile')
 const messagesRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const pageRef = ref<HTMLElement | null>(null)
+const keyboardOpen = ref(false)
+let stopVisualViewport: (() => void) | null = null
 const fullscreenInput = ref(false)
 const inputText = ref('')
 const pendingAttachments = ref<UploadResponse[]>([])
@@ -953,12 +957,19 @@ onMounted(() => {
     window.addEventListener('appinstalled', handleAppInstalled)
     standaloneMediaQuery = window.matchMedia?.('(display-mode: standalone)') ?? null
     standaloneMediaQuery?.addEventListener('change', updatePwaDisplayMode)
+    // Pin the mobile shell to the visual viewport so the soft keyboard does not
+    // cover the composer (100dvh alone is not reliable in PWA / iOS Safari).
+    stopVisualViewport = subscribeVisualViewport((state) => {
+      keyboardOpen.value = state.keyboardOpen
+    }, { cssTarget: () => pageRef.value })
   }
   void initialize()
 })
 onBeforeUnmount(() => {
   cancelLongPress(true)
   setSelectionSuppressed(false)
+  stopVisualViewport?.()
+  stopVisualViewport = null
   if (typeof window !== 'undefined') {
     window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
     window.removeEventListener('appinstalled', handleAppInstalled)
@@ -970,7 +981,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="feishu-page">
+  <main
+    ref="pageRef"
+    class="feishu-page"
+    :class="{ 'keyboard-open': keyboardOpen }"
+  >
     <header class="mobile-header">
       <div class="brand-block">
         <span class="brand-icon"><MagicStick /></span>
@@ -1175,7 +1190,11 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <nav class="bottom-nav" aria-label="移动端主导航">
+    <nav
+      v-show="!keyboardOpen"
+      class="bottom-nav"
+      aria-label="移动端主导航"
+    >
       <button :class="{ active: activeBottomNav === 'create' }" type="button" @click="historyVisible = false; view = 'create'"><ChatDotRound /><span>创作</span></button>
       <button :class="{ active: activeBottomNav === 'gallery' }" type="button" @click="historyVisible = false; view = 'gallery'"><Picture /><span>作品</span><em v-if="generatedImages.length">{{ generatedImages.length }}</em></button>
       <button :class="{ active: activeBottomNav === 'sessions' }" type="button" @click="historyVisible = true"><Clock /><span>会话</span></button>
@@ -1364,17 +1383,34 @@ onBeforeUnmount(() => {
   --mobile-text: #24314d;
   --mobile-muted: #7d899f;
   --mobile-border: #e5e9f2;
-  position: relative;
+  /* Fallback stack: % → dvh → VisualViewport-driven tokens from JS. */
+  --vv-height: 100dvh;
+  --vv-offset-top: 0px;
+  --vv-offset-left: 0px;
+  position: fixed;
+  top: var(--vv-offset-top, 0px);
+  left: var(--vv-offset-left, 0px);
+  z-index: 1;
   display: flex;
   flex-direction: column;
   width: 100%;
+  max-width: 100%;
   height: 100%;
   height: 100dvh;
+  height: var(--vv-height, 100dvh);
+  max-height: var(--vv-height, 100dvh);
   overflow: hidden;
   color: var(--mobile-text);
   background:
     radial-gradient(circle at 95% -5%, rgba(106, 90, 238, .12), transparent 24rem),
     linear-gradient(180deg, #f7f9fd 0%, #f2f5fa 100%);
+}
+/* Soft keyboard open: drop bottom-nav height contribution; composer stays at visual bottom. */
+.feishu-page.keyboard-open .composer {
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+}
+.feishu-page.keyboard-open .composer-hint {
+  display: none;
 }
 
 .mobile-header {
