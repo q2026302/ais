@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  getMobileWorkspaceSource,
+  mobileWorkspacePath,
+  withMobileSource,
+} from '@/utils/mobileWorkspace'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight, ChatDotRound, Check, Clock, Close, CopyDocument, DataAnalysis, Delete, Download, EditPen, FullScreen, MagicStick, Monitor, MoreFilled, Paperclip, Picture, Plus, Promotion, RefreshRight, Setting, SwitchButton, UploadFilled, User, UserFilled } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
@@ -19,6 +24,8 @@ import { formatDateTime, formatTimeHm } from '@/utils/dateTime'
 const store = useSessionStore()
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+const mobileSource = computed(() => getMobileWorkspaceSource(route) ?? 'mobile')
 const messagesRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
@@ -44,6 +51,7 @@ const mobileLogsLoading = ref(false)
 const referenceVisible = ref(false)
 const referenceImportingId = ref<number | null>(null)
 const modelVisible = ref(false)
+const drawSettingsVisible = ref(false)
 const drawOptionsExpanded = ref(false)
 const imageViewerVisible = ref(false)
 const imageViewerImages = ref<string[]>([])
@@ -170,6 +178,7 @@ const selectedProviderLabel = computed(() => {
   const provider = selectedProvider.value
   return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认模型'
 })
+const referenceImageCount = computed(() => pendingAttachments.value.filter((attachment) => isImageAttachment(attachment.contentType)).length)
 const editingMessage = computed(() => editTargetId.value == null ? null : store.messages.find((message) => message.id === editTargetId.value) || null)
 const canSubmit = computed(() => !store.loading && (inputText.value.trim().length > 0 || (mode.value === 'chat' && pendingAttachments.value.length > 0)))
 const activeSessionTitle = computed(() => activeSession.value?.title || '新会话')
@@ -754,6 +763,20 @@ function openModelPicker() {
   modelVisible.value = true
 }
 
+function openDrawSettings() {
+  composerExtraVisible.value = false
+  drawSettingsVisible.value = true
+}
+
+function openReferenceShortcut() {
+  if (historyImages.value.length) {
+    openReferencePicker()
+    return
+  }
+  openComposerExtras()
+  ElMessage.info('还没有历史图，可在创作工具中添加参考图')
+}
+
 function formatMobileAdminTime(value: string) {
   return formatDateTime(value, '—')
 }
@@ -829,13 +852,13 @@ function showPcOnlyNotice() {
 
 async function openAppPage(name: 'profile' | 'admin' | 'admin-users' | 'home') {
   accountVisible.value = false
-  await router.push({ name, query: { source: 'feishu' } })
+  await router.push(withMobileSource({ name }, mobileSource.value))
 }
 
 async function handleLogout() {
   accountVisible.value = false
   await auth.logout()
-  await router.replace({ name: 'login', query: { redirect: '/feishu' } })
+  await router.replace({ name: 'login', query: { redirect: mobileWorkspacePath(mobileSource.value) } })
 }
 
 watch(() => store.messages.length, () => void scrollToBottom())
@@ -1000,6 +1023,26 @@ onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); do
         <button :class="{ active: mode === 'draw' }" type="button" @click="mode = 'draw'"><Picture /> 绘画</button>
         <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
       </div>
+      <section v-if="mode === 'draw'" class="draw-status-bar" aria-label="当前绘画设置">
+        <button type="button" class="draw-status-chip draw-status-model" :title="selectedProviderLabel" :aria-label="`当前绘画模型：${selectedProviderLabel}，点击切换模型`" @click="openModelPicker">
+          <MagicStick aria-hidden="true" />
+          <span>模型</span>
+          <strong>{{ selectedProviderLabel }}</strong>
+        </button>
+        <button type="button" class="draw-status-chip" :title="`当前尺寸或比例：${drawSize}`" :aria-label="`当前尺寸或比例：${drawSize}，点击设置`" @click="openDrawSettings">
+          <span>尺寸</span>
+          <strong>{{ drawSize }}</strong>
+        </button>
+        <button type="button" class="draw-status-chip" :title="`当前质量：${drawQuality}`" :aria-label="`当前质量：${drawQuality}，点击设置`" @click="openDrawSettings">
+          <span>质量</span>
+          <strong>{{ drawQuality }}</strong>
+        </button>
+        <button type="button" class="draw-status-chip" :title="referenceImageCount ? `已添加 ${referenceImageCount} 张参考图` : '暂无参考图'" :aria-label="referenceImageCount ? `已添加 ${referenceImageCount} 张参考图，点击管理参考图` : '暂无参考图，点击添加'" @click="openReferenceShortcut">
+          <Picture aria-hidden="true" />
+          <span>参考图</span>
+          <strong>{{ referenceImageCount || '未添加' }}</strong>
+        </button>
+      </section>
       <div v-if="pendingAttachments.length" class="attachment-strip">
         <div v-for="attachment in pendingAttachments" :key="attachment.id" class="attachment-preview">
           <el-image v-if="isImageAttachment(attachment.contentType)" :src="attachment.fileUrl" fit="cover" />
@@ -1061,6 +1104,15 @@ onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); do
           <label><span>质量</span><el-select v-model="drawQuality"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
           <label><span>格式</span><el-select v-model="drawFormat"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
         </div>
+      </div>
+    </el-drawer>
+
+    <el-drawer v-model="drawSettingsVisible" direction="btt" size="auto" class="h5-drawer draw-settings-drawer" :with-header="false">
+      <div class="drawer-title compact"><div><strong>绘画设置</strong><span>快速调整尺寸、质量与格式</span></div></div>
+      <div class="draw-settings-fields">
+        <label><span>尺寸 / 比例</span><el-select v-model="drawSize" aria-label="绘画尺寸或比例"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
+        <label><span>质量</span><el-select v-model="drawQuality" aria-label="绘画质量"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
+        <label><span>格式</span><el-select v-model="drawFormat" aria-label="图片格式"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
       </div>
     </el-drawer>
 
@@ -1177,7 +1229,7 @@ onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); do
               <strong>保存图片</strong>
               <button type="button" aria-label="关闭" @click="closeSaveHelper"><Close /></button>
             </header>
-            <p class="save-image-helper-tip">飞书等内置浏览器不支持直接下载。请<strong>长按下方图片</strong>，在弹出菜单中选择“保存图片 / 存储到相册”。也可尝试“系统分享”。</p>
+            <p class="save-image-helper-tip">部分移动端 / 内置浏览器不支持直接下载。请<strong>长按下方图片</strong>，在弹出菜单中选择“保存图片 / 存储到相册”。也可尝试“系统分享”。</p>
             <div class="save-image-helper-preview">
               <img :src="saveHelperUrl" :alt="saveHelperFilename" draggable="false">
             </div>
@@ -1482,6 +1534,18 @@ onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); do
 .mode-toggle-bar button svg { width: 16px; height: 16px; }
 .composer { position: relative; z-index: 8; flex: 0 0 auto; padding: 8px 12px 2px; border-top: 1px solid rgba(223, 228, 239, .94); background: rgba(255, 255, 255, .94); box-shadow: 0 -8px 24px rgba(42, 54, 93, .055); backdrop-filter: blur(18px); }
 .composer-toolbar { display: flex; min-width: 0; align-items: center; gap: 4px; margin-bottom: 6px; }
+.draw-status-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0 0 8px; }
+.draw-status-chip { display: grid; min-width: 0; min-height: 44px; align-content: center; gap: 1px; padding: 6px 8px; color: #748097; text-align: left; cursor: pointer; border: 1px solid #e1e6f1; border-radius: 12px; background: #f6f8fc; }
+.draw-status-chip > svg { width: 15px; height: 15px; grid-row: span 2; align-self: center; color: #6177db; }
+.draw-status-chip > span { overflow: hidden; color: #8b95a7; font-size: 10px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.draw-status-chip > strong { overflow: hidden; color: #53617b; font-size: 11px; font-weight: 750; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.draw-status-model { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-column: 1 / -1; column-gap: 6px; }
+.draw-status-model > span, .draw-status-model > strong { grid-column: 2; }
+.draw-status-model > strong { max-width: 100%; }
+.draw-settings-fields { display: grid; gap: 12px; padding: 14px 0 4px; }
+.draw-settings-fields label { display: grid; grid-template-columns: 86px minmax(0, 1fr); min-height: 44px; align-items: center; gap: 10px; color: #65718a; font-size: 12px; font-weight: 700; }
+.draw-settings-fields :deep(.el-select) { width: 100%; }
+.draw-settings-fields :deep(.el-input__wrapper) { min-height: 44px; border-radius: 12px; box-shadow: 0 0 0 1px #e1e6ef inset; }
 .draw-options-inline { margin: -2px 0 8px; padding: 0 2px; }
 .draw-options-summary { display: flex; width: 100%; min-height: 29px; align-items: center; gap: 7px; padding: 0 7px; color: #77829a; font-size: 10px; text-align: left; cursor: pointer; border: 0; border-radius: 8px; background: #f5f7fb; }
 .draw-options-summary strong { min-width: 0; overflow: hidden; color: #596681; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
@@ -1927,8 +1991,10 @@ onBeforeUnmount(() => { cancelLongPress(true); setSelectionSuppressed(false); do
   .composer-main textarea { font-size: 16px; }
   .mode-toggle-bar button { font-size: 10px; }
   .composer-hint { display: none; }
+  .draw-status-chip { padding-right: 6px; padding-left: 6px; }
+  .draw-status-chip > strong { font-size: 10px; }
   .history-reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .draw-options label { grid-template-columns: 74px minmax(0, 1fr); }
+  .draw-options label, .draw-settings-fields label { grid-template-columns: 74px minmax(0, 1fr); }
 }
 
 @media (max-height: 620px) {

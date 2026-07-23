@@ -3,19 +3,30 @@ import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ArrowLeft, MagicStick, Setting, SwitchButton, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import {
+  getMobileWorkspaceSource,
+  mobileWorkspaceLocation,
+  mobileWorkspacePath,
+  withMobileSource,
+} from '@/utils/mobileWorkspace'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const isEmbedded = computed(() => route.meta.embedded === true)
 const showChrome = computed(() => !isEmbedded.value && route.name !== 'login')
-const isFeishuContext = computed(() => route.path === '/feishu' || route.query.source === 'feishu')
-const workspaceLocation = computed(() => isFeishuContext.value ? { name: 'feishu-h5' } : { name: 'home' })
-const isWorkspaceRoute = computed(() => route.name === 'home' || route.name === 'feishu-h5')
+const mobileSource = computed(() => getMobileWorkspaceSource(route))
+const isMobileWorkspaceContext = computed(() => mobileSource.value != null)
+const workspaceLocation = computed(() =>
+  mobileSource.value ? mobileWorkspaceLocation(mobileSource.value) : { name: 'home' as const },
+)
+const isWorkspaceRoute = computed(
+  () => route.name === 'home' || route.name === 'feishu-h5' || route.name === 'mobile-workbench',
+)
 const showBackToWorkspace = computed(() => showChrome.value && !isWorkspaceRoute.value)
 
 function appLocation(name: 'admin' | 'profile') {
-  return isFeishuContext.value ? { name, query: { source: 'feishu' } } : { name }
+  return withMobileSource({ name }, mobileSource.value)
 }
 
 function goWorkspace() {
@@ -24,7 +35,8 @@ function goWorkspace() {
 
 async function handleLogout() {
   await auth.logout()
-  await router.replace({ name: 'login', query: isFeishuContext.value ? { redirect: '/feishu' } : undefined })
+  const redirect = mobileSource.value ? mobileWorkspacePath(mobileSource.value) : undefined
+  await router.replace({ name: 'login', query: redirect ? { redirect } : undefined })
 }
 </script>
 
@@ -48,7 +60,7 @@ async function handleLogout() {
             <span class="brand-mark"><MagicStick /></span>
             <span class="brand-copy">
               <strong>AIS</strong>
-              <small>{{ isFeishuContext ? '移动创作' : 'AI 创作工作台' }}</small>
+              <small>{{ isMobileWorkspaceContext ? '移动创作' : 'AI 创作工作台' }}</small>
             </span>
           </button>
         </div>
