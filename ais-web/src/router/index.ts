@@ -18,10 +18,18 @@ const router = createRouter({
       component: HomeView,
     },
     {
+      // Formal mobile workbench entry (standalone mobile UX).
+      path: '/mobile',
+      name: 'mobile-workbench',
+      component: () => import('@/views/FeishuH5View.vue'),
+      meta: { embedded: true, mobileEntry: 'mobile' },
+    },
+    {
+      // Feishu / in-app browser compatibility entry; shares the same mobile workbench view.
       path: '/feishu',
       name: 'feishu-h5',
       component: () => import('@/views/FeishuH5View.vue'),
-      meta: { embedded: true },
+      meta: { embedded: true, mobileEntry: 'feishu' },
     },
     {
       path: '/profile',

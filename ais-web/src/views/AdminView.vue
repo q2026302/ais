@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { getMobileWorkspaceSource, mobileWorkspaceLocation } from '@/utils/mobileWorkspace'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ChatDotRound, Connection, DataAnalysis, Download, Lock, Monitor, Picture, Plus, Search, Upload, UserFilled } from '@element-plus/icons-vue'
 import type {
@@ -37,7 +38,8 @@ type AdminSection = 'models' | 'security' | 'data' | 'tools' | 'users' | 'sessio
 const activeSection = ref<AdminSection>('models')
 
 function goBackToWorkspace() {
-  void router.push(route.query.source === 'feishu' ? { name: 'feishu-h5' } : { name: 'home' })
+  const source = getMobileWorkspaceSource(route)
+  void router.push(source ? mobileWorkspaceLocation(source) : { name: 'home' })
 }
 const adminMenuGroups = [
   {

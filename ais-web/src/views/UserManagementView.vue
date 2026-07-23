@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { getMobileWorkspaceSource, withMobileSource } from '@/utils/mobileWorkspace'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Connection, DataAnalysis, Lock, Monitor, Plus, Refresh, Search, UserFilled } from '@element-plus/icons-vue'
 import { usersApi, type ManagedUser } from '@/api/users'
@@ -10,9 +11,7 @@ import { formatDateTime } from '@/utils/dateTime'
 const router = useRouter()
 
 function routeWithSource(path: string) {
-  return router.currentRoute.value.query.source === 'feishu'
-    ? { path, query: { source: 'feishu' } }
-    : { path }
+  return withMobileSource({ path }, getMobileWorkspaceSource(router.currentRoute.value))
 }
 
 type AdminMenuKey = 'models' | 'security' | 'data' | 'tools' | 'users'
