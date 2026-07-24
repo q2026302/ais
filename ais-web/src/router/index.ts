@@ -31,6 +31,71 @@ const router = createRouter({
       component: () => import('@/views/FeishuH5View.vue'),
       meta: { embedded: true, mobileEntry: 'feishu' },
     },
+    // Phase-1 nested mobile routes (layout + placeholders). Existing /mobile and /feishu above stay intact.
+    {
+      path: '/mobile',
+      component: () => import('@/views/mobile/FeishuMobileLayout.vue'),
+      meta: { embedded: true, mobileEntry: 'mobile' },
+      redirect: { name: 'mobile-sessions' },
+      children: [
+        {
+          path: 'sessions',
+          name: 'mobile-sessions',
+          component: () => import('@/views/mobile/FeishuSessionsPage.vue'),
+          meta: { embedded: true, mobileEntry: 'mobile' },
+        },
+        {
+          path: 'chat/:id',
+          name: 'mobile-chat',
+          component: () => import('@/views/mobile/FeishuChatPage.vue'),
+          meta: { embedded: true, mobileEntry: 'mobile', hideBottomNav: true },
+        },
+        {
+          path: 'gallery',
+          name: 'mobile-gallery',
+          component: () => import('@/views/mobile/FeishuGalleryPage.vue'),
+          meta: { embedded: true, mobileEntry: 'mobile' },
+        },
+        {
+          path: 'profile',
+          name: 'mobile-profile',
+          component: () => import('@/views/mobile/FeishuProfilePage.vue'),
+          meta: { embedded: true, mobileEntry: 'mobile' },
+        },
+      ],
+    },
+    {
+      path: '/feishu',
+      component: () => import('@/views/mobile/FeishuMobileLayout.vue'),
+      meta: { embedded: true, mobileEntry: 'feishu' },
+      redirect: { name: 'feishu-sessions' },
+      children: [
+        {
+          path: 'sessions',
+          name: 'feishu-sessions',
+          component: () => import('@/views/mobile/FeishuSessionsPage.vue'),
+          meta: { embedded: true, mobileEntry: 'feishu' },
+        },
+        {
+          path: 'chat/:id',
+          name: 'feishu-chat',
+          component: () => import('@/views/mobile/FeishuChatPage.vue'),
+          meta: { embedded: true, mobileEntry: 'feishu', hideBottomNav: true },
+        },
+        {
+          path: 'gallery',
+          name: 'feishu-gallery',
+          component: () => import('@/views/mobile/FeishuGalleryPage.vue'),
+          meta: { embedded: true, mobileEntry: 'feishu' },
+        },
+        {
+          path: 'profile',
+          name: 'feishu-profile',
+          component: () => import('@/views/mobile/FeishuProfilePage.vue'),
+          meta: { embedded: true, mobileEntry: 'feishu' },
+        },
+      ],
+    },
     {
       path: '/profile',
       name: 'profile',
