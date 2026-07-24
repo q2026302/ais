@@ -19,23 +19,51 @@ app.mount('#app')
 
 registerPwaUpdates()
 
-// Track visual viewport → CSS vars for keyboard-safe mobile layout.
 subscribeVisualViewport(() => {}, { cssTarget: document.documentElement })
 
-// Scroll focused inputs into view when keyboard opens (critical for Android PWA
-// where visualViewport resize events may not fire reliably).
-document.addEventListener('focusin', ((event: FocusEvent) => {
-  const target = event.target
-  if (!(target instanceof HTMLElement)) return
-  const tag = target.tagName
-  if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !target.isContentEditable) return
-  // Force-update CSS vars even when visualViewport events haven't fired
-  // (common in Android PWA standalone mode).
+function isEditableField(el: EventTarget | null): el is HTMLElement {
+  if (!(el instanceof HTMLElement)) return false
+  const tag = el.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+}
+
+function scrollEditableIntoView(el: HTMLElement): void {
   applyVisualViewportCssVars(document.documentElement, readVisualViewport())
-  // Wait two frames for the keyboard + CSS var to settle, then scroll.
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
-    })
+    el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
   })
+}
+
+// When an editable field receives focus, wait 350 ms for the soft keyboard
+// to finish opening, then update CSS vars and scroll the field into view.
+// A single-shot visualViewport.resize listener catches delayed animations.
+document.addEventListener('focusin', ((event: FocusEvent) => {
+  const raw = event.target
+  if (!isEditableField(raw)) return
+  const el: HTMLElement = raw
+
+  let settled = false
+  let timerId: ReturnType<typeof setTimeout> | undefined
+
+  function scrollAndUpdate() {
+    if (settled) return
+    settled = true
+    clearTimeout(timerId)
+    scrollEditableIntoView(el)
+    window.visualViewport?.removeEventListener('resize', onViewportChange)
+  }
+
+  function onViewportChange() {
+    scrollAndUpdate()
+  }
+
+  timerId = setTimeout(scrollAndUpdate, 350)
+  window.visualViewport?.addEventListener('resize', onViewportChange, { once: true })
+
+  const onBlur = () => {
+    clearTimeout(timerId)
+    window.visualViewport?.removeEventListener('resize', onViewportChange)
+    el.removeEventListener('blur', onBlur)
+  }
+  el.addEventListener('blur', onBlur, { once: true })
 }) as EventListener, true)
