@@ -21,10 +21,7 @@ const workspaceLocation = computed(() =>
   mobileSource.value ? mobileWorkspaceLocation(mobileSource.value) : { name: 'home' as const },
 )
 const isWorkspaceRoute = computed(
-  () =>
-    route.name === 'home' ||
-    route.path.startsWith('/feishu') ||
-    route.path.startsWith('/mobile'),
+  () => route.name === 'home' || route.name === 'feishu-h5' || route.name === 'mobile-workbench',
 )
 const showBackToWorkspace = computed(() => showChrome.value && !isWorkspaceRoute.value)
 
