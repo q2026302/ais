@@ -6,7 +6,13 @@ import {
   mobileWorkspacePath,
   withMobileSource,
 } from '@/utils/mobileWorkspace'
-import { subscribeVisualViewport } from '@/utils/visualViewport'
+import {
+  applyVisualViewportCssVars,
+  isStandaloneDisplayMode,
+  pinShellToVisualViewport,
+  subscribeVisualViewport,
+  type VisualViewportState,
+} from '@/utils/visualViewport'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, ArrowRight, ChatDotRound, Check, Clock, Close, CopyDocument, DataAnalysis, Delete, Download, EditPen, FullScreen, MagicStick, Monitor, MoreFilled, Paperclip, Picture, Plus, Promotion, RefreshRight, Setting, SwitchButton, UploadFilled, User, UserFilled } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
@@ -31,8 +37,17 @@ const messagesRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const pageRef = ref<HTMLElement | null>(null)
+/** Soft keyboard reported by visualViewport / VirtualKeyboard / standalone fallback. */
 const keyboardOpen = ref(false)
+/** Composer textarea focused — hide bottom-nav immediately (before VV reports). */
+const composerFocused = ref(false)
+/**
+ * Effective "input mode": hide bottom-nav and pin shell so the composer sits
+ * flush above the keyboard (WeChat/Feishu chat-page pattern).
+ */
+const inputChromeCollapsed = computed(() => keyboardOpen.value || composerFocused.value)
 let stopVisualViewport: (() => void) | null = null
+let onAisVisualViewport: ((event: Event) => void) | null = null
 const fullscreenInput = ref(false)
 const inputText = ref('')
 const pendingAttachments = ref<UploadResponse[]>([])
@@ -947,6 +962,48 @@ watch(() => store.activeSessionId, syncProviderSelection)
 watch(inputText, () => void nextTick(() => autoResizeTextarea()))
 watch(mode, () => { if (mode.value === 'chat' && selectedChatProviderId.value == null) selectedChatProviderId.value = defaultProviderId(store.chatProviders); if (mode.value === 'draw' && selectedImageProviderId.value == null) selectedImageProviderId.value = defaultProviderId(store.imageProviders); syncDrawOptions() })
 watch([selectedImageProviderId, () => store.imageProviders.length], syncDrawOptions)
+function applyViewportState(state: VisualViewportState) {
+  keyboardOpen.value = state.keyboardOpen
+}
+
+/** Write explicit shell geometry from a measured state (CSS vars alone are flaky on WebAPK). */
+function applyShellGeometry(state: VisualViewportState) {
+  const el = pageRef.value
+  if (!el) return
+  applyVisualViewportCssVars(el, state)
+  el.style.top = `${state.offsetTop}px`
+  el.style.height = `${state.height}px`
+  el.style.maxHeight = `${state.height}px`
+  applyViewportState(state)
+}
+
+function pinPageShell(forceFallback?: boolean) {
+  const force =
+    forceFallback === true ||
+    (typeof window !== 'undefined' && isStandaloneDisplayMode() && composerFocused.value)
+  const state = pinShellToVisualViewport(pageRef.value, { forceKeyboardFallback: force })
+  applyViewportState(state)
+  return state
+}
+
+function onComposerFocus() {
+  composerFocused.value = true
+  // Immediate pin + standalone fallback so Android PWA does not wait for VV.
+  pinPageShell(isStandaloneDisplayMode())
+}
+
+function onComposerBlur() {
+  // Delay slightly so focus moving between composer controls does not flash nav.
+  window.setTimeout(() => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active.closest?.('.composer, .fullscreen-input-overlay')) {
+      return
+    }
+    composerFocused.value = false
+    pinPageShell(false)
+  }, 80)
+}
+
 onMounted(() => {
   document.title = 'AI 创作'
   if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
@@ -957,11 +1014,28 @@ onMounted(() => {
     window.addEventListener('appinstalled', handleAppInstalled)
     standaloneMediaQuery = window.matchMedia?.('(display-mode: standalone)') ?? null
     standaloneMediaQuery?.addEventListener('change', updatePwaDisplayMode)
-    // Pin the mobile shell to the visual viewport so the soft keyboard does not
-    // cover the composer (100dvh alone is not reliable in PWA / iOS Safari).
-    stopVisualViewport = subscribeVisualViewport((state) => {
-      keyboardOpen.value = state.keyboardOpen
-    }, { cssTarget: () => pageRef.value })
+    // Pin shell height/top to visualViewport. On standalone PWA with a focused
+    // composer, force a keyboard-height fallback when VV does not shrink.
+    stopVisualViewport = subscribeVisualViewport(
+      (state) => applyViewportState(state),
+      {
+        cssTarget: () => pageRef.value,
+        pinShell: true,
+        forceKeyboardFallback: () => isStandaloneDisplayMode() && composerFocused.value,
+      },
+    )
+    // main.ts focus watch measures with standalone fallback and dispatches here.
+    // Trust that state for geometry so we do not re-read without fallback before
+    // the textarea focus handler has set composerFocused.
+    onAisVisualViewport = (event: Event) => {
+      const detail = (event as CustomEvent<VisualViewportState | undefined>).detail
+      if (detail) {
+        applyShellGeometry(detail)
+      } else {
+        pinPageShell(false)
+      }
+    }
+    window.addEventListener('ais:visual-viewport', onAisVisualViewport)
   }
   void initialize()
 })
@@ -973,6 +1047,10 @@ onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
     window.removeEventListener('appinstalled', handleAppInstalled)
+    if (onAisVisualViewport) {
+      window.removeEventListener('ais:visual-viewport', onAisVisualViewport)
+      onAisVisualViewport = null
+    }
   }
   standaloneMediaQuery?.removeEventListener('change', updatePwaDisplayMode)
   standaloneMediaQuery = null
@@ -984,7 +1062,7 @@ onBeforeUnmount(() => {
   <main
     ref="pageRef"
     class="feishu-page"
-    :class="{ 'keyboard-open': keyboardOpen }"
+    :class="{ 'keyboard-open': inputChromeCollapsed }"
   >
     <header class="mobile-header">
       <div class="brand-block">
@@ -1167,7 +1245,19 @@ onBeforeUnmount(() => {
       <div class="composer-main">
         <input ref="fileInputRef" type="file" :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'" multiple hidden @change="handleFileChange">
         <button class="upload-button" type="button" :disabled="store.loading || uploading" aria-label="更多创作选项" @click="openComposerExtras"><Plus /></button>
-        <textarea ref="inputRef" v-model="inputText" :disabled="store.loading" :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'" rows="1" enterkeyhint="enter" @paste="handlePaste" @keydown="handleInputKeydown" @input="autoResizeTextarea"></textarea>
+        <textarea
+          ref="inputRef"
+          v-model="inputText"
+          :disabled="store.loading"
+          :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'"
+          rows="1"
+          enterkeyhint="enter"
+          @paste="handlePaste"
+          @keydown="handleInputKeydown"
+          @input="autoResizeTextarea"
+          @focus="onComposerFocus"
+          @blur="onComposerBlur"
+        ></textarea>
         <button class="send-button" :class="{ disabled: !canSubmit }" type="button" :disabled="!canSubmit" :aria-label="mode === 'draw' ? '生成图片' : '发送消息'" @click="handleSubmit"><span>{{ mode === 'draw' ? '生成' : '发送' }}</span></button>
       </div>
       <p class="composer-hint">{{ mode === 'draw' ? '点“+”添加参考图、切换模型和设置参数' : '点“+”添加附件、切换对话模型' }}</p>
@@ -1184,14 +1274,21 @@ onBeforeUnmount(() => {
         class="fullscreen-textarea"
         :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'"
         @input="autoResizeTextarea"
+        @focus="onComposerFocus"
+        @blur="onComposerBlur"
       ></textarea>
       <div class="fullscreen-input-footer">
         <button class="send-button" :class="{ disabled: !canSubmit }" type="button" :disabled="!canSubmit" @click="handleSubmit"><Promotion /> 发送</button>
       </div>
     </div>
 
+    <!--
+      Chat-page pattern (WeChat/Feishu): when the composer is focused / keyboard is
+      open, drop bottom-nav entirely so the input is the last flex child and sits
+      flush above the keyboard. Nav returns on blur / keyboard close.
+    -->
     <nav
-      v-show="!keyboardOpen"
+      v-show="!inputChromeCollapsed"
       class="bottom-nav"
       aria-label="移动端主导航"
     >
@@ -1383,7 +1480,11 @@ onBeforeUnmount(() => {
   --mobile-text: #24314d;
   --mobile-muted: #7d899f;
   --mobile-border: #e5e9f2;
-  /* Fallback stack: % → dvh → VisualViewport-driven tokens from :root. */
+  /*
+   * Fixed full-height chat shell. Height/top are also written explicitly by
+   * pinShellToVisualViewport() so Android WebAPK cannot ignore CSS vars.
+   * Fallback stack: % → dvh → VisualViewport tokens.
+   */
   position: fixed;
   top: var(--vv-offset-top, 0px);
   left: var(--vv-offset-left, 0px);
@@ -1396,18 +1497,28 @@ onBeforeUnmount(() => {
   height: 100dvh;
   height: var(--vv-height, 100dvh);
   max-height: var(--vv-height, 100dvh);
-  overflow-y: auto;
-  overflow-x: hidden;
+  /* Keep page non-scrolling; conversation / gallery are the scroll containers. */
+  overflow: hidden;
   color: var(--mobile-text);
   background:
     radial-gradient(circle at 95% -5%, rgba(106, 90, 238, .12), transparent 24rem),
     linear-gradient(180deg, #f7f9fd 0%, #f2f5fa 100%);
 }
-/* Soft keyboard open: drop bottom-nav height contribution; composer stays at visual bottom. */
+/*
+ * Keyboard / composer-focus mode:
+ *  - bottom-nav is v-show=false (removed from layout)
+ *  - composer is the last flex child → sits flush above the keyboard
+ *  - extra safe-area padding only when keyboard is closed (nav handles it)
+ */
 .feishu-page.keyboard-open .composer {
-  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
 }
 .feishu-page.keyboard-open .composer-hint {
+  display: none;
+}
+.feishu-page.keyboard-open .mode-toggle-bar,
+.feishu-page.keyboard-open .draw-status-bar {
+  /* Reclaim vertical space while typing on short viewports. */
   display: none;
 }
 
