@@ -173,6 +173,23 @@ html, body, #app {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Lock document scroll; shells size to visual viewport (see --app-vvh). */
+  overflow: hidden;
+}
+
+/*
+ * Pin the app root to the visual viewport so soft keyboards shrink the shell
+ * instead of overlaying bottom inputs (iOS Safari / installed PWA).
+ * --vv-height / --vv-offset-top are written by subscribeVisualViewport().
+ */
+#app-container {
+  position: fixed;
+  top: var(--vv-offset-top, 0px);
+  left: 0;
+  width: 100%;
+  height: 100%;
+  height: var(--vv-height, 100dvh);
+  overflow: hidden;
 }
 
 button, input, textarea, select { font-family: inherit; }
@@ -268,7 +285,7 @@ a:focus-visible,
 </style>
 
 <style scoped>
-.app-shell { height: 100vh; }
+.app-shell { height: 100%; }
 
 .app-header {
   position: relative;
@@ -388,12 +405,12 @@ a:focus-visible,
 .nav-button :deep(.el-icon) { margin-right: 5px; }
 .nav-button.active { color: var(--app-primary); background: #fff; box-shadow: 0 2px 8px rgba(56, 72, 139, .11); }
 
-.app-main { height: calc(100vh - 64px); padding: 0; overflow: auto; overscroll-behavior: contain; }
-.app-main--embedded { height: 100vh; }
+.app-main { height: calc(100% - 64px); padding: 0; overflow: auto; overscroll-behavior: contain; }
+.app-main--embedded { height: 100%; }
 
 @media (max-width: 600px) {
   .app-header { height: calc(56px + env(safe-area-inset-top)) !important; padding: env(safe-area-inset-top) 12px 0; }
-  .app-main { height: calc(100vh - 56px - env(safe-area-inset-top)); height: calc(100dvh - 56px - env(safe-area-inset-top)); }
+  .app-main { height: calc(100% - 56px - env(safe-area-inset-top)); }
   .header-nav { gap: 1px; padding: 3px; }
   .header-left { gap: 6px; }
   .back-to-workspace { display: inline-flex; padding: 0 8px; font-size: 12px; }

@@ -1383,10 +1383,7 @@ onBeforeUnmount(() => {
   --mobile-text: #24314d;
   --mobile-muted: #7d899f;
   --mobile-border: #e5e9f2;
-  /* Fallback stack: % → dvh → VisualViewport-driven tokens from JS. */
-  --vv-height: 100dvh;
-  --vv-offset-top: 0px;
-  --vv-offset-left: 0px;
+  /* Fallback stack: % → dvh → VisualViewport-driven tokens from :root. */
   position: fixed;
   top: var(--vv-offset-top, 0px);
   left: var(--vv-offset-left, 0px);

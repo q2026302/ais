@@ -218,8 +218,6 @@ async function redirectAfterLogin() {
 
 <style scoped>
 .login-page {
-  --vv-height: 100dvh;
-  --vv-offset-top: 0px;
   position: relative;
   box-sizing: border-box;
   /* Prefer visual viewport height when JS has measured it (soft keyboard safe). */
