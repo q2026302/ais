@@ -23,33 +23,13 @@ export function getMobileWorkspaceSource(
   const fromMeta = route.meta.mobileEntry
   if (isMobileWorkspaceSource(fromMeta)) return fromMeta
 
-  if (
-    route.name === 'feishu-h5' ||
-    route.name === 'feishu-sessions' ||
-    route.name === 'feishu-chat' ||
-    route.name === 'feishu-gallery' ||
-    route.name === 'feishu-profile' ||
-    route.path === '/feishu' ||
-    route.path.startsWith('/feishu/')
-  ) {
-    return 'feishu'
-  }
-  if (
-    route.name === 'mobile-workbench' ||
-    route.name === 'mobile-sessions' ||
-    route.name === 'mobile-chat' ||
-    route.name === 'mobile-gallery' ||
-    route.name === 'mobile-profile' ||
-    route.path === '/mobile' ||
-    route.path.startsWith('/mobile/')
-  ) {
-    return 'mobile'
-  }
+  if (route.name === 'feishu-h5' || route.path === '/feishu') return 'feishu'
+  if (route.name === 'mobile-workbench' || route.path === '/mobile') return 'mobile'
   return null
 }
 
 export function mobileWorkspaceLocation(source: MobileWorkspaceSource): RouteLocationRaw {
-  return source === 'feishu' ? { path: '/feishu' } : { path: '/mobile' }
+  return source === 'feishu' ? { name: 'feishu-h5' } : { name: 'mobile-workbench' }
 }
 
 export function mobileWorkspacePath(source: MobileWorkspaceSource): string {
