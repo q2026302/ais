@@ -7,8 +7,10 @@ import router from './router'
 import { registerPwaUpdates } from './pwa'
 import {
   subscribeVisualViewport,
-  readVisualViewport,
   applyVisualViewportCssVars,
+  watchViewportWhileFocused,
+  scrollElementIntoVisualViewport,
+  isStandaloneDisplayMode,
 } from '@/utils/visualViewport'
 
 const app = createApp(App)
@@ -19,6 +21,7 @@ app.mount('#app')
 
 registerPwaUpdates()
 
+// Global CSS tokens on :root — shells read --vv-height / --vv-offset-top.
 subscribeVisualViewport(() => {}, { cssTarget: document.documentElement })
 
 function isEditableField(el: EventTarget | null): el is HTMLElement {
@@ -27,43 +30,67 @@ function isEditableField(el: EventTarget | null): el is HTMLElement {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
 }
 
-function scrollEditableIntoView(el: HTMLElement): void {
-  applyVisualViewportCssVars(document.documentElement, readVisualViewport())
-  requestAnimationFrame(() => {
-    el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
-  })
+/**
+ * Chat / fixed full-height shells already pin themselves via pinShell.
+ * For those, a global center scrollIntoView fights the flex layout and can
+ * scroll the wrong container on Android PWA. Only auto-scroll free-form pages
+ * (login, admin forms, etc.).
+ */
+function shouldAutoScrollOnFocus(el: HTMLElement): boolean {
+  return !el.closest('.feishu-page')
 }
 
-// When an editable field receives focus, wait 350 ms for the soft keyboard
-// to finish opening, then update CSS vars and scroll the field into view.
-// A single-shot visualViewport.resize listener catches delayed animations.
-document.addEventListener('focusin', ((event: FocusEvent) => {
-  const raw = event.target
-  if (!isEditableField(raw)) return
-  const el: HTMLElement = raw
+let cancelFocusWatch: (() => void) | null = null
 
-  let settled = false
-  let timerId: ReturnType<typeof setTimeout> | undefined
+// When an editable field receives focus, keep CSS vars in sync while the soft
+// keyboard animates open. Android standalone PWAs often never fire a useful
+// visualViewport.resize, so we also force a keyboard-height fallback there.
+document.addEventListener(
+  'focusin',
+  ((event: FocusEvent) => {
+    const raw = event.target
+    if (!isEditableField(raw)) return
+    const el: HTMLElement = raw
 
-  function scrollAndUpdate() {
-    if (settled) return
-    settled = true
-    clearTimeout(timerId)
-    scrollEditableIntoView(el)
-    window.visualViewport?.removeEventListener('resize', onViewportChange)
-  }
+    cancelFocusWatch?.()
+    cancelFocusWatch = null
 
-  function onViewportChange() {
-    scrollAndUpdate()
-  }
+    const forceFallback = () => isStandaloneDisplayMode()
 
-  timerId = setTimeout(scrollAndUpdate, 350)
-  window.visualViewport?.addEventListener('resize', onViewportChange, { once: true })
+    cancelFocusWatch = watchViewportWhileFocused(
+      (state) => {
+        applyVisualViewportCssVars(document.documentElement, state)
+        // Notify listeners that pin their own shell (FeishuH5View).
+        window.dispatchEvent(
+          new CustomEvent('ais:visual-viewport', { detail: state }),
+        )
+        if (shouldAutoScrollOnFocus(el)) {
+          scrollElementIntoVisualViewport(el, {
+            block: 'center',
+            behavior: 'smooth',
+          })
+        }
+      },
+      {
+        forceKeyboardFallback: forceFallback,
+        durationMs: 1400,
+        intervalMs: 100,
+      },
+    )
 
-  const onBlur = () => {
-    clearTimeout(timerId)
-    window.visualViewport?.removeEventListener('resize', onViewportChange)
-    el.removeEventListener('blur', onBlur)
-  }
-  el.addEventListener('blur', onBlur, { once: true })
-}) as EventListener, true)
+    const onBlur = () => {
+      cancelFocusWatch?.()
+      cancelFocusWatch = null
+      // Re-measure without the focus fallback so the shell expands again.
+      applyVisualViewportCssVars(document.documentElement)
+      window.dispatchEvent(
+        new CustomEvent('ais:visual-viewport', {
+          detail: undefined,
+        }),
+      )
+      el.removeEventListener('blur', onBlur)
+    }
+    el.addEventListener('blur', onBlur, { once: true })
+  }) as EventListener,
+  true,
+)
