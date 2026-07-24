@@ -1297,6 +1297,11 @@ onBeforeUnmount(() => {
       <button :class="{ active: activeBottomNav === 'sessions' }" type="button" @click="historyVisible = true"><Clock /><span>会话</span></button>
     </nav>
 
+    <!-- Phase 2 新版入口 -->
+    <div v-if="!inputChromeCollapsed" class="new-version-entry">
+      <router-link :to="{ name: 'feishu-sessions' }">✨ 体验新版界面 ›</router-link>
+    </div>
+
     <el-drawer v-model="composerExtraVisible" direction="btt" size="auto" class="h5-drawer composer-extra-drawer" :with-header="false">
       <div class="drawer-title compact"><div><strong>创作工具</strong><span>附件、参考图、模型和参数都在这里</span></div></div>
       <div class="composer-extra-grid">
@@ -1921,6 +1926,9 @@ onBeforeUnmount(() => {
 .bottom-nav button svg { width: 20px; height: 20px; }
 .bottom-nav button.active { color: var(--mobile-primary); background: #f0f3ff; }
 .bottom-nav em { position: absolute; top: 2px; left: calc(50% + 8px); display: grid; min-width: 16px; height: 16px; padding: 0 4px; place-items: center; color: #fff; font-size: 9px; font-style: normal; border: 2px solid #fff; border-radius: 99px; background: #ed697d; }
+
+.new-version-entry { text-align: center; padding: 2px 0 4px; border-top: 1px solid rgba(223, 228, 238, .95); }
+.new-version-entry a { color: #8a95a8; font-size: 11px; text-decoration: none; }
 
 :deep(.h5-drawer.el-drawer) { max-width: 760px; margin: 0 auto; border-radius: 24px 24px 0 0; background: #fff; box-shadow: 0 -18px 50px rgba(30, 42, 78, .2); }
 :deep(.h5-drawer .el-drawer__body) { padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); overflow-y: auto; }
