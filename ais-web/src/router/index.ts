@@ -31,6 +31,56 @@ const router = createRouter({
       component: () => import('@/views/FeishuH5View.vue'),
       meta: { embedded: true, mobileEntry: 'feishu' },
     },
+    // Phase-1 mobile sub-routes (refactored pages under shared layout)
+    {
+      path: '/feishu/sessions',
+      name: 'feishu-sessions',
+      component: () => import('@/views/mobile/FeishuSessionsPage.vue'),
+      meta: { embedded: true, mobileEntry: 'feishu' },
+    },
+    {
+      path: '/feishu/chat/:id',
+      name: 'feishu-chat',
+      component: () => import('@/views/mobile/FeishuChatPage.vue'),
+      meta: { embedded: true, mobileEntry: 'feishu', hideBottomNav: true },
+    },
+    {
+      path: '/feishu/gallery',
+      name: 'feishu-gallery',
+      component: () => import('@/views/mobile/FeishuGalleryPage.vue'),
+      meta: { embedded: true, mobileEntry: 'feishu' },
+    },
+    {
+      path: '/feishu/profile',
+      name: 'feishu-profile',
+      component: () => import('@/views/mobile/FeishuProfilePage.vue'),
+      meta: { embedded: true, mobileEntry: 'feishu' },
+    },
+    // Mobile standalone sub-routes (same page components)
+    {
+      path: '/mobile/sessions',
+      name: 'mobile-sessions',
+      component: () => import('@/views/mobile/FeishuSessionsPage.vue'),
+      meta: { embedded: true, mobileEntry: 'mobile' },
+    },
+    {
+      path: '/mobile/chat/:id',
+      name: 'mobile-chat',
+      component: () => import('@/views/mobile/FeishuChatPage.vue'),
+      meta: { embedded: true, mobileEntry: 'mobile', hideBottomNav: true },
+    },
+    {
+      path: '/mobile/gallery',
+      name: 'mobile-gallery',
+      component: () => import('@/views/mobile/FeishuGalleryPage.vue'),
+      meta: { embedded: true, mobileEntry: 'mobile' },
+    },
+    {
+      path: '/mobile/profile',
+      name: 'mobile-profile',
+      component: () => import('@/views/mobile/FeishuProfilePage.vue'),
+      meta: { embedded: true, mobileEntry: 'mobile' },
+    },
     {
       path: '/profile',
       name: 'profile',
