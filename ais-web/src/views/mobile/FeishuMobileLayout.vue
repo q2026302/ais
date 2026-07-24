@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRoute } from 'vue-router'
-import { MagicStick, MoreFilled, Picture, Plus, ChatDotRound, User } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowLeft, MagicStick, MoreFilled, Picture, Plus, ChatDotRound, User } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
 import { useMobileKeyboard } from '@/composables/useMobileKeyboard'
 
@@ -11,10 +11,13 @@ defineOptions({
 
 const store = useSessionStore()
 const route = useRoute()
+const router = useRouter()
 const pageRef = ref<HTMLElement | null>(null)
 const { keyboardOpen, inputChromeCollapsed } = useMobileKeyboard()
 
 const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobile' : 'feishu'))
+
+const isChatPage = computed(() => route.name?.toString().endsWith('-chat') === true)
 
 const activeSessionTitle = computed(() => {
   const session = store.sessions.find((item) => item.id === store.activeSessionId)
@@ -28,6 +31,10 @@ const hideBottomNav = computed(
 function handleCreateSession() {
   void store.createSession()
 }
+
+function goSessions() {
+  void router.push({ name: `${entryPrefix.value}-sessions` })
+}
 </script>
 
 <template>
@@ -37,7 +44,22 @@ function handleCreateSession() {
     :class="{ 'keyboard-open': keyboardOpen }"
   >
     <header class="mobile-header">
-      <div class="brand-block">
+      <div v-if="isChatPage" class="brand-block">
+        <button
+          class="back-button"
+          type="button"
+          aria-label="会话列表"
+          title="会话列表"
+          @click="goSessions"
+        >
+          <ArrowLeft />
+        </button>
+        <div class="brand-copy">
+          <strong>{{ activeSessionTitle }}</strong>
+          <span>AI 创作助手</span>
+        </div>
+      </div>
+      <div v-else class="brand-block">
         <span class="brand-icon"><MagicStick /></span>
         <div class="brand-copy">
           <strong>{{ activeSessionTitle }}</strong>
@@ -142,6 +164,25 @@ function handleCreateSession() {
   min-width: 0;
   align-items: center;
   gap: 11px;
+}
+
+.back-button {
+  display: grid;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  color: #5365cc;
+  cursor: pointer;
+  border: 0;
+  border-radius: 10px;
+  background: #eef1ff;
+}
+
+.back-button :deep(svg) {
+  width: 18px;
+  height: 18px;
 }
 
 .brand-icon {
