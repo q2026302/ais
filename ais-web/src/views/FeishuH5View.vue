@@ -1396,7 +1396,8 @@ onBeforeUnmount(() => {
   height: 100dvh;
   height: var(--vv-height, 100dvh);
   max-height: var(--vv-height, 100dvh);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   color: var(--mobile-text);
   background:
     radial-gradient(circle at 95% -5%, rgba(106, 90, 238, .12), transparent 24rem),
