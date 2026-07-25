@@ -79,7 +79,8 @@ async function createNewSession() {
   try {
     const session = await store.createSession()
     if (!session) return
-    await store.selectSession(session.id)
+    // Navigate first; FeishuChatPage initialize/route watcher loads messages.
+    // Avoid awaiting store.selectSession here so create is not blocked by getMessages.
     await goToChat(session.id)
   } catch (error: any) {
     ElMessage.error(error?.message || '新建会话失败')
@@ -92,10 +93,13 @@ async function selectSession(id: number) {
     return
   }
   try {
-    await store.selectSession(id)
+    // Navigate immediately; do not await store.selectSession (getMessages) or the
+    // list stays stuck while a long LLM request is in flight. Chat page loads
+    // messages via initialize / route.params.id watcher. In-flight CHAT/DRAW/
+    // REGENERATE continue because selectSession does not abort them.
     await goToChat(id)
   } catch (error: any) {
-    ElMessage.error(error?.message || '加载会话失败')
+    ElMessage.error(error?.message || '打开会话失败')
   }
 }
 

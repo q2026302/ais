@@ -10,7 +10,7 @@ import {
   applyVisualViewportCssVars,
   watchViewportWhileFocused,
   scrollElementIntoVisualViewport,
-  isStandaloneDisplayMode,
+  shouldForceOverlayKeyboardFallback,
 } from '@/utils/visualViewport'
 
 const app = createApp(App)
@@ -28,19 +28,18 @@ function isEditableField(el: EventTarget | null): el is HTMLElement {
 }
 
 /**
- * True when an editable field is focused inside a standalone PWA — the same
- * condition chat shells use for the overlay-keyboard height fallback. Kept in
- * sync for the global :root subscription so a bare window resize cannot
- * overwrite --vv-height with a non-fallback reading while the keyboard is up.
+ * True when an editable field is focused in an overlay-keyboard environment
+ * (standalone PWA, or VirtualKeyboard API with zero geometry). Kept in sync
+ * for the global :root subscription so a bare window resize cannot overwrite
+ * --vv-height with a non-fallback reading while the keyboard is up.
  */
 function shouldForceRootKeyboardFallback(): boolean {
   if (typeof document === 'undefined' || typeof window === 'undefined') return false
-  if (!isStandaloneDisplayMode()) return false
-  return isEditableField(document.activeElement)
+  return shouldForceOverlayKeyboardFallback(isEditableField(document.activeElement))
 }
 
 // Global CSS tokens on :root — shells read --vv-height / --vv-offset-top.
-// Force the standalone overlay fallback while a field is focused so #app-container
+// Force the overlay-keyboard fallback while a field is focused so #app-container
 // shrinks above overlay keyboards the same way FeishuMobileLayout does.
 subscribeVisualViewport(() => {}, {
   cssTarget: document.documentElement,
@@ -63,8 +62,9 @@ function shouldAutoScrollOnFocus(el: HTMLElement): boolean {
 let cancelFocusWatch: (() => void) | null = null
 
 // When an editable field receives focus, keep CSS vars in sync while the soft
-// keyboard animates open. Android standalone PWAs often never fire a useful
-// visualViewport.resize, so we also force a keyboard-height fallback there.
+// keyboard animates open. Android overlay keyboards often never fire a useful
+// visualViewport.resize / VirtualKeyboard geometry, so we force a height
+// fallback in those environments.
 document.addEventListener(
   'focusin',
   ((event: FocusEvent) => {
@@ -75,12 +75,11 @@ document.addEventListener(
     cancelFocusWatch?.()
     cancelFocusWatch = null
 
-    // Overlay keyboards on installed PWAs often leave visualViewport.height
-    // unchanged. Force a height fallback only in standalone display mode so
-    // shells that listen for `ais:visual-viewport` still shrink above the
-    // keyboard without double-shrinking Feishu / mobile browsers that already
-    // resize correctly.
-    const forceFallback = () => isStandaloneDisplayMode()
+    // Overlay keyboards (PWA standalone, or VirtualKeyboard API with zero
+    // geometry) leave visualViewport.height unchanged. Force a height fallback
+    // so shells that listen for `ais:visual-viewport` still shrink above the
+    // keyboard without double-shrinking browsers that already resize correctly.
+    const forceFallback = () => shouldForceOverlayKeyboardFallback(true)
 
     cancelFocusWatch = watchViewportWhileFocused(
       (state) => {
