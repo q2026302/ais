@@ -35,9 +35,12 @@ function isEditableField(el: EventTarget | null): el is HTMLElement {
  * For those, a global center scrollIntoView fights the flex layout and can
  * scroll the wrong container on Android PWA. Only auto-scroll free-form pages
  * (login, admin forms, etc.).
+ *
+ * Covers both the legacy single-page shell (`.feishu-page`) and the nested
+ * mobile layout (`.feishu-layout` / `.chat-page`).
  */
 function shouldAutoScrollOnFocus(el: HTMLElement): boolean {
-  return !el.closest('.feishu-page')
+  return !el.closest('.feishu-page, .feishu-layout, .chat-page')
 }
 
 let cancelFocusWatch: (() => void) | null = null
@@ -55,12 +58,17 @@ document.addEventListener(
     cancelFocusWatch?.()
     cancelFocusWatch = null
 
+    // Overlay keyboards on installed PWAs often leave visualViewport.height
+    // unchanged. Force a height fallback only in standalone display mode so
+    // shells that listen for `ais:visual-viewport` still shrink above the
+    // keyboard without double-shrinking Feishu / mobile browsers that already
+    // resize correctly.
     const forceFallback = () => isStandaloneDisplayMode()
 
     cancelFocusWatch = watchViewportWhileFocused(
       (state) => {
         applyVisualViewportCssVars(document.documentElement, state)
-        // Notify listeners that pin their own shell (FeishuH5View).
+        // Notify listeners that pin their own shell (FeishuH5View / FeishuMobileLayout).
         window.dispatchEvent(
           new CustomEvent('ais:visual-viewport', { detail: state }),
         )
@@ -73,8 +81,8 @@ document.addEventListener(
       },
       {
         forceKeyboardFallback: forceFallback,
-        durationMs: 1400,
-        intervalMs: 100,
+        durationMs: 1800,
+        intervalMs: 80,
       },
     )
 

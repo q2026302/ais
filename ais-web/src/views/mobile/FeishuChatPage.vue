@@ -1157,15 +1157,22 @@ onBeforeUnmount(() => {
    * Nested inside FeishuMobileLayout's layout-content. Layout owns the fixed
    * shell + visualViewport geometry; this page fills the remaining flex space
    * so header/conversation/composer stack correctly without a second fixed layer.
+   *
+   * Critical for PWA standalone: do NOT use position:fixed here — a second
+   * fixed layer would ignore the parent shell's height shrink and leave the
+   * composer under the overlay keyboard.
    */
   position: relative;
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   flex-direction: column;
   width: 100%;
   max-width: 100%;
   min-height: 0;
+  min-width: 0;
   height: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
   /* Keep page non-scrolling; conversation is the scroll container. */
   overflow: hidden;
   color: var(--mobile-text);
@@ -1175,12 +1182,14 @@ onBeforeUnmount(() => {
 }
 /*
  * Keyboard / composer-focus mode:
- *  - bottom-nav is v-show=false (removed from layout)
+ *  - bottom-nav is removed from the layout (hideBottomNav)
  *  - composer is the last flex child → sits flush above the keyboard
- *  - extra safe-area padding only when keyboard is closed (nav handles it)
+ *  - drop safe-area bottom padding: the shell is already pinned above the
+ *    keyboard, so env(safe-area-inset-bottom) would double-pad and push the
+ *    input under the keyboard on some Android WebAPKs.
  */
 .chat-page.keyboard-open .composer {
-  padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+  padding-bottom: 8px;
 }
 .chat-page.keyboard-open .composer-hint {
   display: none;
@@ -1189,6 +1198,11 @@ onBeforeUnmount(() => {
 .chat-page.keyboard-open .draw-status-bar {
   /* Reclaim vertical space while typing on short viewports. */
   display: none;
+}
+.chat-page.keyboard-open .conversation {
+  /* Conversation is the only scroll container; keep it shrinkable. */
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .conversation, .gallery-panel {
