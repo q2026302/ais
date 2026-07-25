@@ -2,9 +2,17 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Delete, EditPen, Plus } from '@element-plus/icons-vue'
+import {
+  Delete,
+  EditPen,
+  Plus,
+  Top,
+  ChatDotRound,
+} from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
-import { formatTimeHm } from '@/utils/dateTime'
+import type { Session } from '@/types'
+import { formatRelativeSessionTime } from '@/utils/dateTime'
+import { useLongPress } from '@/composables/useLongPress'
 
 defineOptions({
   name: 'FeishuSessionsPage',
@@ -18,18 +26,38 @@ const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobil
 const sessionQuery = ref('')
 const loadingList = ref(false)
 
+const actionVisible = ref(false)
+const actionTarget = ref<Session | null>(null)
+
+const {
+  longPressTriggered,
+  startLongPress,
+  moveLongPress,
+  cancelLongPress,
+  finishLongPress,
+} = useLongPress()
+
 const filteredSessions = computed(() => {
   const keyword = sessionQuery.value.trim().toLowerCase()
-  if (!keyword) return store.sessions
-  return store.sessions.filter((session) => {
+  const list = store.sortedSessions
+  if (!keyword) return list
+  return list.filter((session) => {
     const title = (session.title || '新建会话').toLowerCase()
     const idText = String(session.id)
     return title.includes(keyword) || idText.includes(keyword)
   })
 })
 
-function formatTime(value: string) {
-  return formatTimeHm(value, '')
+function sessionTime(session: Session) {
+  const last = store.getLastMessage(session.id)
+  return formatRelativeSessionTime(last?.at || session.lastMessageAt || session.updatedAt, '')
+}
+
+function sessionPreview(session: Session) {
+  const last = store.getLastMessage(session.id)
+  const preview = last?.preview?.trim()
+  if (preview) return preview
+  return ''
 }
 
 async function goToChat(sessionId: number) {
@@ -71,12 +99,26 @@ async function createNewSession() {
 
 async function selectSession(id: number) {
   if (store.loading) return
+  if (longPressTriggered.value) {
+    longPressTriggered.value = false
+    return
+  }
   try {
     await store.selectSession(id)
     await goToChat(id)
   } catch (error: any) {
     ElMessage.error(error?.message || '加载会话失败')
   }
+}
+
+function openSessionAction(session: Session) {
+  actionTarget.value = session
+  actionVisible.value = true
+}
+
+function closeSessionAction() {
+  actionVisible.value = false
+  actionTarget.value = null
 }
 
 async function renameSession(sessionId: number, currentTitle: string) {
@@ -105,6 +147,31 @@ async function deleteSession(sessionId: number, title: string) {
     ElMessage.success('会话已删除')
   } catch {
     // 用户取消操作
+  }
+}
+
+function handleSessionAction(action: 'rename' | 'delete' | 'pin' | 'unread') {
+  const session = actionTarget.value
+  closeSessionAction()
+  if (!session) return
+
+  if (action === 'rename') {
+    void renameSession(session.id, session.title || '')
+    return
+  }
+  if (action === 'delete') {
+    void deleteSession(session.id, session.title || '')
+    return
+  }
+  if (action === 'pin') {
+    const wasPinned = store.isPinned(session.id)
+    store.togglePin(session.id)
+    ElMessage.success(wasPinned ? '已取消置顶' : '已置顶')
+    return
+  }
+  if (action === 'unread') {
+    store.markAsUnread(session.id)
+    ElMessage.success('已标记为未读')
   }
 }
 
@@ -144,36 +211,36 @@ onMounted(() => {
     </div>
 
     <div v-else-if="filteredSessions.length" class="session-list">
-      <div
+      <button
         v-for="session in filteredSessions"
         :key="session.id"
+        type="button"
         class="session-row"
-        :class="{ active: session.id === store.activeSessionId }"
+        :class="{
+          active: session.id === store.activeSessionId,
+          pinned: store.isPinned(session.id),
+        }"
+        @click="selectSession(session.id)"
+        @touchstart="startLongPress($event, () => openSessionAction(session))"
+        @touchmove="moveLongPress"
+        @touchend="finishLongPress"
+        @touchcancel="cancelLongPress(true)"
+        @contextmenu.prevent.stop="openSessionAction(session)"
       >
-        <button type="button" class="session-select" @click="selectSession(session.id)">
-          <span>{{ session.title || '新建会话' }}</span>
-          <small>#{{ session.id }} · {{ formatTime(session.updatedAt) }}</small>
-        </button>
-        <button
-          type="button"
-          class="session-action"
-          title="重命名会话"
-          aria-label="重命名会话"
-          @click="renameSession(session.id, session.title || '')"
-        >
-          <EditPen />
-        </button>
-        <button
-          type="button"
-          class="session-action danger"
-          title="删除会话"
-          aria-label="删除会话"
-          @click="deleteSession(session.id, session.title || '')"
-        >
-          <Delete />
-        </button>
-        <Check v-if="session.id === store.activeSessionId" />
-      </div>
+        <div class="session-main">
+          <div class="session-top">
+            <div class="session-title-wrap">
+              <span class="session-title">{{ session.title || '新建会话' }}</span>
+              <i v-if="store.isUnread(session.id)" class="unread-dot" aria-label="未读" />
+              <em v-if="store.isPinned(session.id)" class="pin-badge">置顶</em>
+            </div>
+            <small class="session-time">{{ sessionTime(session) }}</small>
+          </div>
+          <div class="session-bottom">
+            <span class="session-preview">{{ sessionPreview(session) || '暂无消息' }}</span>
+          </div>
+        </div>
+      </button>
     </div>
 
     <div v-else class="center-state sessions-empty">
@@ -189,6 +256,38 @@ onMounted(() => {
       <button v-else type="button" class="ghost" @click="sessionQuery = ''">清空搜索</button>
       <button v-if="!store.sessions.length" type="button" class="ghost" @click="refreshSessions">刷新列表</button>
     </div>
+
+    <el-drawer
+      v-model="actionVisible"
+      direction="btt"
+      size="auto"
+      class="h5-drawer action-drawer"
+      :with-header="false"
+      @closed="actionTarget = null"
+    >
+      <div class="drawer-title">
+        <strong>{{ actionTarget?.title || '会话操作' }}</strong>
+        <span>长按菜单</span>
+      </div>
+      <div v-if="actionTarget" class="action-list">
+        <button type="button" @click="handleSessionAction('rename')">
+          <EditPen />
+          <span>编辑标题</span>
+        </button>
+        <button type="button" @click="handleSessionAction('pin')">
+          <Top />
+          <span>{{ store.isPinned(actionTarget.id) ? '取消置顶' : '置顶会话' }}</span>
+        </button>
+        <button type="button" @click="handleSessionAction('unread')">
+          <ChatDotRound />
+          <span>标记为未读</span>
+        </button>
+        <button type="button" class="danger-action" @click="handleSessionAction('delete')">
+          <Delete />
+          <span>删除会话</span>
+        </button>
+      </div>
+    </el-drawer>
   </section>
 </template>
 
@@ -295,9 +394,9 @@ onMounted(() => {
 .session-list {
   max-width: 820px;
   margin: 0 auto;
-  padding-top: 4px;
+  padding-top: 0;
   border-radius: 16px;
-  background: rgba(255, 255, 255, .72);
+  background: rgba(255, 255, 255, .92);
   border: 1px solid #e7ebf3;
   box-shadow: 0 8px 20px rgba(47, 60, 101, .05);
   overflow: hidden;
@@ -306,16 +405,20 @@ onMounted(() => {
 .session-row {
   display: flex;
   width: 100%;
-  min-height: 58px;
+  min-height: 68px;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px 7px 12px;
+  gap: 0;
+  padding: 12px 14px;
   color: #51607b;
   text-align: left;
+  cursor: pointer;
   border: 0;
   border-bottom: 1px solid #eff1f5;
   background: transparent;
   box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .session-row:last-child {
@@ -326,62 +429,93 @@ onMounted(() => {
   background: #f2f4ff;
 }
 
-.session-select {
+.session-row.pinned {
+  background: #f7f8fc;
+}
+
+.session-row.pinned.active {
+  background: #eef1ff;
+}
+
+.session-row:active {
+  background: #eef0f5;
+}
+
+.session-main {
   display: flex;
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  gap: 3px;
-  padding: 6px 0;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  border: 0;
-  background: transparent;
+  gap: 5px;
 }
 
-.session-select span {
+.session-top {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-title-wrap {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-title {
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 750;
+  color: #2e3b58;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-select small {
-  color: #9ba4b6;
+.unread-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fa5151;
+  box-shadow: 0 0 0 2px rgba(250, 81, 81, .12);
+}
+
+.pin-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  color: #6b79c8;
   font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.4;
+  border-radius: 4px;
+  background: #e8ecff;
 }
 
-.session-action {
-  display: grid;
+.session-time {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  place-items: center;
-  color: #919caf;
-  cursor: pointer;
-  border: 0;
-  border-radius: 10px;
-  background: #f3f5f8;
+  color: #a0a8b8;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
-.session-action.danger {
-  color: #d0717d;
-  background: #fff2f4;
+.session-bottom {
+  display: flex;
+  min-width: 0;
 }
 
-.session-action :deep(svg),
-.session-row > svg {
-  display: block;
-  width: 16px;
-  height: 16px;
-}
-
-.session-row > svg {
-  flex: 0 0 auto;
-  color: #6072db;
+.session-preview {
+  overflow: hidden;
+  color: #8b93a5;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .center-state {
@@ -427,6 +561,85 @@ onMounted(() => {
 .center-state > button.ghost {
   color: #5365cc;
   background: #eef1ff;
+}
+
+.drawer-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 2px 0;
+}
+
+.drawer-title strong {
+  color: #2f3b57;
+  font-size: 15px;
+}
+
+.drawer-title span {
+  color: #8b94a8;
+  font-size: 11px;
+}
+
+.action-list {
+  display: grid;
+  gap: 7px;
+  padding-top: 11px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.action-list button {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 13px;
+  color: #53617c;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  border: 0;
+  border-radius: 12px;
+  background: #f5f7fb;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.action-list button span {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.action-list button :deep(svg) {
+  width: 18px;
+  color: #6d7bd5;
+}
+
+.action-list button.danger-action {
+  color: #b95564;
+  background: #fff1f3;
+}
+
+.action-list button.danger-action :deep(svg) {
+  color: #cf6572;
+}
+
+:deep(.action-drawer .el-drawer__body),
+:deep(.action-drawer .el-drawer__body *) {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+:deep(.action-drawer .drawer-title),
+:deep(.action-drawer .drawer-title strong),
+:deep(.action-drawer .drawer-title span) {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
 }
 
 .sr-only {

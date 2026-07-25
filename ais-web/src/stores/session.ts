@@ -4,6 +4,31 @@ import type { Session, Message, ModelProvider, DrawRequest, UploadResponse, Atta
 import { sessionApi } from '@/api/sessions'
 import { providerApi } from '@/api/providers'
 
+const PINNED_STORAGE_KEY = 'ais_pinned'
+const UNREAD_STORAGE_KEY = 'ais_unread'
+
+function loadIdList(key: string): number[] {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((item) => Number(item))
+      .filter((id) => Number.isFinite(id) && id > 0)
+  } catch {
+    return []
+  }
+}
+
+function saveIdList(key: string, ids: number[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(ids))
+  } catch {
+    // ignore quota / private mode errors
+  }
+}
+
 export const useSessionStore = defineStore('session', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<number | null>(null)
@@ -21,9 +46,84 @@ export const useSessionStore = defineStore('session', () => {
   const imageProviders = ref<ModelProvider[]>([])
   const editingMessageId = ref<number | null>(null)
 
+  // Local-only pin / unread state (persisted in localStorage)
+  // pinnedSessions order: newest pin first (index 0)
+  const pinnedSessions = ref<number[]>(loadIdList(PINNED_STORAGE_KEY))
+  const unreadSessions = ref<number[]>(loadIdList(UNREAD_STORAGE_KEY))
+
   // Polling state for draw generation
   const pollingIntervals = ref<Map<number, ReturnType<typeof setInterval>>>(new Map())
   const polledMessageStatuses = ref<Map<number, { status: string; stage: string }>>(new Map())
+
+  function togglePin(sessionId: number) {
+    const idx = pinnedSessions.value.indexOf(sessionId)
+    if (idx >= 0) {
+      pinnedSessions.value = pinnedSessions.value.filter((id) => id !== sessionId)
+    } else {
+      pinnedSessions.value = [sessionId, ...pinnedSessions.value]
+    }
+    saveIdList(PINNED_STORAGE_KEY, pinnedSessions.value)
+  }
+
+  function markAsUnread(sessionId: number) {
+    if (unreadSessions.value.includes(sessionId)) return
+    unreadSessions.value = [...unreadSessions.value, sessionId]
+    saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
+  }
+
+  function markAsRead(sessionId: number) {
+    if (!unreadSessions.value.includes(sessionId)) return
+    unreadSessions.value = unreadSessions.value.filter((id) => id !== sessionId)
+    saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
+  }
+
+  function isPinned(sessionId: number) {
+    return pinnedSessions.value.includes(sessionId)
+  }
+
+  function isUnread(sessionId: number) {
+    return unreadSessions.value.includes(sessionId)
+  }
+
+  function sessionSortTime(session: Session): number {
+    const raw = session.lastMessageAt || session.updatedAt
+    const ts = Date.parse(raw)
+    return Number.isFinite(ts) ? ts : 0
+  }
+
+  const sortedSessions = computed(() => {
+    const pinOrder = new Map(pinnedSessions.value.map((id, index) => [id, index]))
+    return [...sessions.value].sort((a, b) => {
+      const aPinned = pinOrder.has(a.id)
+      const bPinned = pinOrder.has(b.id)
+      if (aPinned && !bPinned) return -1
+      if (!aPinned && bPinned) return 1
+      if (aPinned && bPinned) {
+        return (pinOrder.get(a.id) ?? 0) - (pinOrder.get(b.id) ?? 0)
+      }
+      return sessionSortTime(b) - sessionSortTime(a)
+    })
+  })
+
+  function getLastMessage(sessionId: number): { preview: string; at: string } | null {
+    const session = sessions.value.find((item) => item.id === sessionId)
+    if (!session) return null
+
+    if (activeSessionId.value === sessionId && messages.value.length > 0) {
+      const last = messages.value[messages.value.length - 1]!
+      let preview = (last.content || '').trim()
+      if (!preview && last.imageUrl) preview = '[图片]'
+      if (!preview && last.messageType === 'DRAW_REQUEST') preview = last.drawPrompt || '[绘画请求]'
+      if (preview.length > 60) preview = `${preview.slice(0, 60)}…`
+      return { preview, at: last.createdAt || session.updatedAt }
+    }
+
+    const preview = (session.lastMessagePreview || '').trim()
+    return {
+      preview: preview.length > 60 ? `${preview.slice(0, 60)}…` : preview,
+      at: session.lastMessageAt || session.updatedAt,
+    }
+  }
 
   function beginOperation(
     sessionId: number,
@@ -122,11 +222,20 @@ export const useSessionStore = defineStore('session', () => {
       activeSessionId.value = null
       messages.value = []
     }
+    if (pinnedSessions.value.includes(id)) {
+      pinnedSessions.value = pinnedSessions.value.filter((item) => item !== id)
+      saveIdList(PINNED_STORAGE_KEY, pinnedSessions.value)
+    }
+    if (unreadSessions.value.includes(id)) {
+      unreadSessions.value = unreadSessions.value.filter((item) => item !== id)
+      saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
+    }
     await fetchSessions()
   }
 
   async function selectSession(id: number) {
     activeSessionId.value = id
+    markAsRead(id)
     const selectedMessages = await sessionApi.getMessages(id)
     if (activeSessionId.value === id) {
       messages.value = selectedMessages
@@ -602,6 +711,7 @@ export const useSessionStore = defineStore('session', () => {
 
   return {
     sessions,
+    sortedSessions,
     activeSessionId,
     messages,
     loading,
@@ -614,6 +724,8 @@ export const useSessionStore = defineStore('session', () => {
     editingMessageId,
     pollingIntervals,
     polledMessageStatuses,
+    pinnedSessions,
+    unreadSessions,
     fetchSessions,
     fetchProviders,
     createSession,
@@ -636,5 +748,11 @@ export const useSessionStore = defineStore('session', () => {
     stopPolling,
     stopAllPolling,
     manualRefreshMessage,
+    togglePin,
+    markAsUnread,
+    markAsRead,
+    isPinned,
+    isUnread,
+    getLastMessage,
   }
 })
