@@ -55,6 +55,20 @@ const hideBottomNav = computed(
   () => route.meta?.hideBottomNav === true || inputChromeCollapsed.value,
 )
 
+/**
+ * Soft keyboards that overlay content without shrinking visualViewport:
+ * primarily Android standalone / WebAPK (display-mode: standalone|fullscreen|
+ * minimal-ui, or iOS navigator.standalone).
+ *
+ * Feishu / in-app WebViews already resize correctly, so we deliberately do NOT
+ * force the height fallback there — matching FeishuH5View.vue behaviour.
+ */
+function shouldForceKeyboardFallback(): boolean {
+  if (typeof window === 'undefined') return false
+  if (!composerFocused.value) return false
+  return isStandaloneDisplayMode()
+}
+
 function applyViewportState(state: VisualViewportState) {
   keyboardOpen.value = state.keyboardOpen
 }
@@ -63,6 +77,7 @@ function applyShellGeometry(state: VisualViewportState) {
   const el = pageRef.value
   if (!el) return
   applyVisualViewportCssVars(el, state)
+  // Explicit geometry — more reliable than CSS vars alone on some Android PWAs.
   el.style.top = `${state.offsetTop}px`
   el.style.height = `${state.height}px`
   el.style.maxHeight = `${state.height}px`
@@ -70,9 +85,7 @@ function applyShellGeometry(state: VisualViewportState) {
 }
 
 function pinPageShell(forceFallback?: boolean) {
-  const force =
-    forceFallback === true ||
-    (typeof window !== 'undefined' && isStandaloneDisplayMode() && composerFocused.value)
+  const force = forceFallback === true || shouldForceKeyboardFallback()
   const state = pinShellToVisualViewport(pageRef.value, { forceKeyboardFallback: force })
   applyViewportState(state)
   return state
@@ -82,6 +95,15 @@ function setComposerFocus() {
   composerFocused.value = true
   // Immediate pin + standalone fallback so Android PWA does not wait for VV.
   pinPageShell(isStandaloneDisplayMode())
+  // Re-pin on the next frames so delayed keyboard animations still shrink the shell.
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      if (composerFocused.value) pinPageShell(shouldForceKeyboardFallback())
+      requestAnimationFrame(() => {
+        if (composerFocused.value) pinPageShell(shouldForceKeyboardFallback())
+      })
+    })
+  }
 }
 
 function setComposerBlur() {
@@ -111,19 +133,37 @@ function handleCreateSession() {
 onMounted(() => {
   if (typeof window === 'undefined') return
   stopVisualViewport = subscribeVisualViewport(
-    (state) => applyViewportState(state),
+    (state) => {
+      // subscribeVisualViewport already pins when pinShell:true; just sync flag.
+      applyViewportState(state)
+    },
     {
       cssTarget: () => pageRef.value,
       pinShell: true,
-      forceKeyboardFallback: () => isStandaloneDisplayMode() && composerFocused.value,
+      forceKeyboardFallback: shouldForceKeyboardFallback,
     },
   )
+  // main.ts focus watch measures with a keyboard-height fallback and dispatches
+  // here. Prefer that detail for geometry so we do not re-read without fallback
+  // before the composer focus handler has set composerFocused.
   onAisVisualViewport = (event: Event) => {
     const detail = (event as CustomEvent<VisualViewportState | undefined>).detail
-    if (detail) applyShellGeometry(detail)
-    else pinPageShell(false)
+    if (detail) {
+      // Prefer the measured detail, but if the composer is focused and the
+      // report still claims the keyboard is closed (overlay keyboards), re-pin
+      // with the local fallback so we do not expand back over the input.
+      if (composerFocused.value && !detail.keyboardOpen && shouldForceKeyboardFallback()) {
+        pinPageShell(true)
+      } else {
+        applyShellGeometry(detail)
+      }
+    } else {
+      pinPageShell(false)
+    }
   }
   window.addEventListener('ais:visual-viewport', onAisVisualViewport)
+  // Initial pin so the shell has concrete top/height before first paint settles.
+  pinPageShell(false)
 })
 
 onBeforeUnmount(() => {
@@ -211,14 +251,22 @@ onBeforeUnmount(() => {
   --mobile-muted: #7d899f;
   --mobile-border: #e5e9f2;
 
+  /*
+   * Fixed shell pinned to visualViewport via pinShellToVisualViewport().
+   * Explicit top/height are also written inline so Android WebAPK cannot
+   * ignore CSS custom properties when the soft keyboard opens.
+   */
   position: fixed;
   top: var(--vv-offset-top, 0px);
   left: var(--vv-offset-left, 0px);
+  right: 0;
+  bottom: auto;
   z-index: 1;
   display: flex;
   flex-direction: column;
   width: 100%;
   max-width: 100%;
+  box-sizing: border-box;
   height: 100%;
   height: 100dvh;
   height: var(--vv-height, 100dvh);
@@ -228,6 +276,12 @@ onBeforeUnmount(() => {
   background:
     radial-gradient(circle at 95% -5%, rgba(106, 90, 238, .12), transparent 24rem),
     linear-gradient(180deg, #f7f9fd 0%, #f2f5fa 100%);
+}
+
+/* Composer-focused / keyboard-open: drop any residual bottom chrome. */
+.feishu-layout.keyboard-open {
+  /* Ensure the flex column reflows when height is rewritten inline. */
+  min-height: 0;
 }
 
 .mobile-header {
@@ -317,9 +371,12 @@ onBeforeUnmount(() => {
 
 .layout-content {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  /* Let the flex item actually shrink when the shell height collapses. */
+  flex-basis: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -330,6 +387,11 @@ onBeforeUnmount(() => {
    nested chat shell can size to the remaining viewport above the keyboard. */
 .feishu-layout.chat-route .layout-content {
   overflow: hidden;
+  /* Force a definite height for percentage-sized children (chat-page).
+     Using 100% of the pinned shell (not auto) so the nested flex column
+     receives a concrete containing block while the keyboard is open. */
+  height: 100%;
+  max-height: 100%;
 }
 
 .bottom-nav {
