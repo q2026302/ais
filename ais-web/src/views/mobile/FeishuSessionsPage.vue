@@ -64,16 +64,6 @@ async function goToChat(sessionId: number) {
   await router.push({ name: `${entryPrefix.value}-chat`, params: { id: String(sessionId) } })
 }
 
-async function ensureSessionsLoaded() {
-  if (store.sessions.length) return
-  loadingList.value = true
-  try {
-    await store.fetchSessions()
-  } finally {
-    loadingList.value = false
-  }
-}
-
 async function refreshSessions() {
   loadingList.value = true
   try {
@@ -174,7 +164,9 @@ function handleSessionAction(action: 'rename' | 'delete' | 'pin' | 'unread') {
 }
 
 onMounted(() => {
-  void ensureSessionsLoaded()
+  // Always re-fetch so previews + auto-unread red-dots catch up after a
+  // background poll finished while the user was away from this page.
+  void refreshSessions()
 })
 </script>
 
