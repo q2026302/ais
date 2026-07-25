@@ -86,7 +86,6 @@ async function refreshSessions() {
 }
 
 async function createNewSession() {
-  if (store.loading) return
   try {
     const session = await store.createSession()
     if (!session) return
@@ -98,7 +97,6 @@ async function createNewSession() {
 }
 
 async function selectSession(id: number) {
-  if (store.loading) return
   if (longPressTriggered.value) {
     longPressTriggered.value = false
     return
@@ -201,7 +199,7 @@ onMounted(() => {
           autocomplete="off"
         >
       </label>
-      <button type="button" class="new-session-btn" :disabled="store.loading" @click="createNewSession">
+      <button type="button" class="new-session-btn" @click="createNewSession">
         <Plus /> 新建会话
       </button>
     </div>
