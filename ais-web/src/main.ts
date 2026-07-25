@@ -21,14 +21,31 @@ app.mount('#app')
 
 registerPwaUpdates()
 
-// Global CSS tokens on :root — shells read --vv-height / --vv-offset-top.
-subscribeVisualViewport(() => {}, { cssTarget: document.documentElement })
-
 function isEditableField(el: EventTarget | null): el is HTMLElement {
   if (!(el instanceof HTMLElement)) return false
   const tag = el.tagName
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
 }
+
+/**
+ * True when an editable field is focused inside a standalone PWA — the same
+ * condition chat shells use for the overlay-keyboard height fallback. Kept in
+ * sync for the global :root subscription so a bare window resize cannot
+ * overwrite --vv-height with a non-fallback reading while the keyboard is up.
+ */
+function shouldForceRootKeyboardFallback(): boolean {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return false
+  if (!isStandaloneDisplayMode()) return false
+  return isEditableField(document.activeElement)
+}
+
+// Global CSS tokens on :root — shells read --vv-height / --vv-offset-top.
+// Force the standalone overlay fallback while a field is focused so #app-container
+// shrinks above overlay keyboards the same way FeishuMobileLayout does.
+subscribeVisualViewport(() => {}, {
+  cssTarget: document.documentElement,
+  forceKeyboardFallback: shouldForceRootKeyboardFallback,
+})
 
 /**
  * Chat / fixed full-height shells already pin themselves via pinShell.

@@ -145,27 +145,43 @@ export function computeVisualViewportState(env: VisualViewportEnv): VisualViewpo
   let keyboardOpen = keyboardInset > KEYBOARD_OPEN_THRESHOLD_PX || offsetTop > KEYBOARD_OPEN_THRESHOLD_PX
 
   // Android / iOS standalone PWA: keyboard often overlays without reporting a
-  // usable inset (nothing shrinks, or resizes-content already shrank everything
-  // so the residual gap is < threshold). Force a height reduction only when the
-  // measured inset is still tiny — never double-subtract on top of a real shrink.
-  if (env.forceKeyboardFallback && keyboardInset < KEYBOARD_OPEN_THRESHOLD_PX) {
-    // Use the larger of baseline / live so the fallback fraction is of the
-    // full screen, not of an already-shrunk resizes-content viewport.
-    const fallbackBase = Math.max(baselineHeight, height)
+  // usable inset (nothing shrinks). `interactive-widget=resizes-content` can
+  // also shrink both innerHeight and visualViewport together, in which case
+  // the residual live gap is ~0 even though the keyboard is open — that path
+  // needs the screen/outer baseline above to compute a real inset.
+  //
+  // Previous bug: fallback was gated on `keyboardInset < THRESHOLD`. When
+  // screen/outer is 120–200px taller than the live layout (status bar / system
+  // chrome) the chrome gap alone crossed the threshold, the fallback was
+  // skipped, and the overlay keyboard still covered the composer.
+  //
+  // Rules while force is on:
+  //  1. Estimate keyboard size from the *currently visible* height (what the
+  //     user actually sees), not from screen — otherwise a chrome gap on a
+  //     tall screen under-shrinks the shell (e.g. live 800 with screen 950
+  //     only lost ~210px and the input stayed under a ~300px keyboard).
+  //  2. If the screen-baseline inset already covers that estimate
+  //     (resizes-content did its job), trust the measured geometry.
+  //  3. Otherwise shrink the live height by the full fallback inset.
+  if (env.forceKeyboardFallback) {
+    const liveHeight = height
+    const fallbackBase = liveHeight > 0 ? liveHeight : baselineHeight
     const fallback = Math.min(
       STANDALONE_KEYBOARD_FALLBACK_MAX_PX,
       Math.round(fallbackBase * STANDALONE_KEYBOARD_FALLBACK_RATIO),
     )
-    if (fallback > keyboardInset) {
-      keyboardInset = fallback
-      // Replace measured height with baseline-minus-fallback (same as the
-      // original standalone overlay path). Using min() guards against a
-      // partial VV shrink under the threshold over-subtracting further.
-      height = Math.min(height, Math.max(0, fallbackBase - fallback))
-      // Leave offsetTop alone when the browser already scrolled the VV;
-      // only zero it for pure overlay cases (offsetTop was 0).
-      if (offsetTop < KEYBOARD_OPEN_THRESHOLD_PX) offsetTop = 0
-      keyboardOpen = true
+    if (fallback > 0) {
+      if (keyboardInset >= fallback) {
+        // Real shrink already large enough — keep measured height/inset.
+        keyboardOpen = true
+      } else {
+        height = Math.max(0, liveHeight - fallback)
+        keyboardInset = fallback
+        // Leave offsetTop alone when the browser already scrolled the VV;
+        // only zero it for pure overlay cases (offsetTop was ~0).
+        if (offsetTop < KEYBOARD_OPEN_THRESHOLD_PX) offsetTop = 0
+        keyboardOpen = true
+      }
     }
   }
 
