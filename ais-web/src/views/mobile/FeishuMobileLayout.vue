@@ -87,7 +87,6 @@ function applyShellGeometry(state: VisualViewportState) {
 function pinPageShell(forceFallback?: boolean) {
   const force = forceFallback === true || shouldForceKeyboardFallback()
   const state = pinShellToVisualViewport(pageRef.value, { forceKeyboardFallback: force })
-  console.warn('[KBD] pinPageShell', { force, height: state.height, keyboardOpen: state.keyboardOpen, keyboardInset: state.keyboardInset, forceFallback })
   applyViewportState(state)
   return state
 }

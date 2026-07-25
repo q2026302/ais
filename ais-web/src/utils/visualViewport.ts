@@ -166,7 +166,6 @@ export function computeVisualViewportState(env: VisualViewportEnv): VisualViewpo
   if (env.forceKeyboardFallback) {
     const liveHeight = height
     const fallbackBase = liveHeight > 0 ? liveHeight : baselineHeight
-    console.warn('[KBD] compute', { baselineHeight, liveHeight, keyboardInset, fallbackBase, screenHeight: env.screenHeight, innerHeight: env.innerHeight, vvHeight: env.visualViewport?.height })
     const fallback = Math.min(
       STANDALONE_KEYBOARD_FALLBACK_MAX_PX,
       Math.round(fallbackBase * STANDALONE_KEYBOARD_FALLBACK_RATIO),

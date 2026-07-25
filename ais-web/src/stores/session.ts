@@ -136,7 +136,6 @@ export const useSessionStore = defineStore('session', () => {
     if (activity > ts) ts = activity
     const prev = getLastViewed(sessionId)
     if (prev != null && prev >= ts) return
-    console.warn('[UNREAD] recordLastViewed', { sessionId, activity, ts, prev, active: activeSessionId.value })
     lastViewedAt.value = { ...lastViewedAt.value, [String(sessionId)]: ts }
     saveLastViewedMap(lastViewedAt.value)
   }
@@ -190,10 +189,7 @@ export const useSessionStore = defineStore('session', () => {
     // and a later message arrives. Manual mark-as-unread still works via unreadSessions.
     if (viewed == null) return false
 
-    const activity = sessionActivityTime(session)
-    const result = activity > viewed
-    console.warn('[UNREAD] isUnread', { sessionId, active: activeSessionId.value, activity, viewed, result })
-    return result
+    return sessionActivityTime(session) > viewed
   }
 
   /**
@@ -211,7 +207,6 @@ export const useSessionStore = defineStore('session', () => {
 
     for (const session of sessions.value) {
       const activity = sessionActivityTime(session)
-      console.warn('[UNREAD] syncAuto', { sessionId: session.id, activity, viewed: getLastViewed(session.id), isActive: activeSessionId.value === session.id })
       if (activeSessionId.value === session.id) {
         // User is looking at this session — whatever just arrived is already seen.
         if (activity > 0) {
