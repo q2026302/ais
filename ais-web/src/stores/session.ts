@@ -940,6 +940,7 @@ export const useSessionStore = defineStore('session', () => {
     markAsRead,
     isPinned,
     isUnread,
+    getLastViewed,
     getLastMessage,
   }
 })

@@ -165,20 +165,25 @@ export function computeVisualViewportState(env: VisualViewportEnv): VisualViewpo
   //  3. Otherwise shrink the live height by the full fallback inset.
   if (env.forceKeyboardFallback) {
     const liveHeight = height
-    const fallbackBase = liveHeight > 0 ? liveHeight : baselineHeight
     const fallback = Math.min(
       STANDALONE_KEYBOARD_FALLBACK_MAX_PX,
-      Math.round(fallbackBase * STANDALONE_KEYBOARD_FALLBACK_RATIO),
+      Math.round(liveHeight * STANDALONE_KEYBOARD_FALLBACK_RATIO),
     )
     if (fallback > 0) {
-      if (keyboardInset >= fallback) {
-        // Real shrink already large enough — keep measured height/inset.
+      // Detect actual viewport shrink (not screen-chrome gap).
+      // On iOS PWA: vv.height < clientHeight (keyboard shrinks viewport)
+      // On Android PWA overlay: all heights equal (no shrink)
+      const maxUnshrunk = Math.max(
+        env.clientHeight || 0,
+        env.innerHeight || 0,
+        liveHeight,
+      )
+      const actualShrink = Math.max(0, maxUnshrunk - liveHeight)
+      if (actualShrink >= fallback) {
         keyboardOpen = true
       } else {
         height = Math.max(0, liveHeight - fallback)
         keyboardInset = fallback
-        // Leave offsetTop alone when the browser already scrolled the VV;
-        // only zero it for pure overlay cases (offsetTop was ~0).
         if (offsetTop < KEYBOARD_OPEN_THRESHOLD_PX) offsetTop = 0
         keyboardOpen = true
       }
