@@ -832,6 +832,13 @@ onBeforeUnmount(() => {
   setSelectionSuppressed(false)
   // Ensure layout bottom-nav returns if this page unmounts while focused.
   mobileKeyboard?.setComposerBlur()
+  // Leaving the chat route: drop activeSessionId so list-page isUnread /
+  // syncAutoUnreadFromSessions can show a red-dot for this session when a
+  // background poll / in-flight chat finishes after we leave.
+  const leavingId = routeSessionId()
+  if (leavingId != null && store.activeSessionId === leavingId) {
+    store.clearActiveSession()
+  }
   document.title = originalTitle
 })
 </script>
@@ -1204,23 +1211,27 @@ onBeforeUnmount(() => {
   --mobile-border: #e5e9f2;
   /*
    * Nested inside FeishuMobileLayout's layout-content. Layout owns the fixed
-   * shell + visualViewport geometry; this page fills the remaining flex space
-   * so header/conversation/composer stack correctly without a second fixed layer.
+   * shell + visualViewport geometry (pinShellToVisualViewport).
    *
-   * Critical for PWA standalone: do NOT use position:fixed here — a second
-   * fixed layer would ignore the parent shell's height shrink and leave the
-   * composer under the overlay keyboard.
+   * Absolute-fill (not position:fixed, not height:100% alone):
+   *  - A second position:fixed layer would ignore the parent shell's height
+   *    shrink and leave the composer under overlay keyboards (Android WebAPK).
+   *  - height:100% is flaky when the parent only has an intrinsic flex size;
+   *    absolute inset:0 tracks the parent's concrete box as pinShell rewrites
+   *    shell height when the soft keyboard opens in PWA standalone.
+   * Feishu / in-app WebViews already resize the outer shell correctly, so the
+   * same absolute-fill chain works there without a standalone-only branch.
    */
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
   width: 100%;
   max-width: 100%;
   min-height: 0;
   min-width: 0;
-  height: 100%;
-  max-height: 100%;
+  height: auto;
+  max-height: none;
   box-sizing: border-box;
   /* Keep page non-scrolling; conversation is the scroll container. */
   overflow: hidden;

@@ -370,6 +370,7 @@ onBeforeUnmount(() => {
 }
 
 .layout-content {
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -386,12 +387,17 @@ onBeforeUnmount(() => {
 /* Chat page owns its internal scroll; keep content region non-scrolling so the
    nested chat shell can size to the remaining viewport above the keyboard. */
 .feishu-layout.chat-route .layout-content {
+  position: relative;
   overflow: hidden;
-  /* Force a definite height for percentage-sized children (chat-page).
-     Using 100% of the pinned shell (not auto) so the nested flex column
-     receives a concrete containing block while the keyboard is open. */
+  /* Force a definite height for percentage/absolute children (chat-page).
+     Using 100% of the pinned shell (not auto) so the nested chat shell
+     receives a concrete containing block while the keyboard is open.
+     Absolute-fill children track this box as the shell height is rewritten
+     by pinShellToVisualViewport (PWA standalone overlay keyboards). */
   height: 100%;
   max-height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 .bottom-nav {

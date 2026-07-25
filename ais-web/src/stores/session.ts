@@ -347,6 +347,17 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  /**
+   * Leave the current chat without deleting it.
+   * Mobile list pages call this so isUnread / syncAutoUnreadFromSessions can
+   * surface red-dots for the session the user just left (activeSessionId would
+   * otherwise suppress them).
+   */
+  function clearActiveSession() {
+    activeSessionId.value = null
+    messages.value = []
+  }
+
   async function generate(
     prompt: string,
     attachmentIds?: number[],
@@ -532,6 +543,25 @@ export const useSessionStore = defineStore('session', () => {
     return status
   }
 
+  /**
+   * Terminal status for a polled message (SUCCESS / FAILED).
+   * Always refresh the sessions list so previews + auto-unread red-dots update,
+   * even when the user has left this session. Only reload messages when the user
+   * is still viewing the same session.
+   */
+  async function handlePolledTerminalStatus(sessionId: number) {
+    if (activeSessionId.value === sessionId) {
+      try {
+        await selectSession(sessionId)
+      } catch {
+        /* ignore reload errors; still refresh list below */
+      }
+    }
+    // Always sync list + unread, including when the user is on another session
+    // or the sessions list page (activeSessionId may be null / different).
+    await fetchSessions()
+  }
+
   function startPolling(sessionId: number, messageId: number) {
     stopPolling(messageId)
     const interval = setInterval(async () => {
@@ -539,7 +569,7 @@ export const useSessionStore = defineStore('session', () => {
         const status = await pollMessageStatus(sessionId, messageId)
         if (status.status === 'SUCCESS' || status.status === 'FAILED') {
           stopPolling(messageId)
-          if (activeSessionId.value === sessionId) await selectSession(sessionId)
+          await handlePolledTerminalStatus(sessionId)
         }
       } catch {
         // Keep the placeholder visible and retry on the next interval. A transient
@@ -550,7 +580,7 @@ export const useSessionStore = defineStore('session', () => {
     void pollMessageStatus(sessionId, messageId).then(async (status) => {
       if (status.status === 'SUCCESS' || status.status === 'FAILED') {
         stopPolling(messageId)
-        if (activeSessionId.value === sessionId) await selectSession(sessionId)
+        await handlePolledTerminalStatus(sessionId)
       }
     }).catch(() => undefined)
   }
@@ -831,6 +861,7 @@ export const useSessionStore = defineStore('session', () => {
     updateSessionTitle,
     deleteSession,
     selectSession,
+    clearActiveSession,
     generate,
     chat,
     draw,
