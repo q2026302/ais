@@ -6,6 +6,7 @@ import { providerApi } from '@/api/providers'
 
 const PINNED_STORAGE_KEY = 'ais_pinned'
 const UNREAD_STORAGE_KEY = 'ais_unread'
+const LAST_VIEWED_STORAGE_KEY = 'ais_last_viewed'
 
 function loadIdList(key: string): number[] {
   try {
@@ -24,6 +25,31 @@ function loadIdList(key: string): number[] {
 function saveIdList(key: string, ids: number[]) {
   try {
     localStorage.setItem(key, JSON.stringify(ids))
+  } catch {
+    // ignore quota / private mode errors
+  }
+}
+
+function loadLastViewedMap(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(LAST_VIEWED_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const result: Record<string, number> = {}
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const ts = Number(value)
+      if (Number.isFinite(ts) && ts > 0) result[key] = ts
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+function saveLastViewedMap(map: Record<string, number>) {
+  try {
+    localStorage.setItem(LAST_VIEWED_STORAGE_KEY, JSON.stringify(map))
   } catch {
     // ignore quota / private mode errors
   }
@@ -50,6 +76,8 @@ export const useSessionStore = defineStore('session', () => {
   // pinnedSessions order: newest pin first (index 0)
   const pinnedSessions = ref<number[]>(loadIdList(PINNED_STORAGE_KEY))
   const unreadSessions = ref<number[]>(loadIdList(UNREAD_STORAGE_KEY))
+  // sessionId -> last viewed timestamp (ms). Used for automatic unread dots.
+  const lastViewedAt = ref<Record<string, number>>(loadLastViewedMap())
 
   // Polling state for draw generation
   const pollingIntervals = ref<Map<number, ReturnType<typeof setInterval>>>(new Map())
@@ -63,6 +91,39 @@ export const useSessionStore = defineStore('session', () => {
       pinnedSessions.value = [sessionId, ...pinnedSessions.value]
     }
     saveIdList(PINNED_STORAGE_KEY, pinnedSessions.value)
+  }
+
+  function getLastViewed(sessionId: number): number | null {
+    const ts = lastViewedAt.value[String(sessionId)]
+    return typeof ts === 'number' && Number.isFinite(ts) && ts > 0 ? ts : null
+  }
+
+  function recordLastViewed(sessionId: number, at?: number) {
+    const session = sessions.value.find((item) => item.id === sessionId)
+    const activity = session ? Date.parse(session.lastMessageAt || session.updatedAt) : NaN
+    const base = typeof at === 'number' && Number.isFinite(at) ? at : Date.now()
+    const ts = Number.isFinite(activity) ? Math.max(base, activity) : base
+    lastViewedAt.value = { ...lastViewedAt.value, [String(sessionId)]: ts }
+    saveLastViewedMap(lastViewedAt.value)
+  }
+
+  function clearLastViewed(sessionId: number) {
+    if (!(String(sessionId) in lastViewedAt.value)) return
+    const next = { ...lastViewedAt.value }
+    delete next[String(sessionId)]
+    lastViewedAt.value = next
+    saveLastViewedMap(lastViewedAt.value)
+  }
+
+  function sessionActivityTime(session: Session): number {
+    const raw = session.lastMessageAt || session.updatedAt
+    const ts = Date.parse(raw)
+    return Number.isFinite(ts) ? ts : 0
+  }
+
+  function sessionHasMessages(session: Session): boolean {
+    if (session.lastMessageAt) return true
+    return Boolean((session.lastMessagePreview || '').trim())
   }
 
   function markAsUnread(sessionId: number) {
@@ -82,13 +143,46 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   function isUnread(sessionId: number) {
-    return unreadSessions.value.includes(sessionId)
+    if (activeSessionId.value === sessionId) return false
+    if (unreadSessions.value.includes(sessionId)) return true
+
+    const session = sessions.value.find((item) => item.id === sessionId)
+    if (!session || !sessionHasMessages(session)) return false
+
+    const viewed = getLastViewed(sessionId)
+    // Never opened in this client → no auto red-dot until the user has viewed it once
+    // and a later message arrives. Manual mark-as-unread still works via unreadSessions.
+    if (viewed == null) return false
+
+    return sessionActivityTime(session) > viewed
+  }
+
+  /**
+   * After sessions list refresh, promote sessions with newer activity than last-viewed
+   * into the manual unread set so the red-dot persists even if timestamps are equalized later.
+   */
+  function syncAutoUnreadFromSessions() {
+    let changed = false
+    const next = new Set(unreadSessions.value)
+    for (const session of sessions.value) {
+      if (activeSessionId.value === session.id) continue
+      if (!sessionHasMessages(session)) continue
+      const viewed = getLastViewed(session.id)
+      if (viewed == null) continue
+      if (sessionActivityTime(session) > viewed) {
+        if (!next.has(session.id)) {
+          next.add(session.id)
+          changed = true
+        }
+      }
+    }
+    if (!changed) return
+    unreadSessions.value = Array.from(next)
+    saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
   }
 
   function sessionSortTime(session: Session): number {
-    const raw = session.lastMessageAt || session.updatedAt
-    const ts = Date.parse(raw)
-    return Number.isFinite(ts) ? ts : 0
+    return sessionActivityTime(session)
   }
 
   const sortedSessions = computed(() => {
@@ -190,6 +284,7 @@ export const useSessionStore = defineStore('session', () => {
   async function fetchSessions() {
     try {
       sessions.value = await sessionApi.list()
+      syncAutoUnreadFromSessions()
     } catch (e) {
       console.error('Failed to fetch sessions', e)
     }
@@ -230,15 +325,19 @@ export const useSessionStore = defineStore('session', () => {
       unreadSessions.value = unreadSessions.value.filter((item) => item !== id)
       saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
     }
+    clearLastViewed(id)
     await fetchSessions()
   }
 
   async function selectSession(id: number) {
     activeSessionId.value = id
     markAsRead(id)
+    recordLastViewed(id)
     const selectedMessages = await sessionApi.getMessages(id)
     if (activeSessionId.value === id) {
       messages.value = selectedMessages
+      // Keep last-viewed ahead of any messages just loaded for this session.
+      recordLastViewed(id)
       // Resume polling for any PENDING draw messages
       for (const msg of selectedMessages) {
         if (msg.status === 'PENDING' && msg.messageType === 'DRAW_RESPONSE') {

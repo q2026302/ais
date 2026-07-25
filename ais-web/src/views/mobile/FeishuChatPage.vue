@@ -261,7 +261,6 @@ async function initialize() {
 }
 
 async function createNewSession() {
-  if (store.loading) return
   try {
     const session = await store.createSession()
     if (!session) return
@@ -277,7 +276,6 @@ async function createNewSession() {
 }
 
 async function selectSession(id: number) {
-  if (store.loading) return
   try {
     await store.selectSession(id)
     syncProviderSelection()
@@ -658,16 +656,68 @@ async function saveEdit() {
   }
 }
 
+function copyTextViaExecCommand(text: string): boolean {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '0'
+  textarea.style.left = '0'
+  textarea.style.width = '1px'
+  textarea.style.height = '1px'
+  textarea.style.padding = '0'
+  textarea.style.border = '0'
+  textarea.style.outline = '0'
+  textarea.style.boxShadow = 'none'
+  textarea.style.background = 'transparent'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+
+  const selection = document.getSelection()
+  const previousRange = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, textarea.value.length)
+
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    ok = false
+  }
+
+  document.body.removeChild(textarea)
+  if (previousRange && selection) {
+    selection.removeAllRanges()
+    selection.addRange(previousRange)
+  } else {
+    window.getSelection()?.removeAllRanges()
+  }
+  return ok
+}
+
 async function copyText(text: string, successMessage = '内容已复制') {
   if (!text.trim()) return
+
   try {
-    await navigator.clipboard.writeText(text)
-    window.getSelection()?.removeAllRanges()
-    ElMessage.success(successMessage)
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      window.getSelection()?.removeAllRanges()
+      ElMessage.success(successMessage)
+      return
+    }
   } catch {
-    window.getSelection()?.removeAllRanges()
-    ElMessage.error('复制失败，请手动选择复制')
+    // Fall through to execCommand fallback (PWA / WebView / non-HTTPS).
   }
+
+  if (copyTextViaExecCommand(text)) {
+    ElMessage.success(successMessage)
+    return
+  }
+
+  window.getSelection()?.removeAllRanges()
+  ElMessage.error('复制失败，请手动选择复制')
 }
 
 async function deleteMessage(message: Message) {
@@ -762,7 +812,6 @@ watch(
     const sessionId = Number(Array.isArray(id) ? id[0] : id)
     if (!Number.isFinite(sessionId) || sessionId <= 0) return
     if (store.activeSessionId === sessionId) return
-    if (store.loading) return
     try {
       await store.selectSession(sessionId)
       syncProviderSelection()
@@ -804,7 +853,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="header-actions">
-        <button class="header-icon-button" type="button" :disabled="store.loading" aria-label="新建会话" title="新建会话" @click="createNewSession"><Plus /></button>
+        <button class="header-icon-button" type="button" aria-label="新建会话" title="新建会话" @click="createNewSession"><Plus /></button>
       </div>
     </header>
 
