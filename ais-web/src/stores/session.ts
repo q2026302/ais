@@ -100,40 +100,104 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
+   * Per-message activity on the server timeline. Must match backend
+   * SessionService.messageActivityAt / sessions-list lastMessageAt:
+   * coalesce(updatedAt, createdAt). updatedAt advances on PENDING →
+   * SUCCESS/FAILED so completion after the user leaves still counts as
+   * newer activity; legacy rows without updatedAt fall back to createdAt.
+   */
+  function messageActivityTime(message: Pick<Message, 'createdAt' | 'updatedAt'>): number {
+    return parseApiDate(message.updatedAt || message.createdAt)?.getTime() ?? 0
+  }
+
+  /**
    * Latest activity the user can already see for a session, on the server
    * timeline. Prefer session.lastMessageAt; when the session is open and
-   * messages are loaded, also cover any message createdAt that the list
-   * endpoint has not caught up with yet.
+   * messages are loaded, also cover any in-view message activity the list
+   * endpoint has not caught up with yet (same coalesce clock).
    */
   function visibleActivityTime(sessionId: number): number {
     const session = sessions.value.find((item) => item.id === sessionId)
     let latest = session ? sessionActivityTime(session) : 0
     if (activeSessionId.value === sessionId) {
       for (const message of messages.value) {
-        const ts = parseApiDate(message.createdAt)?.getTime() ?? 0
+        const ts = messageActivityTime(message)
         if (ts > latest) latest = ts
       }
     }
     return latest
   }
 
+  /**
+   * Old clients wrote Date.now() into lastViewedAt. Those client-wall-clock
+   * values sit permanently above server activity timestamps, so
+   * `activity > viewed` stays false forever (prev >= ts early-return also
+   * blocks later server-timeline writes). Clamp polluted entries down to the
+   * known server activity.
+   *
+   * Ceiling uses visibleActivityTime (not just list lastMessageAt): while a
+   * session is open, recordLastViewed may advance viewed to a message
+   * activity the list endpoint has not caught up with yet. Treating that
+   * gap as pollution would clamp the watermark back and flash a false
+   * red-dot after leaving. For inactive sessions visibleActivityTime falls
+   * back to list activity, so obvious Date.now() pollution is still fixed.
+   */
+  function sanitizePollutedLastViewed(
+    map: Record<string, number> = lastViewedAt.value,
+  ): { map: Record<string, number>; changed: boolean } {
+    if (sessions.value.length === 0) return { map, changed: false }
+
+    let next = map
+    let changed = false
+
+    for (const session of sessions.value) {
+      const key = String(session.id)
+      const viewed = next[key]
+      if (typeof viewed !== 'number' || !Number.isFinite(viewed) || viewed <= 0) continue
+      // Include in-view message activity for the active session so a lagging
+      // sessions-list lastMessageAt cannot classify a legitimate server-timeline
+      // watermark as Date.now() pollution.
+      const activity = visibleActivityTime(session.id)
+      if (activity > 0 && viewed > activity) {
+        if (next === map) next = { ...map }
+        next[key] = activity
+        changed = true
+      }
+    }
+
+    return { map: next, changed }
+  }
+
   function recordLastViewed(sessionId: number, at?: number) {
+    // First, repair any historical Date.now() pollution for this session so the
+    // prev >= ts early-return cannot permanently pin an inflated watermark.
     const activity = visibleActivityTime(sessionId)
-    // Stay on the server-activity timeline. Mixing Date.now() with server
-    // lastMessageAt makes `activity > viewed` fail under even small clock skew
-    // (client ahead of server → every later message still looks "already seen").
+    const prevRaw = getLastViewed(sessionId)
+    if (prevRaw != null && activity > 0 && prevRaw > activity) {
+      lastViewedAt.value = { ...lastViewedAt.value, [String(sessionId)]: activity }
+      saveLastViewedMap(lastViewedAt.value)
+    }
+
+    // Stay on the server-activity timeline. Never write Date.now() as a long-term
+    // watermark — client wall clock mixes with server lastMessageAt and, under
+    // even small clock skew, makes every later message look "already seen".
     let ts: number
     if (typeof at === 'number' && Number.isFinite(at) && at > 0) {
       ts = at
     } else if (activity > 0) {
       ts = activity
     } else {
-      // Empty session with no server activity yet — client stamp is fine until
-      // the first message arrives; syncAutoUnread also runs after fetchSessions.
-      ts = Date.now()
+      // Empty session / list not loaded: do not write a client stamp that would
+      // suppress future server activity. Leave lastViewed unset until we have
+      // a server timeline value.
+      return
     }
     // Always cover activity already visible while the user is viewing.
     if (activity > ts) ts = activity
+    // Explicit `at` must also stay on the server timeline when activity is known:
+    // never let a caller push viewed past current server activity.
+    if (activity > 0 && ts > activity) ts = activity
+
     const prev = getLastViewed(sessionId)
     if (prev != null && prev >= ts) return
     lastViewedAt.value = { ...lastViewedAt.value, [String(sessionId)]: ts }
@@ -148,12 +212,24 @@ export const useSessionStore = defineStore('session', () => {
     saveLastViewedMap(lastViewedAt.value)
   }
 
+  /**
+   * Auto-unread activity watermark for a session.
+   * Prefer lastMessageAt (message coalesce clock from the list endpoint). Do
+   * NOT fold in session.updatedAt here — title renames bump session.updatedAt
+   * without new message activity and would flash false red-dots.
+   * Fall back to session.updatedAt only for empty / older payloads.
+   */
   function sessionActivityTime(session: Session): number {
-    const raw = session.lastMessageAt || session.updatedAt
-    // parseApiDate handles UTC `Z` / offset / legacy zoneless values correctly.
-    // Date.parse alone mis-handles zoneless backend strings on some engines.
-    const date = parseApiDate(raw)
-    return date ? date.getTime() : 0
+    const lastMessageMs = parseApiDate(session.lastMessageAt)?.getTime() ?? 0
+    if (lastMessageMs > 0) return lastMessageMs
+    return parseApiDate(session.updatedAt)?.getTime() ?? 0
+  }
+
+  /** List sort clock: message activity, or title-touch updatedAt when newer. */
+  function sessionSortTime(session: Session): number {
+    const lastMessageMs = parseApiDate(session.lastMessageAt)?.getTime() ?? 0
+    const updatedMs = parseApiDate(session.updatedAt)?.getTime() ?? 0
+    return Math.max(lastMessageMs, updatedMs)
   }
 
   function sessionHasMessages(session: Session): boolean {
@@ -198,29 +274,37 @@ export const useSessionStore = defineStore('session', () => {
    *
    * For the session currently open, bump lastViewed up to the fresh activity so
    * leaving the chat does not flash a red-dot for messages the user already saw.
+   *
+   * Also clamps any lastViewedAt entries that sit above the server activity
+   * timeline (legacy Date.now() pollution).
    */
   function syncAutoUnreadFromSessions() {
     let unreadChanged = false
     let viewedChanged = false
     const nextUnread = new Set(unreadSessions.value)
-    let nextViewed = lastViewedAt.value
+
+    // Repair polluted watermarks first so subsequent comparisons use server timeline.
+    const sanitized = sanitizePollutedLastViewed(lastViewedAt.value)
+    let nextViewed = sanitized.map
+    if (sanitized.changed) viewedChanged = true
 
     for (const session of sessions.value) {
       const activity = sessionActivityTime(session)
+      const key = String(session.id)
       if (activeSessionId.value === session.id) {
         // User is looking at this session — whatever just arrived is already seen.
         if (activity > 0) {
-          const viewed = getLastViewed(session.id)
+          const viewed = typeof nextViewed[key] === 'number' ? nextViewed[key] : null
           if (viewed == null || activity > viewed) {
             if (nextViewed === lastViewedAt.value) nextViewed = { ...lastViewedAt.value }
-            nextViewed[String(session.id)] = activity
+            nextViewed[key] = activity
             viewedChanged = true
           }
         }
         continue
       }
       if (!sessionHasMessages(session)) continue
-      const viewed = getLastViewed(session.id)
+      const viewed = typeof nextViewed[key] === 'number' ? nextViewed[key] : null
       if (viewed == null) continue
       if (activity > viewed && !nextUnread.has(session.id)) {
         nextUnread.add(session.id)
@@ -236,10 +320,6 @@ export const useSessionStore = defineStore('session', () => {
       unreadSessions.value = Array.from(nextUnread)
       saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
     }
-  }
-
-  function sessionSortTime(session: Session): number {
-    return sessionActivityTime(session)
   }
 
   const sortedSessions = computed(() => {
@@ -266,7 +346,8 @@ export const useSessionStore = defineStore('session', () => {
       if (!preview && last.imageUrl) preview = '[图片]'
       if (!preview && last.messageType === 'DRAW_REQUEST') preview = last.drawPrompt || '[绘画请求]'
       if (preview.length > 60) preview = `${preview.slice(0, 60)}…`
-      return { preview, at: last.createdAt || session.updatedAt }
+      // Same activity clock as list lastMessageAt / last-viewed watermark.
+      return { preview, at: last.updatedAt || last.createdAt || session.updatedAt }
     }
 
     const preview = (session.lastMessagePreview || '').trim()

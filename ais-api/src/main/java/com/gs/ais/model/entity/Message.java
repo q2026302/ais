@@ -96,15 +96,30 @@ public class Message {
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
+    /**
+     * Advances on every save (including PENDING → SUCCESS/FAILED content updates).
+     * Session list lastMessageAt uses this so auto-unread red-dots fire when an
+     * in-flight AI reply finishes after the user has already left the chat.
+     */
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        createdAt = now;
+        updatedAt = now;
         if (messageType == null) {
             messageType = MessageType.CHAT;
         }
         if (status == null) {
             status = MessageStatus.SUCCESS;
         }
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
     }
 
     public Message() {
@@ -160,4 +175,6 @@ public class Message {
     public void setEdited(boolean edited) { this.edited = edited; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }
