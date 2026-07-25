@@ -842,25 +842,31 @@ onBeforeUnmount(() => {
   document.title = originalTitle
 })
 
-/** Debug overlay (visible after 5 taps on the header title in the app). */
+/** Debug overlay — toggle via the floating ⚙ button (does not steal focus). */
 const debugVisible = ref(false)
-let debugTapCount = 0
-function onDebugTap() {
-  debugTapCount++
-  if (debugTapCount >= 5) { debugVisible.value = !debugVisible.value; debugTapCount = 0 }
-  window.setTimeout(() => { debugTapCount = 0 }, 2000)
+function toggleDebug(e: MouseEvent | TouchEvent) {
+  e.preventDefault()
+  // Stop propagation so input fields keep focus.
+  e.stopPropagation()
+  debugVisible.value = !debugVisible.value
 }
 const debugInfo = computed(() => {
   const sid = store.activeSessionId
   const s = sid != null ? store.sessions.find(item => item.id === sid) : null
+  const isStandalone = typeof window !== 'undefined' && detectStandalone()
   return {
-    kbd: `inputChromeCollapsed=${inputChromeCollapsed.value} keyboardOpen=${mobileKeyboard?.keyboardOpen.value} composerFocused=${mobileKeyboard?.composerFocused.value}`,
+    kbd: `colpsd=${inputChromeCollapsed.value} kbd=${mobileKeyboard?.keyboardOpen.value} focus=${mobileKeyboard?.composerFocused.value}`,
+    standalone: isStandalone ? 'PWA' : 'browser',
     viewed: sid != null ? store.getLastViewed(sid) : 'N/A',
     lastMsgAt: s?.lastMessageAt ?? s?.updatedAt ?? 'N/A',
-    messages: store.messages.length,
-    loading: store.loading,
+    ex: `msg=${store.messages.length} load=${store.loading} sid=${sid}`,
   }
 })
+function detectStandalone() {
+  try {
+    return window.matchMedia?.('(display-mode: standalone)').matches || (navigator as any).standalone
+  } catch { return false }
+}
 </script>
 
 <template>
@@ -875,7 +881,7 @@ const debugInfo = computed(() => {
         </button>
         <span class="brand-icon"><MagicStick /></span>
         <div class="brand-copy">
-          <strong @click="onDebugTap">{{ activeSessionTitle }}</strong>
+          <strong>{{ activeSessionTitle }}</strong>
           <span>{{ mode === 'draw' ? 'AI 绘画创作' : 'AI 对话助手' }}</span>
         </div>
       </div>
@@ -883,6 +889,15 @@ const debugInfo = computed(() => {
         <button class="header-icon-button" type="button" aria-label="新建会话" title="新建会话" @click="createNewSession"><Plus /></button>
       </div>
     </header>
+
+    <!-- Debug toggle — does not steal focus from composer -->
+    <button
+      class="debug-toggle"
+      type="button"
+      aria-label="Debug"
+      @mousedown.prevent="toggleDebug"
+      @touchstart.prevent="toggleDebug"
+    >⚙</button>
 
     <section ref="messagesRef" class="conversation" :class="{ empty: !store.messages.length }">
       <div v-if="initializing" class="center-state">
@@ -1157,13 +1172,13 @@ const debugInfo = computed(() => {
       </Transition>
     </Teleport>
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
-    <!-- Debug overlay: tap header title 5x to toggle -->
+    <!-- Debug overlay: tap ⚙ to toggle -->
     <div v-if="debugVisible" class="debug-overlay">
       <div><code>kbd: {{ debugInfo.kbd }}</code></div>
+      <div><code>mode: {{ debugInfo.standalone }}</code></div>
       <div><code>viewed: {{ debugInfo.viewed }}</code></div>
-      <div><code>lastMsgAt: {{ debugInfo.lastMsgAt }}</code></div>
-      <div><code>messages: {{ debugInfo.messages }} loading: {{ debugInfo.loading }}</code></div>
-      <div><code>sid: {{ store.activeSessionId }}</code></div>
+      <div><code>lastMsg: {{ debugInfo.lastMsgAt }}</code></div>
+      <div><code>{{ debugInfo.ex }}</code></div>
     </div>
   </main>
 </template>
@@ -2107,4 +2122,29 @@ const debugInfo = computed(() => {
   white-space: pre-wrap;
   word-break: break-all;
 }
+/* Debug toggle — tiny button, does not steal focus */
+.debug-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 9998;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  border: 0;
+  border-radius: 50%;
+  color: rgba(0, 0, 0, .35);
+  background: rgba(200, 200, 210, .35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: .5;
+  transition: opacity .15s;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+.debug-toggle:active { opacity: 1; }
 </style>
