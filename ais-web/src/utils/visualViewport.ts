@@ -6,12 +6,13 @@
  * reflects the actually visible area; we mirror it into CSS custom properties
  * so full-height shells can pin to the keyboard-safe region.
  *
- * Android installed PWAs (esp. Xiaomi / WebAPK) frequently overlay the keyboard
- * without shrinking visualViewport or firing reliable resize events. For those
- * cases we combine:
+ * Android installed PWAs (esp. Xiaomi / WebAPK) and some Android browser builds
+ * frequently overlay the keyboard without shrinking visualViewport or firing
+ * reliable resize events. VirtualKeyboard may exist with overlaysContent=true
+ * while boundingRect.height stays 0. For those cases we combine:
  *  - min(visualViewport.height, innerHeight, clientHeight)
  *  - VirtualKeyboard API geometry when available
- *  - focus-driven fallback inset in standalone display mode
+ *  - focus-driven fallback inset (standalone PWA, or VirtualKeyboard present)
  */
 
 export interface VisualViewportState {
@@ -214,6 +215,46 @@ export function isStandaloneDisplayMode(
   }
   const nav = win.navigator as Navigator & { standalone?: boolean }
   return Boolean(nav?.standalone)
+}
+
+/**
+ * Chromium VirtualKeyboard API presence. On some Android browser / WebView
+ * builds the API exists and reports `overlaysContent=true`, but
+ * `boundingRect.height` stays 0 and visualViewport never shrinks — so the
+ * page must apply its own overlay-keyboard fallback while focused.
+ */
+export function hasVirtualKeyboardApi(
+  win: Window & typeof globalThis = window,
+): boolean {
+  if (typeof win === 'undefined') return false
+  try {
+    return Boolean(
+      (win.navigator as Navigator & { virtualKeyboard?: unknown }).virtualKeyboard,
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * When to force the overlay-keyboard height fallback while an editable field
+ * / composer is focused.
+ *
+ * Covers two environments that leave layout/visual height unchanged:
+ *  1. Installed PWA / WebAPK (`display-mode: standalone|fullscreen|minimal-ui`)
+ *  2. Browser / in-app WebView that exposes VirtualKeyboard API in overlay
+ *     mode but reports zero geometry (common on Android Chrome / OEM browsers)
+ *
+ * Feishu / ordinary mobile browsers without VirtualKeyboard still resize the
+ * viewport themselves, so they are intentionally left out.
+ */
+export function shouldForceOverlayKeyboardFallback(
+  focused: boolean,
+  win: Window & typeof globalThis = window,
+): boolean {
+  if (!focused) return false
+  if (typeof win === 'undefined') return false
+  return isStandaloneDisplayMode(win) || hasVirtualKeyboardApi(win)
 }
 
 function readVirtualKeyboardInset(win: Window & typeof globalThis): number {

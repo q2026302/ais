@@ -5,8 +5,8 @@ import { MagicStick, MoreFilled, Picture, Plus, ChatDotRound, User } from '@elem
 import { useSessionStore } from '@/stores/session'
 import {
   applyVisualViewportCssVars,
-  isStandaloneDisplayMode,
   pinShellToVisualViewport,
+  shouldForceOverlayKeyboardFallback,
   subscribeVisualViewport,
   type VisualViewportState,
 } from '@/utils/visualViewport'
@@ -57,16 +57,15 @@ const hideBottomNav = computed(
 
 /**
  * Soft keyboards that overlay content without shrinking visualViewport:
- * primarily Android standalone / WebAPK (display-mode: standalone|fullscreen|
- * minimal-ui, or iOS navigator.standalone).
+ *  - Android standalone / WebAPK (display-mode: standalone|fullscreen|minimal-ui)
+ *  - Android browser / WebView with VirtualKeyboard API in overlay mode but
+ *    zero geometry (vv/innerHeight stay full-screen; vk.boundingRect.height=0)
  *
- * Feishu / in-app WebViews already resize correctly, so we deliberately do NOT
- * force the height fallback there — matching FeishuH5View.vue behaviour.
+ * Ordinary mobile browsers without VirtualKeyboard already resize correctly,
+ * so we deliberately do NOT force the height fallback there.
  */
 function shouldForceKeyboardFallback(): boolean {
-  if (typeof window === 'undefined') return false
-  if (!composerFocused.value) return false
-  return isStandaloneDisplayMode()
+  return shouldForceOverlayKeyboardFallback(composerFocused.value)
 }
 
 function applyViewportState(state: VisualViewportState) {
@@ -93,8 +92,8 @@ function pinPageShell(forceFallback?: boolean) {
 
 function setComposerFocus() {
   composerFocused.value = true
-  // Immediate pin + standalone fallback so Android PWA does not wait for VV.
-  pinPageShell(isStandaloneDisplayMode())
+  // Immediate pin + overlay fallback so Android does not wait for VV / VK geometry.
+  pinPageShell(shouldForceKeyboardFallback())
   // Re-pin on the next frames so delayed keyboard animations still shrink the shell.
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => {

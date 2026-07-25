@@ -1,8 +1,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   applyVisualViewportCssVars,
-  isStandaloneDisplayMode,
   pinShellToVisualViewport,
+  shouldForceOverlayKeyboardFallback,
   subscribeVisualViewport,
   type VisualViewportState,
 } from '@/utils/visualViewport'
@@ -43,7 +43,7 @@ export function useMobileKeyboard() {
   function pinPageShell(el: HTMLElement | null, forceFallback?: boolean) {
     const force =
       forceFallback === true ||
-      (typeof window !== 'undefined' && isStandaloneDisplayMode() && composerFocused.value)
+      shouldForceOverlayKeyboardFallback(composerFocused.value)
     const state = pinShellToVisualViewport(el, { forceKeyboardFallback: force })
     applyViewportState(state)
     return state
@@ -51,8 +51,8 @@ export function useMobileKeyboard() {
 
   function onComposerFocus(el?: HTMLElement | null) {
     composerFocused.value = true
-    // Immediate pin + standalone fallback so Android PWA does not wait for VV.
-    pinPageShell(el ?? null, isStandaloneDisplayMode())
+    // Immediate pin + overlay fallback so Android does not wait for VV / VK geometry.
+    pinPageShell(el ?? null, shouldForceOverlayKeyboardFallback(true))
   }
 
   function onComposerBlur(el?: HTMLElement | null) {
