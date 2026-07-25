@@ -841,6 +841,26 @@ onBeforeUnmount(() => {
   }
   document.title = originalTitle
 })
+
+/** Debug overlay (visible after 5 taps on the header title in the app). */
+const debugVisible = ref(false)
+let debugTapCount = 0
+function onDebugTap() {
+  debugTapCount++
+  if (debugTapCount >= 5) { debugVisible.value = !debugVisible.value; debugTapCount = 0 }
+  window.setTimeout(() => { debugTapCount = 0 }, 2000)
+}
+const debugInfo = computed(() => {
+  const sid = store.activeSessionId
+  const s = sid != null ? store.sessions.find(item => item.id === sid) : null
+  return {
+    kbd: `inputChromeCollapsed=${inputChromeCollapsed.value} keyboardOpen=${mobileKeyboard?.keyboardOpen.value} composerFocused=${mobileKeyboard?.composerFocused.value}`,
+    viewed: sid != null ? store.getLastViewed(sid) : 'N/A',
+    lastMsgAt: s?.lastMessageAt ?? s?.updatedAt ?? 'N/A',
+    messages: store.messages.length,
+    loading: store.loading,
+  }
+})
 </script>
 
 <template>
@@ -855,7 +875,7 @@ onBeforeUnmount(() => {
         </button>
         <span class="brand-icon"><MagicStick /></span>
         <div class="brand-copy">
-          <strong>{{ activeSessionTitle }}</strong>
+          <strong @click="onDebugTap">{{ activeSessionTitle }}</strong>
           <span>{{ mode === 'draw' ? 'AI 绘画创作' : 'AI 对话助手' }}</span>
         </div>
       </div>
@@ -1137,6 +1157,14 @@ onBeforeUnmount(() => {
       </Transition>
     </Teleport>
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
+    <!-- Debug overlay: tap header title 5x to toggle -->
+    <div v-if="debugVisible" class="debug-overlay">
+      <div><code>kbd: {{ debugInfo.kbd }}</code></div>
+      <div><code>viewed: {{ debugInfo.viewed }}</code></div>
+      <div><code>lastMsgAt: {{ debugInfo.lastMsgAt }}</code></div>
+      <div><code>messages: {{ debugInfo.messages }} loading: {{ debugInfo.loading }}</code></div>
+      <div><code>sid: {{ store.activeSessionId }}</code></div>
+    </div>
   </main>
 </template>
 
@@ -2058,5 +2086,25 @@ onBeforeUnmount(() => {
   -webkit-user-select: none !important;
   user-select: none !important;
   -webkit-touch-callout: none !important;
+}
+
+/* Debug overlay */
+.debug-overlay {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  z-index: 9999;
+  max-width: 90vw;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #0f0;
+  background: rgba(0, 0, 0, .88);
+  border-radius: 8px 0 0;
+  pointer-events: none;
+}
+.debug-overlay code {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 </style>
