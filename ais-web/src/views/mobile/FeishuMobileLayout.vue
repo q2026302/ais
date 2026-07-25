@@ -1,23 +1,50 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, MagicStick, MoreFilled, Picture, Plus, ChatDotRound, User } from '@element-plus/icons-vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, type ComputedRef, type Ref } from 'vue'
+import { useRoute } from 'vue-router'
+import { MagicStick, MoreFilled, Picture, Plus, ChatDotRound, User } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
-import { useMobileKeyboard } from '@/composables/useMobileKeyboard'
+import {
+  applyVisualViewportCssVars,
+  isStandaloneDisplayMode,
+  pinShellToVisualViewport,
+  subscribeVisualViewport,
+  type VisualViewportState,
+} from '@/utils/visualViewport'
 
 defineOptions({
   name: 'FeishuMobileLayout',
 })
 
+/** Shared keyboard / composer state provided to nested pages (e.g. FeishuChatPage). */
+export interface MobileKeyboardApi {
+  keyboardOpen: Ref<boolean>
+  composerFocused: Ref<boolean>
+  inputChromeCollapsed: ComputedRef<boolean>
+  setComposerFocus: () => void
+  setComposerBlur: () => void
+}
+
 const store = useSessionStore()
 const route = useRoute()
-const router = useRouter()
 const pageRef = ref<HTMLElement | null>(null)
-const { keyboardOpen, inputChromeCollapsed } = useMobileKeyboard()
+
+/** Soft keyboard reported by visualViewport / VirtualKeyboard / standalone fallback. */
+const keyboardOpen = ref(false)
+/** Composer textarea focused — hide bottom-nav immediately (before VV reports). */
+const composerFocused = ref(false)
+/**
+ * Effective "input mode": hide bottom-nav and pin shell so the composer sits
+ * flush above the keyboard (WeChat/Feishu chat-page pattern).
+ */
+const inputChromeCollapsed = computed(() => keyboardOpen.value || composerFocused.value)
+
+let stopVisualViewport: (() => void) | null = null
+let onAisVisualViewport: ((event: Event) => void) | null = null
 
 const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobile' : 'feishu'))
 
-const isChatPage = computed(() => route.name?.toString().endsWith('-chat') === true)
+/** Hide layout header on chat routes — FeishuChatPage renders its own header with back button. */
+const showHeader = computed(() => route.name?.toString().endsWith('-chat') !== true)
 
 const activeSessionTitle = computed(() => {
   const session = store.sessions.find((item) => item.id === store.activeSessionId)
@@ -28,38 +55,95 @@ const hideBottomNav = computed(
   () => route.meta?.hideBottomNav === true || inputChromeCollapsed.value,
 )
 
+function applyViewportState(state: VisualViewportState) {
+  keyboardOpen.value = state.keyboardOpen
+}
+
+function applyShellGeometry(state: VisualViewportState) {
+  const el = pageRef.value
+  if (!el) return
+  applyVisualViewportCssVars(el, state)
+  el.style.top = `${state.offsetTop}px`
+  el.style.height = `${state.height}px`
+  el.style.maxHeight = `${state.height}px`
+  applyViewportState(state)
+}
+
+function pinPageShell(forceFallback?: boolean) {
+  const force =
+    forceFallback === true ||
+    (typeof window !== 'undefined' && isStandaloneDisplayMode() && composerFocused.value)
+  const state = pinShellToVisualViewport(pageRef.value, { forceKeyboardFallback: force })
+  applyViewportState(state)
+  return state
+}
+
+function setComposerFocus() {
+  composerFocused.value = true
+  // Immediate pin + standalone fallback so Android PWA does not wait for VV.
+  pinPageShell(isStandaloneDisplayMode())
+}
+
+function setComposerBlur() {
+  // Delay slightly so focus moving between composer controls does not flash nav.
+  window.setTimeout(() => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active.closest?.('.composer, .fullscreen-input-overlay')) {
+      return
+    }
+    composerFocused.value = false
+    pinPageShell(false)
+  }, 80)
+}
+
+provide<MobileKeyboardApi>('mobileKeyboard', {
+  keyboardOpen,
+  composerFocused,
+  inputChromeCollapsed,
+  setComposerFocus,
+  setComposerBlur,
+})
+
 function handleCreateSession() {
   void store.createSession()
 }
 
-function goSessions() {
-  void router.push({ name: `${entryPrefix.value}-sessions` })
-}
+onMounted(() => {
+  if (typeof window === 'undefined') return
+  stopVisualViewport = subscribeVisualViewport(
+    (state) => applyViewportState(state),
+    {
+      cssTarget: () => pageRef.value,
+      pinShell: true,
+      forceKeyboardFallback: () => isStandaloneDisplayMode() && composerFocused.value,
+    },
+  )
+  onAisVisualViewport = (event: Event) => {
+    const detail = (event as CustomEvent<VisualViewportState | undefined>).detail
+    if (detail) applyShellGeometry(detail)
+    else pinPageShell(false)
+  }
+  window.addEventListener('ais:visual-viewport', onAisVisualViewport)
+})
+
+onBeforeUnmount(() => {
+  stopVisualViewport?.()
+  stopVisualViewport = null
+  if (typeof window !== 'undefined' && onAisVisualViewport) {
+    window.removeEventListener('ais:visual-viewport', onAisVisualViewport)
+    onAisVisualViewport = null
+  }
+})
 </script>
 
 <template>
   <main
     ref="pageRef"
     class="feishu-layout"
-    :class="{ 'keyboard-open': keyboardOpen }"
+    :class="{ 'keyboard-open': inputChromeCollapsed, 'chat-route': !showHeader }"
   >
-    <header class="mobile-header">
-      <div v-if="isChatPage" class="brand-block">
-        <button
-          class="back-button"
-          type="button"
-          aria-label="会话列表"
-          title="会话列表"
-          @click="goSessions"
-        >
-          <ArrowLeft />
-        </button>
-        <div class="brand-copy">
-          <strong>{{ activeSessionTitle }}</strong>
-          <span>AI 创作助手</span>
-        </div>
-      </div>
-      <div v-else class="brand-block">
+    <header v-if="showHeader" class="mobile-header">
+      <div class="brand-block">
         <span class="brand-icon"><MagicStick /></span>
         <div class="brand-copy">
           <strong>{{ activeSessionTitle }}</strong>
@@ -128,8 +212,8 @@ function goSessions() {
   --mobile-border: #e5e9f2;
 
   position: fixed;
-  top: 0;
-  left: 0;
+  top: var(--vv-offset-top, 0px);
+  left: var(--vv-offset-left, 0px);
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -137,6 +221,8 @@ function goSessions() {
   max-width: 100%;
   height: 100%;
   height: 100dvh;
+  height: var(--vv-height, 100dvh);
+  max-height: var(--vv-height, 100dvh);
   overflow: hidden;
   color: var(--mobile-text);
   background:
@@ -164,25 +250,6 @@ function goSessions() {
   min-width: 0;
   align-items: center;
   gap: 11px;
-}
-
-.back-button {
-  display: grid;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  place-items: center;
-  color: #5365cc;
-  cursor: pointer;
-  border: 0;
-  border-radius: 10px;
-  background: #eef1ff;
-}
-
-.back-button :deep(svg) {
-  width: 18px;
-  height: 18px;
 }
 
 .brand-icon {
@@ -249,12 +316,20 @@ function goSessions() {
 }
 
 .layout-content {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Chat page owns its internal scroll; keep content region non-scrolling so the
+   nested chat shell can size to the remaining viewport above the keyboard. */
+.feishu-layout.chat-route .layout-content {
+  overflow: hidden;
 }
 
 .bottom-nav {

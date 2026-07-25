@@ -1,11 +1,6 @@
 <script setup lang="ts">
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  isStandaloneDisplayMode,
-  subscribeVisualViewport,
-  type VisualViewportState,
-} from '@/utils/visualViewport'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowRight,
@@ -36,7 +31,7 @@ import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { formatTimeHm } from '@/utils/dateTime'
 import { useLongPress } from '@/composables/useLongPress'
 import { useImageActions } from '@/composables/useImageActions'
-import { useMobileKeyboard } from '@/composables/useMobileKeyboard'
+import type { MobileKeyboardApi } from './FeishuMobileLayout.vue'
 
 defineOptions({
   name: 'FeishuChatPage',
@@ -51,20 +46,10 @@ const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobil
 const messagesRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
-const pageRef = ref<HTMLElement | null>(null)
 
-const {
-  composerFocused,
-  inputChromeCollapsed,
-  applyViewportState,
-  applyShellGeometry: applyShellGeometryBase,
-  pinPageShell: pinPageShellBase,
-  onComposerFocus: setComposerFocus,
-  onComposerBlur: setComposerBlur,
-} = useMobileKeyboard()
-
-let stopVisualViewport: (() => void) | null = null
-let onAisVisualViewport: ((event: Event) => void) | null = null
+/** Keyboard state owned by FeishuMobileLayout (single visualViewport subscription). */
+const mobileKeyboard = inject<MobileKeyboardApi>('mobileKeyboard')
+const inputChromeCollapsed = computed(() => mobileKeyboard?.inputChromeCollapsed.value ?? false)
 
 const fullscreenInput = ref(false)
 const inputText = ref('')
@@ -747,27 +732,14 @@ function openReferenceShortcut() {
   ElMessage.info('还没有历史图，可在创作工具中添加参考图')
 }
 
-function applyShellGeometry(state: VisualViewportState) {
-  applyShellGeometryBase(pageRef.value, state)
-}
-
-function pinPageShell(forceFallback?: boolean) {
-  return pinPageShellBase(pageRef.value, forceFallback)
-}
-
 function onComposerFocus() {
-  setComposerFocus(pageRef.value)
+  mobileKeyboard?.setComposerFocus()
 }
 
 function onComposerBlur() {
   // Keep focus within composer / fullscreen input from flashing chrome.
-  window.setTimeout(() => {
-    const active = document.activeElement
-    if (active instanceof HTMLElement && active.closest?.('.composer, .fullscreen-input-overlay')) {
-      return
-    }
-    setComposerBlur(pageRef.value)
-  }, 0)
+  // Layout's setComposerBlur already delays and re-checks activeElement.
+  mobileKeyboard?.setComposerBlur()
 }
 
 watch(() => store.messages.length, () => void scrollToBottom())
@@ -803,41 +775,20 @@ watch(
 
 onMounted(() => {
   document.title = 'AI 创作'
-  if (typeof window !== 'undefined') {
-    stopVisualViewport = subscribeVisualViewport(
-      (state) => applyViewportState(state),
-      {
-        cssTarget: () => pageRef.value,
-        pinShell: true,
-        forceKeyboardFallback: () => isStandaloneDisplayMode() && composerFocused.value,
-      },
-    )
-    onAisVisualViewport = (event: Event) => {
-      const detail = (event as CustomEvent<VisualViewportState | undefined>).detail
-      if (detail) applyShellGeometry(detail)
-      else pinPageShell(false)
-    }
-    window.addEventListener('ais:visual-viewport', onAisVisualViewport)
-  }
   void initialize()
 })
 
 onBeforeUnmount(() => {
   cancelLongPress(true)
   setSelectionSuppressed(false)
-  stopVisualViewport?.()
-  stopVisualViewport = null
-  if (typeof window !== 'undefined' && onAisVisualViewport) {
-    window.removeEventListener('ais:visual-viewport', onAisVisualViewport)
-    onAisVisualViewport = null
-  }
+  // Ensure layout bottom-nav returns if this page unmounts while focused.
+  mobileKeyboard?.setComposerBlur()
   document.title = originalTitle
 })
 </script>
 
 <template>
   <main
-    ref="pageRef"
     class="chat-page"
     :class="{ 'keyboard-open': inputChromeCollapsed }"
   >
@@ -1203,23 +1154,19 @@ onBeforeUnmount(() => {
   --mobile-muted: #7d899f;
   --mobile-border: #e5e9f2;
   /*
-   * Fixed full-height chat shell. Height/top are also written explicitly by
-   * pinShellToVisualViewport() so Android WebAPK cannot ignore CSS vars.
-   * Fallback stack: % → dvh → VisualViewport tokens.
+   * Nested inside FeishuMobileLayout's layout-content. Layout owns the fixed
+   * shell + visualViewport geometry; this page fills the remaining flex space
+   * so header/conversation/composer stack correctly without a second fixed layer.
    */
-  position: fixed;
-  top: var(--vv-offset-top, 0px);
-  left: var(--vv-offset-left, 0px);
-  z-index: 1;
+  position: relative;
   display: flex;
+  flex: 1;
   flex-direction: column;
   width: 100%;
   max-width: 100%;
+  min-height: 0;
   height: 100%;
-  height: 100dvh;
-  height: var(--vv-height, 100dvh);
-  max-height: var(--vv-height, 100dvh);
-  /* Keep page non-scrolling; conversation / gallery are the scroll containers. */
+  /* Keep page non-scrolling; conversation is the scroll container. */
   overflow: hidden;
   color: var(--mobile-text);
   background:

@@ -6,6 +6,8 @@ export interface Session {
   userId?: number | null
   createdAt: string
   updatedAt: string
+  lastMessageAt?: string
+  lastMessagePreview?: string
 }
 
 export interface Attachment {
