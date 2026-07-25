@@ -842,13 +842,16 @@ onBeforeUnmount(() => {
   document.title = originalTitle
 })
 
-/** Debug overlay — toggle via the floating ⚙ button (does not steal focus). */
-const debugVisible = ref(false)
-function toggleDebug(e: MouseEvent | TouchEvent) {
-  e.preventDefault()
-  // Stop propagation so input fields keep focus.
-  e.stopPropagation()
-  debugVisible.value = !debugVisible.value
+/** Debug info — always visible floating overlay. */
+function readCssVar(name: string): string {
+  if (typeof document === 'undefined') return '?'
+  try {
+    const val = document.documentElement.style.getPropertyValue(name)
+    if (val) return val
+    // Fallback: read from .feishu-layout if present
+    const layout = document.querySelector('.feishu-layout') as HTMLElement | null
+    return layout?.style.getPropertyValue(name) || 'not set'
+  } catch { return 'err' }
 }
 const debugInfo = computed(() => {
   const sid = store.activeSessionId
@@ -856,9 +859,10 @@ const debugInfo = computed(() => {
   const isStandalone = typeof window !== 'undefined' && detectStandalone()
   return {
     kbd: `colpsd=${inputChromeCollapsed.value} kbd=${mobileKeyboard?.keyboardOpen.value} focus=${mobileKeyboard?.composerFocused.value}`,
-    standalone: isStandalone ? 'PWA' : 'browser',
+    mode: isStandalone ? 'PWA' : 'browser',
+    vv: `h=${readCssVar('--vv-height')} top=${readCssVar('--vv-offset-top')} ins=${readCssVar('--vv-keyboard-inset')} open=${readCssVar('--vv-keyboard-open')}`,
     viewed: sid != null ? store.getLastViewed(sid) : 'N/A',
-    lastMsgAt: s?.lastMessageAt ?? s?.updatedAt ?? 'N/A',
+    lastMsg: s?.lastMessageAt ?? s?.updatedAt ?? 'N/A',
     ex: `msg=${store.messages.length} load=${store.loading} sid=${sid}`,
   }
 })
@@ -889,15 +893,6 @@ function detectStandalone() {
         <button class="header-icon-button" type="button" aria-label="新建会话" title="新建会话" @click="createNewSession"><Plus /></button>
       </div>
     </header>
-
-    <!-- Debug toggle — does not steal focus from composer -->
-    <button
-      class="debug-toggle"
-      type="button"
-      aria-label="Debug"
-      @mousedown.prevent="toggleDebug"
-      @touchstart.prevent="toggleDebug"
-    >⚙</button>
 
     <section ref="messagesRef" class="conversation" :class="{ empty: !store.messages.length }">
       <div v-if="initializing" class="center-state">
@@ -1172,12 +1167,11 @@ function detectStandalone() {
       </Transition>
     </Teleport>
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
-    <!-- Debug overlay: tap ⚙ to toggle -->
-    <div v-if="debugVisible" class="debug-overlay">
+    <!-- Debug overlay — always visible on top -->
+    <div class="debug-overlay">
       <div><code>kbd: {{ debugInfo.kbd }}</code></div>
-      <div><code>mode: {{ debugInfo.standalone }}</code></div>
-      <div><code>viewed: {{ debugInfo.viewed }}</code></div>
-      <div><code>lastMsg: {{ debugInfo.lastMsgAt }}</code></div>
+      <div><code>mode: {{ debugInfo.mode }}  vv: {{ debugInfo.vv }}</code></div>
+      <div><code>viewed: {{ debugInfo.viewed }}  lastMsg: {{ debugInfo.lastMsg }}</code></div>
       <div><code>{{ debugInfo.ex }}</code></div>
     </div>
   </main>
@@ -2103,48 +2097,24 @@ function detectStandalone() {
   -webkit-touch-callout: none !important;
 }
 
-/* Debug overlay */
+/* Debug overlay — persistent floating debug info */
 .debug-overlay {
   position: fixed;
-  bottom: 0;
-  right: 0;
+  top: 0;
+  left: 0;
   z-index: 9999;
-  max-width: 90vw;
-  padding: 8px 10px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: #0f0;
-  background: rgba(0, 0, 0, .88);
-  border-radius: 8px 0 0;
+  max-width: 85vw;
+  padding: 5px 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: rgba(0, 255, 0, .85);
+  background: rgba(0, 0, 0, .65);
+  border-radius: 0 0 6px 0;
   pointer-events: none;
+  font-family: monospace;
 }
 .debug-overlay code {
   white-space: pre-wrap;
   word-break: break-all;
 }
-/* Debug toggle — tiny button, does not steal focus */
-.debug-toggle {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  z-index: 9998;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  margin: 0;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  border: 0;
-  border-radius: 50%;
-  color: rgba(0, 0, 0, .35);
-  background: rgba(200, 200, 210, .35);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  opacity: .5;
-  transition: opacity .15s;
-  pointer-events: auto;
-  touch-action: manipulation;
-}
-.debug-toggle:active { opacity: 1; }
 </style>
