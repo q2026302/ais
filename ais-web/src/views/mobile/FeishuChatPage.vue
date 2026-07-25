@@ -28,7 +28,7 @@ import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
-import { formatTimeHm } from '@/utils/dateTime'
+import { formatTimeHm, parseApiDate } from '@/utils/dateTime'
 import { useLongPress } from '@/composables/useLongPress'
 import { useImageActions } from '@/composables/useImageActions'
 import type { MobileKeyboardApi } from './FeishuMobileLayout.vue'
@@ -825,6 +825,12 @@ watch(
 onMounted(() => {
   document.title = 'AI 创作'
   void initialize()
+  // Debug sampling only — does not affect keyboard pin / layout.
+  bumpDebugSample()
+  window.addEventListener('resize', bumpDebugSample)
+  window.visualViewport?.addEventListener('resize', bumpDebugSample)
+  window.visualViewport?.addEventListener('scroll', bumpDebugSample)
+  debugSampleTimer = setInterval(bumpDebugSample, 500)
 })
 
 onBeforeUnmount(() => {
@@ -840,6 +846,13 @@ onBeforeUnmount(() => {
     store.clearActiveSession()
   }
   document.title = originalTitle
+  window.removeEventListener('resize', bumpDebugSample)
+  window.visualViewport?.removeEventListener('resize', bumpDebugSample)
+  window.visualViewport?.removeEventListener('scroll', bumpDebugSample)
+  if (debugSampleTimer != null) {
+    clearInterval(debugSampleTimer)
+    debugSampleTimer = null
+  }
 })
 
 /** Debug info — always visible floating overlay. */
@@ -853,24 +866,97 @@ function readCssVar(name: string): string {
     return layout?.style.getPropertyValue(name) || 'not set'
   } catch { return 'err' }
 }
+
+/** Bumps so computed re-reads window / DOM geometry (no keyboard behavior change). */
+const debugSampleTick = ref(0)
+let debugSampleTimer: ReturnType<typeof setInterval> | null = null
+
+function bumpDebugSample() {
+  debugSampleTick.value += 1
+}
+
+function matchDisplayMode(mode: string): boolean {
+  try {
+    return Boolean(window.matchMedia?.(`(display-mode: ${mode})`).matches)
+  } catch {
+    return false
+  }
+}
+
+function detectStandalone() {
+  try {
+    return matchDisplayMode('standalone') || Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  } catch { return false }
+}
+
+function readVirtualKeyboard(): { has: boolean; h: string; overlays: string } {
+  try {
+    const vk = (navigator as Navigator & {
+      virtualKeyboard?: { boundingRect?: DOMRect; overlaysContent?: boolean }
+    }).virtualKeyboard
+    if (!vk) return { has: false, h: 'N/A', overlays: 'N/A' }
+    const h = vk.boundingRect?.height
+    return {
+      has: true,
+      h: typeof h === 'number' && Number.isFinite(h) ? String(Math.round(h)) : '0',
+      overlays: typeof vk.overlaysContent === 'boolean' ? String(vk.overlaysContent) : 'N/A',
+    }
+  } catch {
+    return { has: false, h: 'N/A', overlays: 'N/A' }
+  }
+}
+
 const debugInfo = computed(() => {
+  // Depend on tick so geometry re-samples after resize / vv events / interval.
+  void debugSampleTick.value
+
   const sid = store.activeSessionId
   const s = sid != null ? store.sessions.find(item => item.id === sid) : null
   const isStandalone = typeof window !== 'undefined' && detectStandalone()
+  const vv = typeof window !== 'undefined' ? window.visualViewport : null
+  const layoutEl = typeof document !== 'undefined'
+    ? (document.querySelector('.feishu-layout') as HTMLElement | null)
+    : null
+  const chatEl = typeof document !== 'undefined'
+    ? (document.querySelector('.chat-page') as HTMLElement | null)
+    : null
+  const composerEl = typeof document !== 'undefined'
+    ? (document.querySelector('.composer') as HTMLElement | null)
+    : null
+  const composerBottom = composerEl?.getBoundingClientRect().bottom ?? null
+  const vvH = vv?.height
+  const gap = (typeof vvH === 'number' && composerBottom != null)
+    ? Math.round((vvH - composerBottom) * 10) / 10
+    : null
+  const vk = readVirtualKeyboard()
+
+  const activityMs = s
+    ? (parseApiDate(s.lastMessageAt || s.updatedAt)?.getTime() ?? null)
+    : null
+  const viewedMs = sid != null ? store.getLastViewed(sid) : null
+  const gt = activityMs != null && viewedMs != null ? activityMs > viewedMs : null
+  const unreadHas = sid != null ? store.unreadSessions.includes(sid) : false
+
+  const nStandalone = (() => {
+    try {
+      return Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+    } catch { return false }
+  })()
+
   return {
     kbd: `colpsd=${inputChromeCollapsed.value} kbd=${mobileKeyboard?.keyboardOpen.value} focus=${mobileKeyboard?.composerFocused.value}`,
     mode: isStandalone ? 'PWA' : 'browser',
     vv: `h=${readCssVar('--vv-height')} top=${readCssVar('--vv-offset-top')} ins=${readCssVar('--vv-keyboard-inset')} open=${readCssVar('--vv-keyboard-open')}`,
-    viewed: sid != null ? store.getLastViewed(sid) : 'N/A',
+    dims: `ih=${typeof window !== 'undefined' ? window.innerHeight : '?'} oh=${typeof window !== 'undefined' ? window.outerHeight : '?'} ch=${typeof document !== 'undefined' ? document.documentElement.clientHeight : '?'}`,
+    dims2: `vvh=${vv?.height != null ? Math.round(vv.height) : 'N/A'} vvt=${vv?.offsetTop != null ? Math.round(vv.offsetTop) : 'N/A'} sh=${typeof screen !== 'undefined' ? screen.height : '?'} sah=${typeof screen !== 'undefined' ? screen.availHeight : '?'}`,
+    dom: `lay=${layoutEl?.clientHeight ?? 'N/A'} chat=${chatEl?.clientHeight ?? 'N/A'} cbot=${composerBottom != null ? Math.round(composerBottom) : 'N/A'} gap=${gap ?? 'N/A'}`,
+    api: `sa=${matchDisplayMode('standalone')} fs=${matchDisplayMode('fullscreen')} mu=${matchDisplayMode('minimal-ui')} nsa=${nStandalone} vk=${vk.has} vkh=${vk.h} vko=${vk.overlays}`,
+    red: `act=${activityMs ?? 'N/A'} view=${viewedMs ?? 'N/A'} gt=${gt ?? 'N/A'} unrd=${unreadHas}`,
+    viewed: viewedMs ?? 'N/A',
     lastMsg: s?.lastMessageAt ?? s?.updatedAt ?? 'N/A',
     ex: `msg=${store.messages.length} load=${store.loading} sid=${sid}`,
   }
 })
-function detectStandalone() {
-  try {
-    return window.matchMedia?.('(display-mode: standalone)').matches || (navigator as any).standalone
-  } catch { return false }
-}
 </script>
 
 <template>
@@ -1171,6 +1257,11 @@ function detectStandalone() {
     <div class="debug-overlay">
       <div><code>kbd: {{ debugInfo.kbd }}</code></div>
       <div><code>mode: {{ debugInfo.mode }}  vv: {{ debugInfo.vv }}</code></div>
+      <div><code>win: {{ debugInfo.dims }}</code></div>
+      <div><code>vv2: {{ debugInfo.dims2 }}</code></div>
+      <div><code>dom: {{ debugInfo.dom }}</code></div>
+      <div><code>api: {{ debugInfo.api }}</code></div>
+      <div><code>red: {{ debugInfo.red }}</code></div>
       <div><code>viewed: {{ debugInfo.viewed }}  lastMsg: {{ debugInfo.lastMsg }}</code></div>
       <div><code>{{ debugInfo.ex }}</code></div>
     </div>

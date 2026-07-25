@@ -48,6 +48,17 @@ public class Session {
     @Column(name = "auto_title_enabled", nullable = false)
     private boolean autoTitleEnabled;
 
+    /**
+     * Not a DB column — filled when listing sessions from the latest message.
+     * Frontend auto-unread / previews depend on these fields.
+     */
+    @Transient
+    private LocalDateTime lastMessageAt;
+
+    /** Not a DB column — filled when listing sessions from the latest message. */
+    @Transient
+    private String lastMessagePreview;
+
     public Session() {}
 
     public Long getId() {
@@ -88,4 +99,8 @@ public class Session {
     public void setAutoTitleEnabled(boolean autoTitleEnabled) { this.autoTitleEnabled = autoTitleEnabled; }
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }
+    public LocalDateTime getLastMessageAt() { return lastMessageAt; }
+    public void setLastMessageAt(LocalDateTime lastMessageAt) { this.lastMessageAt = lastMessageAt; }
+    public String getLastMessagePreview() { return lastMessagePreview; }
+    public void setLastMessagePreview(String lastMessagePreview) { this.lastMessagePreview = lastMessagePreview; }
 }

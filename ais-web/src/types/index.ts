@@ -51,6 +51,8 @@ export interface Message {
   parentMessageId?: number | null
   edited: boolean
   createdAt: string
+  /** Advances on content/status updates; auto-unread uses coalesce(updatedAt, createdAt). */
+  updatedAt?: string | null
   processingInfo?: string | null
   drawPlaceholder?: DrawPlaceholder
 }

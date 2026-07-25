@@ -188,6 +188,165 @@ class ModelConversationAndImageIntegrationTests {
     }
 
     @Test
+    void sessionListAttachesLastMessageAtAndPreviewFromLatestMessage() {
+        ModelProvider chatProvider = saveProvider(ProviderType.CHAT, "session-list-preview-model");
+        Session session = saveSession(chatProvider.getId(), null);
+
+        server.expect(requestTo(BASE_URL + "/chat/completions"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("""
+                        {
+                          "choices": [
+                            {"message": {"role": "assistant", "content": "Latest assistant reply for preview."}}
+                          ],
+                          "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}
+                        }
+                        """, MediaType.APPLICATION_JSON));
+
+        imageGenerationService.chat(session.getId(), "preview source message", List.of(), chatProvider.getId());
+        flushAndClearPersistenceContext();
+
+        List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getId());
+        Message latest = messages.get(messages.size() - 1);
+        assertEquals(MessageStatus.SUCCESS, latest.getStatus());
+        assertNotNull(latest.getUpdatedAt());
+
+        List<Session> listed = sessionService.getSessionsByUserId(null);
+        Session listedSession = listed.stream()
+                .filter(item -> session.getId().equals(item.getId()))
+                .findFirst()
+                .orElseThrow();
+        // lastMessageAt must be the message activity clock (updatedAt after completion),
+        // not an arbitrary non-null stamp.
+        assertEquals(latest.getUpdatedAt(), listedSession.getLastMessageAt());
+        assertEquals("Latest assistant reply for preview.", listedSession.getLastMessagePreview());
+    }
+
+    @Test
+    void pendingToSuccessAdvancesMessageActivityAndSessionListLastMessageAt() throws Exception {
+        Session session = saveSession(null, null);
+
+        Message pending = new Message();
+        pending.setSession(session);
+        pending.setRole(MessageRole.ASSISTANT);
+        pending.setMessageType(MessageType.CHAT);
+        pending.setStatus(MessageStatus.PENDING);
+        pending.setContent("等待回应...");
+        pending = messageRepository.saveAndFlush(pending);
+        flushAndClearPersistenceContext();
+
+        Message loadedPending = messageRepository.findById(pending.getId()).orElseThrow();
+        assertEquals(MessageStatus.PENDING, loadedPending.getStatus());
+        assertNotNull(loadedPending.getCreatedAt());
+        assertNotNull(loadedPending.getUpdatedAt());
+        // Fresh PENDING: activity == updatedAt (== createdAt at insert).
+        assertEquals(loadedPending.getUpdatedAt(), SessionService.messageActivityAt(loadedPending));
+
+        Session listedWhilePending = sessionService.getSessionsByUserId(null).stream()
+                .filter(item -> session.getId().equals(item.getId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(loadedPending.getUpdatedAt(), listedWhilePending.getLastMessageAt());
+        assertEquals("等待回应...", listedWhilePending.getLastMessagePreview());
+
+        var pendingActivity = loadedPending.getUpdatedAt();
+        // Ensure PreUpdate can advance updatedAt past the insert stamp.
+        Thread.sleep(30);
+
+        loadedPending.setStatus(MessageStatus.SUCCESS);
+        loadedPending.setContent("Completed assistant reply.");
+        messageRepository.saveAndFlush(loadedPending);
+        flushAndClearPersistenceContext();
+
+        Message completed = messageRepository.findById(pending.getId()).orElseThrow();
+        assertEquals(MessageStatus.SUCCESS, completed.getStatus());
+        assertNotNull(completed.getUpdatedAt());
+        assertTrue(completed.getUpdatedAt().isAfter(pendingActivity),
+                "PENDING → SUCCESS must advance message.updatedAt so list activity can move");
+        assertTrue(completed.getUpdatedAt().isAfter(completed.getCreatedAt())
+                        || completed.getUpdatedAt().isEqual(completed.getCreatedAt()),
+                "updatedAt must not go behind createdAt");
+        assertEquals(completed.getUpdatedAt(), SessionService.messageActivityAt(completed));
+
+        Session listedAfterSuccess = sessionService.getSessionsByUserId(null).stream()
+                .filter(item -> session.getId().equals(item.getId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(completed.getUpdatedAt(), listedAfterSuccess.getLastMessageAt());
+        assertEquals("Completed assistant reply.", listedAfterSuccess.getLastMessagePreview());
+        assertTrue(listedAfterSuccess.getLastMessageAt().isAfter(pendingActivity),
+                "sessions list lastMessageAt must advance when the in-flight reply finishes");
+    }
+
+    @Test
+    void pendingToFailedAdvancesMessageActivityUsedBySessionList() throws Exception {
+        Session session = saveSession(null, null);
+
+        Message pending = new Message();
+        pending.setSession(session);
+        pending.setRole(MessageRole.ASSISTANT);
+        pending.setMessageType(MessageType.CHAT);
+        pending.setStatus(MessageStatus.PENDING);
+        pending.setContent("等待回应...");
+        pending = messageRepository.saveAndFlush(pending);
+        flushAndClearPersistenceContext();
+
+        Message loaded = messageRepository.findById(pending.getId()).orElseThrow();
+        var pendingActivity = loaded.getUpdatedAt();
+        Thread.sleep(30);
+
+        loaded.setStatus(MessageStatus.FAILED);
+        loaded.setContent("AI 回应失败。");
+        loaded.setErrorMessage("upstream timeout");
+        messageRepository.saveAndFlush(loaded);
+        flushAndClearPersistenceContext();
+
+        Message failed = messageRepository.findById(pending.getId()).orElseThrow();
+        assertEquals(MessageStatus.FAILED, failed.getStatus());
+        assertTrue(failed.getUpdatedAt().isAfter(pendingActivity));
+
+        Session listed = sessionService.getSessionsByUserId(null).stream()
+                .filter(item -> session.getId().equals(item.getId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(failed.getUpdatedAt(), listed.getLastMessageAt());
+        assertEquals("AI 回应失败。", listed.getLastMessagePreview());
+    }
+
+    @Test
+    void sessionListFallsBackToCreatedAtWhenMessageUpdatedAtIsNull() {
+        Session session = saveSession(null, null);
+
+        Message legacy = new Message();
+        legacy.setSession(session);
+        legacy.setRole(MessageRole.ASSISTANT);
+        legacy.setMessageType(MessageType.CHAT);
+        legacy.setStatus(MessageStatus.SUCCESS);
+        legacy.setContent("Legacy row without updated_at.");
+        legacy = messageRepository.saveAndFlush(legacy);
+        flushAndClearPersistenceContext();
+
+        // Simulate pre-migration rows: updated_at column is null. Bypass JPA
+        // @PreUpdate so the null sticks for the list-query path.
+        entityManager.createNativeQuery("UPDATE messages SET updated_at = NULL WHERE id = :id")
+                .setParameter("id", legacy.getId())
+                .executeUpdate();
+        flushAndClearPersistenceContext();
+
+        Message reloaded = messageRepository.findById(legacy.getId()).orElseThrow();
+        assertNull(reloaded.getUpdatedAt());
+        assertNotNull(reloaded.getCreatedAt());
+        assertEquals(reloaded.getCreatedAt(), SessionService.messageActivityAt(reloaded));
+
+        Session listed = sessionService.getSessionsByUserId(null).stream()
+                .filter(item -> session.getId().equals(item.getId()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(reloaded.getCreatedAt(), listed.getLastMessageAt());
+        assertEquals("Legacy row without updated_at.", listed.getLastMessagePreview());
+    }
+
+    @Test
     void thirdSuccessfulChatGeneratesAndPersistsConciseAutomaticTitle() {
         ModelProvider chatProvider = saveProvider(ProviderType.CHAT, "auto-title-chat-model");
         Session session = sessionService.createSession();

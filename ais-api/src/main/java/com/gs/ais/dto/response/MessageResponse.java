@@ -63,6 +63,14 @@ public class MessageResponse {
     @Schema(description = "消息创建时间")
     private LocalDateTime createdAt;
 
+    /**
+     * Advances when content/status is updated (PENDING → SUCCESS/FAILED).
+     * Frontend auto-unread watermarks use coalesce(updatedAt, createdAt) so they
+     * stay on the same timeline as session-list lastMessageAt.
+     */
+    @Schema(description = "消息最近活动时间（内容/状态更新时前进）")
+    private LocalDateTime updatedAt;
+
     public static MessageResponse from(Message message) {
         MessageResponse resp = new MessageResponse();
         resp.setId(message.getId());
@@ -91,6 +99,7 @@ public class MessageResponse {
         resp.setParentMessageId(message.getParentMessageId());
         resp.setEdited(message.isEdited());
         resp.setCreatedAt(message.getCreatedAt());
+        resp.setUpdatedAt(message.getUpdatedAt());
         return resp;
     }
 
@@ -128,4 +137,6 @@ public class MessageResponse {
     public void setEdited(boolean edited) { this.edited = edited; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
 }
