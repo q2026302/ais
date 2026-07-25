@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { Session, Message, ModelProvider, DrawRequest, UploadResponse, Attachment, MessageStatusResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { providerApi } from '@/api/providers'
+import { parseApiDate } from '@/utils/dateTime'
 
 const PINNED_STORAGE_KEY = 'ais_pinned'
 const UNREAD_STORAGE_KEY = 'ais_unread'
@@ -98,11 +99,43 @@ export const useSessionStore = defineStore('session', () => {
     return typeof ts === 'number' && Number.isFinite(ts) && ts > 0 ? ts : null
   }
 
-  function recordLastViewed(sessionId: number, at?: number) {
+  /**
+   * Latest activity the user can already see for a session, on the server
+   * timeline. Prefer session.lastMessageAt; when the session is open and
+   * messages are loaded, also cover any message createdAt that the list
+   * endpoint has not caught up with yet.
+   */
+  function visibleActivityTime(sessionId: number): number {
     const session = sessions.value.find((item) => item.id === sessionId)
-    const activity = session ? Date.parse(session.lastMessageAt || session.updatedAt) : NaN
-    const base = typeof at === 'number' && Number.isFinite(at) ? at : Date.now()
-    const ts = Number.isFinite(activity) ? Math.max(base, activity) : base
+    let latest = session ? sessionActivityTime(session) : 0
+    if (activeSessionId.value === sessionId) {
+      for (const message of messages.value) {
+        const ts = parseApiDate(message.createdAt)?.getTime() ?? 0
+        if (ts > latest) latest = ts
+      }
+    }
+    return latest
+  }
+
+  function recordLastViewed(sessionId: number, at?: number) {
+    const activity = visibleActivityTime(sessionId)
+    // Stay on the server-activity timeline. Mixing Date.now() with server
+    // lastMessageAt makes `activity > viewed` fail under even small clock skew
+    // (client ahead of server → every later message still looks "already seen").
+    let ts: number
+    if (typeof at === 'number' && Number.isFinite(at) && at > 0) {
+      ts = at
+    } else if (activity > 0) {
+      ts = activity
+    } else {
+      // Empty session with no server activity yet — client stamp is fine until
+      // the first message arrives; syncAutoUnread also runs after fetchSessions.
+      ts = Date.now()
+    }
+    // Always cover activity already visible while the user is viewing.
+    if (activity > ts) ts = activity
+    const prev = getLastViewed(sessionId)
+    if (prev != null && prev >= ts) return
     lastViewedAt.value = { ...lastViewedAt.value, [String(sessionId)]: ts }
     saveLastViewedMap(lastViewedAt.value)
   }
@@ -117,8 +150,10 @@ export const useSessionStore = defineStore('session', () => {
 
   function sessionActivityTime(session: Session): number {
     const raw = session.lastMessageAt || session.updatedAt
-    const ts = Date.parse(raw)
-    return Number.isFinite(ts) ? ts : 0
+    // parseApiDate handles UTC `Z` / offset / legacy zoneless values correctly.
+    // Date.parse alone mis-handles zoneless backend strings on some engines.
+    const date = parseApiDate(raw)
+    return date ? date.getTime() : 0
   }
 
   function sessionHasMessages(session: Session): boolean {
@@ -160,25 +195,47 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * After sessions list refresh, promote sessions with newer activity than last-viewed
    * into the manual unread set so the red-dot persists even if timestamps are equalized later.
+   *
+   * For the session currently open, bump lastViewed up to the fresh activity so
+   * leaving the chat does not flash a red-dot for messages the user already saw.
    */
   function syncAutoUnreadFromSessions() {
-    let changed = false
-    const next = new Set(unreadSessions.value)
+    let unreadChanged = false
+    let viewedChanged = false
+    const nextUnread = new Set(unreadSessions.value)
+    let nextViewed = lastViewedAt.value
+
     for (const session of sessions.value) {
-      if (activeSessionId.value === session.id) continue
+      const activity = sessionActivityTime(session)
+      if (activeSessionId.value === session.id) {
+        // User is looking at this session — whatever just arrived is already seen.
+        if (activity > 0) {
+          const viewed = getLastViewed(session.id)
+          if (viewed == null || activity > viewed) {
+            if (nextViewed === lastViewedAt.value) nextViewed = { ...lastViewedAt.value }
+            nextViewed[String(session.id)] = activity
+            viewedChanged = true
+          }
+        }
+        continue
+      }
       if (!sessionHasMessages(session)) continue
       const viewed = getLastViewed(session.id)
       if (viewed == null) continue
-      if (sessionActivityTime(session) > viewed) {
-        if (!next.has(session.id)) {
-          next.add(session.id)
-          changed = true
-        }
+      if (activity > viewed && !nextUnread.has(session.id)) {
+        nextUnread.add(session.id)
+        unreadChanged = true
       }
     }
-    if (!changed) return
-    unreadSessions.value = Array.from(next)
-    saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
+
+    if (viewedChanged) {
+      lastViewedAt.value = nextViewed
+      saveLastViewedMap(lastViewedAt.value)
+    }
+    if (unreadChanged) {
+      unreadSessions.value = Array.from(nextUnread)
+      saveIdList(UNREAD_STORAGE_KEY, unreadSessions.value)
+    }
   }
 
   function sessionSortTime(session: Session): number {
