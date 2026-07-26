@@ -15,7 +15,7 @@ import {
  * sits flush above the keyboard (WeChat/Feishu chat-page pattern).
  */
 export function useMobileKeyboard() {
-  /** Soft keyboard reported by visualViewport / VirtualKeyboard / standalone fallback. */
+  /** Soft keyboard reported by visualViewport / VirtualKeyboard / PWA standalone fallback. */
   const keyboardOpen = ref(false)
   /** Composer textarea focused — hide bottom-nav immediately (before VV reports). */
   const composerFocused = ref(false)
@@ -51,7 +51,8 @@ export function useMobileKeyboard() {
 
   function onComposerFocus(el?: HTMLElement | null) {
     composerFocused.value = true
-    // Immediate pin + overlay fallback so Android does not wait for VV / VK geometry.
+    // Immediate pin + overlay fallback (standalone PWA only) so Android WebAPK
+    // does not wait for VV / VK geometry.
     pinPageShell(el ?? null, shouldForceOverlayKeyboardFallback(true))
   }
 
