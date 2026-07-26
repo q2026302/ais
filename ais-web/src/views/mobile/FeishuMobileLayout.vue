@@ -67,7 +67,7 @@ const FOCUS_OPEN_PROBE_MS = 2500
 /** Poll while focused until real open / dismiss / probe timeout. */
 const FOCUS_KEYBOARD_POLL_MS = 120
 
-const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobile' : 'feishu'))
+const entryPrefix = computed(() => route.meta.mobileEntry ?? 'mobile')
 
 /** Hide layout header on chat routes — FeishuChatPage renders its own header with back button. */
 const showHeader = computed(() => route.name?.toString().endsWith('-chat') !== true)

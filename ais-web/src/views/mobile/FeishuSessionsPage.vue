@@ -22,7 +22,7 @@ const store = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 
-const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobile' : 'feishu'))
+const entryPrefix = computed(() => route.meta.mobileEntry ?? 'mobile')
 const sessionQuery = ref('')
 const loadingList = ref(false)
 

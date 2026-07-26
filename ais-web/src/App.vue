@@ -24,7 +24,8 @@ const isWorkspaceRoute = computed(
   () =>
     route.name === 'home' ||
     route.path.startsWith('/feishu') ||
-    route.path.startsWith('/mobile'),
+    route.path.startsWith('/mobile') ||
+    route.path.startsWith('/pwa'),
 )
 const showBackToWorkspace = computed(() => showChrome.value && !isWorkspaceRoute.value)
 

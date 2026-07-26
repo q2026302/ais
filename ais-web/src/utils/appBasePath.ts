@@ -13,7 +13,7 @@
  */
 
 /** Top-level client routes registered in `src/router/index.ts` (no leading slash). */
-const SPA_ROUTE_SEGMENTS = ['login', 'mobile', 'feishu', 'admin', 'profile'] as const
+const SPA_ROUTE_SEGMENTS = ['login', 'mobile', 'feishu', 'pwa', 'admin', 'profile'] as const
 
 const SPA_ROUTE_RE = new RegExp(
   `^(.*)/(?:${SPA_ROUTE_SEGMENTS.join('|')})(?:/|$)`,

@@ -20,7 +20,7 @@ const store = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 
-const mobileSource = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobile' : 'feishu'))
+const mobileSource = computed(() => route.meta.mobileEntry ?? 'mobile')
 
 const {
   imageActionVisible,

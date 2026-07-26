@@ -18,21 +18,6 @@ const router = createRouter({
       component: HomeView,
     },
     {
-      // Formal mobile workbench entry (standalone mobile UX).
-      path: '/mobile',
-      name: 'mobile-workbench',
-      component: () => import('@/views/FeishuH5View.vue'),
-      meta: { embedded: true, mobileEntry: 'mobile' },
-    },
-    {
-      // Feishu / in-app browser compatibility entry; shares the same mobile workbench view.
-      path: '/feishu',
-      name: 'feishu-h5',
-      component: () => import('@/views/FeishuH5View.vue'),
-      meta: { embedded: true, mobileEntry: 'feishu' },
-    },
-    // Phase-1 nested mobile routes (layout + placeholders). Existing /mobile and /feishu above stay intact.
-    {
       path: '/mobile',
       component: () => import('@/views/mobile/FeishuMobileLayout.vue'),
       meta: { embedded: true, mobileEntry: 'mobile' },
@@ -93,6 +78,38 @@ const router = createRouter({
           name: 'feishu-profile',
           component: () => import('@/views/mobile/FeishuProfilePage.vue'),
           meta: { embedded: true, mobileEntry: 'feishu' },
+        },
+      ],
+    },
+    {
+      path: '/pwa',
+      component: () => import('@/views/mobile/FeishuMobileLayout.vue'),
+      meta: { embedded: true, mobileEntry: 'pwa' },
+      redirect: { name: 'pwa-sessions' },
+      children: [
+        {
+          path: 'sessions',
+          name: 'pwa-sessions',
+          component: () => import('@/views/mobile/FeishuSessionsPage.vue'),
+          meta: { embedded: true, mobileEntry: 'pwa' },
+        },
+        {
+          path: 'chat/:id',
+          name: 'pwa-chat',
+          component: () => import('@/views/mobile/FeishuChatPage.vue'),
+          meta: { embedded: true, mobileEntry: 'pwa', hideBottomNav: true },
+        },
+        {
+          path: 'gallery',
+          name: 'pwa-gallery',
+          component: () => import('@/views/mobile/FeishuGalleryPage.vue'),
+          meta: { embedded: true, mobileEntry: 'pwa' },
+        },
+        {
+          path: 'profile',
+          name: 'pwa-profile',
+          component: () => import('@/views/mobile/FeishuProfilePage.vue'),
+          meta: { embedded: true, mobileEntry: 'pwa' },
         },
       ],
     },
