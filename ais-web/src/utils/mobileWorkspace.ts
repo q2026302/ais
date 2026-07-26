@@ -1,9 +1,13 @@
 import type { RouteLocationNormalizedLoaded, RouteLocationRaw } from 'vue-router'
 
-/** Query/source value that marks navigation as coming from a mobile workbench entry. */
-export type MobileWorkspaceSource = 'mobile' | 'feishu'
+/** Formal mobile workbench entries shared by route metadata and navigation. */
+export const MOBILE_ENTRIES = ['mobile', 'feishu', 'pwa'] as const
 
-const MOBILE_SOURCES = new Set<string>(['mobile', 'feishu'])
+export type MobileEntry = (typeof MOBILE_ENTRIES)[number]
+/** Query/source value that marks navigation as coming from a mobile workbench entry. */
+export type MobileWorkspaceSource = MobileEntry
+
+const MOBILE_SOURCES = new Set<string>(MOBILE_ENTRIES)
 
 export function isMobileWorkspaceSource(value: unknown): value is MobileWorkspaceSource {
   return typeof value === 'string' && MOBILE_SOURCES.has(value)
@@ -12,7 +16,7 @@ export function isMobileWorkspaceSource(value: unknown): value is MobileWorkspac
 /**
  * Resolve which mobile workbench entry is active:
  * - route meta / path / name when on the workbench itself
- * - `?source=mobile|feishu` when visiting desktop pages from a mobile entry
+ * - `?source=mobile|feishu|pwa` when visiting desktop pages from a mobile entry
  */
 export function getMobileWorkspaceSource(
   route: Pick<RouteLocationNormalizedLoaded, 'name' | 'path' | 'query' | 'meta'>,
@@ -25,7 +29,6 @@ export function getMobileWorkspaceSource(
 
   const name = route.name?.toString()
   if (
-    name === 'feishu-h5' ||
     name === 'feishu-sessions' ||
     name === 'feishu-chat' ||
     name === 'feishu-gallery' ||
@@ -35,7 +38,6 @@ export function getMobileWorkspaceSource(
     return 'feishu'
   }
   if (
-    name === 'mobile-workbench' ||
     name === 'mobile-sessions' ||
     name === 'mobile-chat' ||
     name === 'mobile-gallery' ||
@@ -44,15 +46,24 @@ export function getMobileWorkspaceSource(
   ) {
     return 'mobile'
   }
+  if (
+    name === 'pwa-sessions' ||
+    name === 'pwa-chat' ||
+    name === 'pwa-gallery' ||
+    name === 'pwa-profile' ||
+    route.path.startsWith('/pwa/')
+  ) {
+    return 'pwa'
+  }
   return null
 }
 
 export function mobileWorkspaceLocation(source: MobileWorkspaceSource): RouteLocationRaw {
-  return source === 'feishu' ? { path: '/feishu' } : { path: '/mobile' }
+  return { path: mobileWorkspacePath(source) }
 }
 
 export function mobileWorkspacePath(source: MobileWorkspaceSource): string {
-  return source === 'feishu' ? '/feishu' : '/mobile'
+  return `/${source}`
 }
 
 /** Attach mobile source query when navigating from a mobile workbench entry. */

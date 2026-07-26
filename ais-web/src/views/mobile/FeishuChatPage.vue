@@ -41,7 +41,7 @@ const store = useSessionStore()
 const router = useRouter()
 const route = useRoute()
 
-const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobile' : 'feishu'))
+const entryPrefix = computed(() => route.meta.mobileEntry ?? 'mobile')
 
 const messagesRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -945,7 +945,8 @@ const debugInfo = computed(() => {
 
   return {
     kbd: `colpsd=${inputChromeCollapsed.value} kbd=${mobileKeyboard?.keyboardOpen.value} focus=${mobileKeyboard?.composerFocused.value}`,
-    mode: isStandalone ? 'PWA' : 'browser',
+    entry: route.meta.mobileEntry ?? 'unknown',
+    mode: isStandalone ? 'standalone' : 'not-standalone',
     vv: `h=${readCssVar('--vv-height')} top=${readCssVar('--vv-offset-top')} ins=${readCssVar('--vv-keyboard-inset')} open=${readCssVar('--vv-keyboard-open')}`,
     dims: `ih=${typeof window !== 'undefined' ? window.innerHeight : '?'} oh=${typeof window !== 'undefined' ? window.outerHeight : '?'} ch=${typeof document !== 'undefined' ? document.documentElement.clientHeight : '?'}`,
     dims2: `vvh=${vv?.height != null ? Math.round(vv.height) : 'N/A'} vvt=${vv?.offsetTop != null ? Math.round(vv.offsetTop) : 'N/A'} sh=${typeof screen !== 'undefined' ? screen.height : '?'} sah=${typeof screen !== 'undefined' ? screen.availHeight : '?'}`,
@@ -1256,7 +1257,7 @@ const debugInfo = computed(() => {
     <!-- Debug overlay — always visible on top -->
     <div class="debug-overlay">
       <div><code>kbd: {{ debugInfo.kbd }}</code></div>
-      <div><code>mode: {{ debugInfo.mode }}  vv: {{ debugInfo.vv }}</code></div>
+      <div><code>entry: {{ debugInfo.entry }}  mode: {{ debugInfo.mode }}  vv: {{ debugInfo.vv }}</code></div>
       <div><code>win: {{ debugInfo.dims }}</code></div>
       <div><code>vv2: {{ debugInfo.dims2 }}</code></div>
       <div><code>dom: {{ debugInfo.dom }}</code></div>

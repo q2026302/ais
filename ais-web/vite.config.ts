@@ -55,7 +55,7 @@ export default defineConfig(({ mode }) => {
   // explicit deployment root: their URLs must be stable when the page is at
   // /ais/mobile, and the worker must control the whole AIS context.
   const pwaBase = `${contextPath || ''}/`
-  const pwaStartUrl = `${pwaBase}mobile`
+  const pwaStartUrl = `${pwaBase}pwa`
   const apiPath = `${contextPath || ''}/api`
   const apiPathPattern = new RegExp(`^${escapeRegExp(apiPath)}(?:/|$)`)
   // These are the persistent binary image paths served by WebConfig. Keep

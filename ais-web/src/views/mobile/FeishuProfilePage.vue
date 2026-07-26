@@ -17,6 +17,7 @@ import {
 import client from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { isRestrictedWebView } from '@/utils/downloadImage'
+import { getAppBasePath } from '@/utils/appBasePath'
 import {
   getMobileWorkspaceSource,
   mobileWorkspacePath,
@@ -67,12 +68,12 @@ async function copyText(text: string, successMessage = '内容已复制') {
 }
 
 function getMobileInstallUrl() {
-  if (typeof window === 'undefined') return mobileWorkspacePath('mobile')
+  if (typeof window === 'undefined') return mobileWorkspacePath('pwa')
   const url = new URL(window.location.href)
   const currentPath = url.pathname.replace(/\/$/, '')
-  url.pathname = /\/(?:mobile|feishu)(?:\/.*)?$/.test(currentPath)
-    ? `${currentPath.replace(/\/(?:mobile|feishu)(?:\/.*)?$/, '')}/mobile`
-    : mobileWorkspacePath('mobile')
+  url.pathname = /\/(?:mobile|feishu|pwa)(?:\/.*)?$/.test(currentPath)
+    ? `${currentPath.replace(/\/(?:mobile|feishu|pwa)(?:\/.*)?$/, '')}/pwa`
+    : `${getAppBasePath().replace(/\/$/, '')}/pwa`
   url.search = ''
   url.hash = ''
   return url.href
