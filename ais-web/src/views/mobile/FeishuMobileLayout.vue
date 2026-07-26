@@ -4,8 +4,8 @@ import { useRoute } from 'vue-router'
 import { MagicStick, MoreFilled, Picture, Plus, ChatDotRound, User } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
 import {
-  applyVisualViewportCssVars,
   pinShellToVisualViewport,
+  readVisualViewport,
   shouldForceOverlayKeyboardFallback,
   subscribeVisualViewport,
   type VisualViewportState,
@@ -38,8 +38,34 @@ const composerFocused = ref(false)
  */
 const inputChromeCollapsed = computed(() => keyboardOpen.value || composerFocused.value)
 
+/**
+ * Focus-session latch: once an *unforced* VV sample reports keyboardOpen during
+ * this focus, stop the artificial standalone overlay fallback. System-keyboard
+ * dismiss often leaves the input focused; without this latch force keeps the
+ * shell shrunk until an explicit blur.
+ *
+ * Sampling (trackUnforcedKeyboard) is separate from the force decision below.
+ */
+let sawRealKeyboardOpen = false
+/**
+ * Consecutive unforced keyboardOpen=false samples while sawRealKeyboardOpen.
+ * Require CLOSE_CONFIRM_SAMPLES before restoring the shell so mid-animation
+ * single-frame false positives do not unforce early.
+ */
+let unforcedCloseConfirmCount = 0
+/** Consecutive closed samples required before dismiss-without-blur restore. */
+const CLOSE_CONFIRM_SAMPLES = 2
+
 let stopVisualViewport: (() => void) | null = null
+let stopFocusKeyboardWatch: (() => void) | null = null
 let onAisVisualViewport: ((event: Event) => void) | null = null
+/** Pending setComposerBlur delay; cleared on unmount / re-focus. */
+let composerBlurTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Hunt for a real VV open after focus (ms). Pure-overlay PWAs stop after this. */
+const FOCUS_OPEN_PROBE_MS = 2500
+/** Poll while focused until real open / dismiss / probe timeout. */
+const FOCUS_KEYBOARD_POLL_MS = 120
 
 const entryPrefix = computed(() => (route.meta.mobileEntry === 'mobile' ? 'mobile' : 'feishu'))
 
@@ -55,65 +81,198 @@ const hideBottomNav = computed(
   () => route.meta?.hideBottomNav === true || inputChromeCollapsed.value,
 )
 
+/** Unforced VV read — force path always reports keyboardOpen=true. */
+function sampleUnforcedViewport(): VisualViewportState | null {
+  if (typeof window === 'undefined') return null
+  return readVisualViewport(window, { forceKeyboardFallback: false })
+}
+
 /**
- * Soft keyboards that overlay content without shrinking visualViewport:
- * only Android/iOS installed PWA / WebAPK
- * (`display-mode: standalone|fullscreen|minimal-ui`, or navigator.standalone).
- *
- * Ordinary mobile browsers and Feishu in-app WebViews already resize the
- * viewport correctly, so we deliberately do NOT force the height fallback
- * there (avoids double-shrink / over-collapse).
+ * State detection only: update the real-open latch from an unforced sample.
+ * Returns whether the unforced sample currently says the keyboard is open.
+ * Also resets close-confirm streak when a real open is seen again.
+ */
+function trackUnforcedKeyboard(state?: VisualViewportState | null): boolean {
+  if (!composerFocused.value) return false
+  const sample = state ?? sampleUnforcedViewport()
+  if (!sample) return false
+  if (sample.keyboardOpen) {
+    sawRealKeyboardOpen = true
+    unforcedCloseConfirmCount = 0
+    return true
+  }
+  return false
+}
+
+function clearComposerBlurTimer() {
+  if (composerBlurTimer != null) {
+    clearTimeout(composerBlurTimer)
+    composerBlurTimer = null
+  }
+}
+
+/**
+ * Pure force policy (no sampling side effects):
+ * standalone PWA + focused + have not yet observed a real VV open.
+ * Ordinary browsers / Feishu WebViews never force (avoids double-shrink).
  */
 function shouldForceKeyboardFallback(): boolean {
+  if (sawRealKeyboardOpen) return false
   return shouldForceOverlayKeyboardFallback(composerFocused.value)
+}
+
+/**
+ * Sample then decide force. Used by pin / subscribe / focus watch so a pure VV
+ * resize can clear force after a real open without burying sampling in policy.
+ */
+function resolveForceKeyboardFallback(forceFallback?: boolean): boolean {
+  if (composerFocused.value) trackUnforcedKeyboard()
+  if (sawRealKeyboardOpen) return false
+  if (forceFallback === true) return shouldForceOverlayKeyboardFallback(true)
+  return shouldForceKeyboardFallback()
 }
 
 function applyViewportState(state: VisualViewportState) {
   keyboardOpen.value = state.keyboardOpen
 }
 
-function applyShellGeometry(state: VisualViewportState) {
-  const el = pageRef.value
-  if (!el) return
-  applyVisualViewportCssVars(el, state)
-  // Explicit geometry — more reliable than CSS vars alone on some Android PWAs.
-  el.style.top = `${state.offsetTop}px`
-  el.style.height = `${state.height}px`
-  el.style.maxHeight = `${state.height}px`
-  applyViewportState(state)
-}
-
 function pinPageShell(forceFallback?: boolean) {
-  const force = forceFallback === true || shouldForceKeyboardFallback()
+  const force = resolveForceKeyboardFallback(forceFallback)
   const state = pinShellToVisualViewport(pageRef.value, { forceKeyboardFallback: force })
   applyViewportState(state)
+  // If a real open was first observed via subscribe / ais event after the open
+  // probe timed out, restart sampling so a later dismiss-without-blur still
+  // restores the shell (force is already off once the latch is set).
+  if (
+    composerFocused.value &&
+    sawRealKeyboardOpen &&
+    !stopFocusKeyboardWatch &&
+    sampleUnforcedViewport()?.keyboardOpen
+  ) {
+    startFocusKeyboardWatch()
+  }
   return state
 }
 
+/**
+ * While composer is focused, poll *unforced* VV so that:
+ *  1) a delayed real open clears the force latch and pins real geometry;
+ *  2) keyboard dismiss without blur (and sometimes without VV events) restores
+ *     the shell via a no-force pin once keyboardOpen=false is observed.
+ *
+ * Adaptive lifetime — not a permanent high-frequency timer:
+ *  - no real open yet → stop after FOCUS_OPEN_PROBE_MS (overlay path keeps
+ *    force via shouldForceKeyboardFallback until blur);
+ *  - real open observed → keep polling until unforced close or blur, then stop.
+ * Also listens to VV/window resize so event-driven dismiss reacts immediately.
+ */
+function clearFocusKeyboardWatch() {
+  stopFocusKeyboardWatch?.()
+  stopFocusKeyboardWatch = null
+}
+
+function startFocusKeyboardWatch() {
+  clearFocusKeyboardWatch()
+  if (typeof window === 'undefined') return
+
+  const win = window
+  const started =
+    typeof performance !== 'undefined' ? performance.now() : Date.now()
+  let stopped = false
+  let intervalId: ReturnType<typeof setInterval> | undefined
+
+  const now = () =>
+    typeof performance !== 'undefined' ? performance.now() : Date.now()
+
+  const cancel = () => {
+    if (stopped) return
+    stopped = true
+    if (intervalId != null) clearInterval(intervalId)
+    intervalId = undefined
+    vv?.removeEventListener('resize', onViewportEvent)
+    vv?.removeEventListener('scroll', onViewportEvent)
+    win.removeEventListener('resize', onViewportEvent)
+    if (stopFocusKeyboardWatch === cancel) stopFocusKeyboardWatch = null
+  }
+
+  const tick = () => {
+    if (stopped || !composerFocused.value) {
+      cancel()
+      return
+    }
+
+    const unforced = sampleUnforcedViewport()
+    if (!unforced) return
+
+    const open = trackUnforcedKeyboard(unforced)
+
+    if (open) {
+      // Real keyboard geometry — pin without force (resolveForce also yields).
+      // trackUnforcedKeyboard already cleared the close-confirm streak.
+      pinPageShell(false)
+      return
+    }
+
+    if (sawRealKeyboardOpen) {
+      // Require consecutive closed unforced samples so open/close animation
+      // frames do not restore the shell early. No fixed screen-size guessing:
+      // pure-overlay dismiss that never emits VV stays latched until blur.
+      unforcedCloseConfirmCount += 1
+      if (unforcedCloseConfirmCount < CLOSE_CONFIRM_SAMPLES) {
+        return
+      }
+      // Real keyboard was open and is now confirmed closed while focus is retained.
+      // Explicit no-force pin restores shell height; do not wait for blur.
+      pinPageShell(false)
+      cancel()
+      return
+    }
+
+    // Still waiting for a real open: keep standalone overlay force if applicable.
+    pinPageShell(shouldForceKeyboardFallback())
+    if (now() - started >= FOCUS_OPEN_PROBE_MS) {
+      // Pure overlay keyboard: stop polling; force stays until blur / real open
+      // observed via subscribeVisualViewport / ais:visual-viewport.
+      cancel()
+    }
+  }
+
+  const onViewportEvent = () => tick()
+  const vv = win.visualViewport
+  vv?.addEventListener('resize', onViewportEvent)
+  vv?.addEventListener('scroll', onViewportEvent)
+  win.addEventListener('resize', onViewportEvent)
+
+  intervalId = setInterval(tick, FOCUS_KEYBOARD_POLL_MS)
+  stopFocusKeyboardWatch = cancel
+  tick()
+}
+
 function setComposerFocus() {
+  clearComposerBlurTimer()
   composerFocused.value = true
+  sawRealKeyboardOpen = false
+  unforcedCloseConfirmCount = 0
   // Immediate pin + overlay fallback (standalone PWA only) so Android WebAPK
   // does not wait for VV / VK geometry.
   pinPageShell(shouldForceKeyboardFallback())
-  // Re-pin on the next frames so delayed keyboard animations still shrink the shell.
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => {
-      if (composerFocused.value) pinPageShell(shouldForceKeyboardFallback())
-      requestAnimationFrame(() => {
-        if (composerFocused.value) pinPageShell(shouldForceKeyboardFallback())
-      })
-    })
-  }
+  // Short unforced sampling covers delayed open + dismiss-without-blur.
+  startFocusKeyboardWatch()
 }
 
 function setComposerBlur() {
   // Delay slightly so focus moving between composer controls does not flash nav.
-  window.setTimeout(() => {
+  clearComposerBlurTimer()
+  composerBlurTimer = window.setTimeout(() => {
+    composerBlurTimer = null
     const active = document.activeElement
     if (active instanceof HTMLElement && active.closest?.('.composer, .fullscreen-input-overlay')) {
       return
     }
     composerFocused.value = false
+    sawRealKeyboardOpen = false
+    unforcedCloseConfirmCount = 0
+    clearFocusKeyboardWatch()
     pinPageShell(false)
   }, 80)
 }
@@ -135,28 +294,24 @@ onMounted(() => {
   stopVisualViewport = subscribeVisualViewport(
     (state) => {
       // subscribeVisualViewport already pins when pinShell:true; just sync flag.
+      // Force getter samples unforced VV so a pure resize can clear the latch.
       applyViewportState(state)
     },
     {
       cssTarget: () => pageRef.value,
       pinShell: true,
-      forceKeyboardFallback: shouldForceKeyboardFallback,
+      forceKeyboardFallback: () => resolveForceKeyboardFallback(),
     },
   )
   // main.ts focus watch measures with a keyboard-height fallback and dispatches
-  // here. Prefer that detail for geometry so we do not re-read without fallback
-  // before the composer focus handler has set composerFocused.
+  // here. Re-pin with local fallback policy (not the event detail): main.ts may
+  // force-while-focused, which keeps keyboardOpen=true artificially. After a real
+  // VV open is observed we drop force so system-keyboard dismiss restores the
+  // shell even if the input stays focused. Pure overlay keyboards still force.
   onAisVisualViewport = (event: Event) => {
     const detail = (event as CustomEvent<VisualViewportState | undefined>).detail
     if (detail) {
-      // Prefer the measured detail, but if the composer is focused and the
-      // report still claims the keyboard is closed (overlay keyboards), re-pin
-      // with the local fallback so we do not expand back over the input.
-      if (composerFocused.value && !detail.keyboardOpen && shouldForceKeyboardFallback()) {
-        pinPageShell(true)
-      } else {
-        applyShellGeometry(detail)
-      }
+      pinPageShell()
     } else {
       pinPageShell(false)
     }
@@ -167,6 +322,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearComposerBlurTimer()
+  clearFocusKeyboardWatch()
   stopVisualViewport?.()
   stopVisualViewport = null
   if (typeof window !== 'undefined' && onAisVisualViewport) {
