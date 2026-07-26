@@ -59,7 +59,12 @@ function saveLastViewedMap(map: Record<string, number>) {
 export const useSessionStore = defineStore('session', () => {
   const sessions = ref<Session[]>([])
   const activeSessionId = ref<number | null>(null)
+  const selectionTargetId = ref<number | null>(null)
   const messages = ref<Message[]>([])
+  // A session becomes active only after its messages load successfully. This
+  // prevents a sessions refresh from acknowledging a merely requested session.
+  let sessionSelectionGeneration = 0
+  let sessionsFetchGeneration = 0
   const loading = ref(false)
   const activeRequestController = ref<AbortController | null>(null)
   const activeOperationType = ref<'CHAT' | 'DRAW' | 'REGENERATE' | null>(null)
@@ -83,6 +88,8 @@ export const useSessionStore = defineStore('session', () => {
   // Polling state for draw generation
   const pollingIntervals = ref<Map<number, ReturnType<typeof setInterval>>>(new Map())
   const polledMessageStatuses = ref<Map<number, { status: string; stage: string }>>(new Map())
+  const pollingRuns = new Map<number, { generation: number; inFlight: boolean }>()
+  let pollingGeneration = 0
 
   function togglePin(sessionId: number) {
     const idx = pinnedSessions.value.indexOf(sessionId)
@@ -119,7 +126,7 @@ export const useSessionStore = defineStore('session', () => {
   function visibleActivityTime(sessionId: number): number {
     const session = sessions.value.find((item) => item.id === sessionId)
     let latest = session ? sessionActivityTime(session) : 0
-    if (activeSessionId.value === sessionId) {
+    if (isViewingSession(sessionId)) {
       for (const message of messages.value) {
         const ts = messageActivityTime(message)
         if (ts > latest) latest = ts
@@ -169,6 +176,11 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   function recordLastViewed(sessionId: number, at?: number) {
+    // A loaded-but-no-longer-targeted session is no longer visible to the
+    // user. Do not let its completion advance the viewed watermark while a
+    // newer selection is still loading.
+    if (!isViewingSession(sessionId)) return
+
     // First, repair any historical Date.now() pollution for this session so the
     // prev >= ts early-return cannot permanently pin an inflated watermark.
     const activity = visibleActivityTime(sessionId)
@@ -253,8 +265,12 @@ export const useSessionStore = defineStore('session', () => {
     return pinnedSessions.value.includes(sessionId)
   }
 
+  function isViewingSession(sessionId: number) {
+    return activeSessionId.value === sessionId && selectionTargetId.value === sessionId
+  }
+
   function isUnread(sessionId: number) {
-    if (activeSessionId.value === sessionId) return false
+    if (isViewingSession(sessionId)) return false
     if (unreadSessions.value.includes(sessionId)) return true
 
     const session = sessions.value.find((item) => item.id === sessionId)
@@ -282,6 +298,9 @@ export const useSessionStore = defineStore('session', () => {
     let unreadChanged = false
     let viewedChanged = false
     const nextUnread = new Set(unreadSessions.value)
+    const viewedSessionId = activeSessionId.value != null && selectionTargetId.value === activeSessionId.value
+      ? activeSessionId.value
+      : null
 
     // Repair polluted watermarks first so subsequent comparisons use server timeline.
     const sanitized = sanitizePollutedLastViewed(lastViewedAt.value)
@@ -291,8 +310,9 @@ export const useSessionStore = defineStore('session', () => {
     for (const session of sessions.value) {
       const activity = sessionActivityTime(session)
       const key = String(session.id)
-      if (activeSessionId.value === session.id) {
+      if (viewedSessionId === session.id) {
         // User is looking at this session — whatever just arrived is already seen.
+        if (nextUnread.delete(session.id)) unreadChanged = true
         if (activity > 0) {
           const viewed = typeof nextViewed[key] === 'number' ? nextViewed[key] : null
           if (viewed == null || activity > viewed) {
@@ -340,7 +360,7 @@ export const useSessionStore = defineStore('session', () => {
     const session = sessions.value.find((item) => item.id === sessionId)
     if (!session) return null
 
-    if (activeSessionId.value === sessionId && messages.value.length > 0) {
+    if (isViewingSession(sessionId) && messages.value.length > 0) {
       const last = messages.value[messages.value.length - 1]!
       let preview = (last.content || '').trim()
       if (!preview && last.imageUrl) preview = '[图片]'
@@ -420,8 +440,11 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function fetchSessions() {
+    const generation = ++sessionsFetchGeneration
     try {
-      sessions.value = await sessionApi.list()
+      const fetchedSessions = await sessionApi.list()
+      if (generation !== sessionsFetchGeneration) return
+      sessions.value = fetchedSessions
       syncAutoUnreadFromSessions()
     } catch (e) {
       console.error('Failed to fetch sessions', e)
@@ -452,8 +475,7 @@ export const useSessionStore = defineStore('session', () => {
   async function deleteSession(id: number) {
     await sessionApi.delete(id)
     if (activeSessionId.value === id) {
-      activeSessionId.value = null
-      messages.value = []
+      clearActiveSession()
     }
     if (pinnedSessions.value.includes(id)) {
       pinnedSessions.value = pinnedSessions.value.filter((item) => item !== id)
@@ -467,20 +489,27 @@ export const useSessionStore = defineStore('session', () => {
     await fetchSessions()
   }
 
+  function beginSessionSelection(id: number) {
+    sessionSelectionGeneration += 1
+    selectionTargetId.value = id
+    return sessionSelectionGeneration
+  }
+
   async function selectSession(id: number) {
-    activeSessionId.value = id
-    markAsRead(id)
-    recordLastViewed(id)
+    const generation = beginSessionSelection(id)
     const selectedMessages = await sessionApi.getMessages(id)
-    if (activeSessionId.value === id) {
-      messages.value = selectedMessages
-      // Keep last-viewed ahead of any messages just loaded for this session.
-      recordLastViewed(id)
-      // Resume polling for any PENDING draw messages
-      for (const msg of selectedMessages) {
-        if (msg.status === 'PENDING' && msg.messageType === 'DRAW_RESPONSE') {
-          startPolling(id, msg.id)
-        }
+    if (generation !== sessionSelectionGeneration || selectionTargetId.value !== id) return
+
+    activeSessionId.value = id
+    messages.value = selectedMessages
+    // Mark read only once the requested conversation has loaded.
+    markAsRead(id)
+    // Keep last-viewed ahead of any messages just loaded for this session.
+    recordLastViewed(id)
+    // Resume polling for any PENDING draw messages.
+    for (const msg of selectedMessages) {
+      if (msg.status === 'PENDING' && msg.messageType === 'DRAW_RESPONSE') {
+        startPolling(id, msg.id)
       }
     }
   }
@@ -492,8 +521,25 @@ export const useSessionStore = defineStore('session', () => {
    * otherwise suppress them).
    */
   function clearActiveSession() {
+    sessionSelectionGeneration += 1
+    selectionTargetId.value = null
     activeSessionId.value = null
     messages.value = []
+  }
+
+  async function reloadSessionIfCurrent(sessionId: number) {
+    if (!isViewingSession(sessionId)) return false
+    const selectedMessages = await sessionApi.getMessages(sessionId)
+    if (!isViewingSession(sessionId)) return false
+
+    messages.value = selectedMessages
+    recordLastViewed(sessionId)
+    for (const msg of selectedMessages) {
+      if (msg.status === 'PENDING' && msg.messageType === 'DRAW_RESPONSE') {
+        startPolling(sessionId, msg.id)
+      }
+    }
+    return true
   }
 
   async function generate(
@@ -502,16 +548,17 @@ export const useSessionStore = defineStore('session', () => {
     chatProviderId?: number | null,
     imageProviderId?: number | null,
   ) {
-    if (!activeSessionId.value) return
+    const sessionId = activeSessionId.value
+    if (sessionId == null || !isViewingSession(sessionId)) return
     loading.value = true
     try {
-      const result = await sessionApi.generate(activeSessionId.value, {
+      const result = await sessionApi.generate(sessionId, {
         prompt,
         attachmentIds,
         chatProviderId,
         imageProviderId,
       })
-      await selectSession(activeSessionId.value)
+      await reloadSessionIfCurrent(sessionId)
       await fetchSessions()
       return result
     } finally {
@@ -565,7 +612,7 @@ export const useSessionStore = defineStore('session', () => {
     attachmentFiles: UploadResponse[] = [],
   ) {
     const sessionId = activeSessionId.value
-    if (sessionId == null) return
+    if (sessionId == null || !isViewingSession(sessionId)) return
     loading.value = true
     const tempAssistantId = addChatPlaceholder(prompt, attachmentFiles)
     const controller = beginOperation(sessionId, 'CHAT', tempAssistantId, '正在等待模型回应，可随时终止')
@@ -575,13 +622,15 @@ export const useSessionStore = defineStore('session', () => {
         attachmentIds,
         chatProviderId: chatProviderId ?? null,
       }, { signal: controller.signal })
-      if (activeSessionId.value === sessionId) await selectSession(sessionId)
+      await reloadSessionIfCurrent(sessionId)
       await fetchSessions()
       return result
     } catch (e) {
-      if (!isCancelled(controller, e)) markPendingChatFailed(tempAssistantId, e)
-      if (activeSessionId.value === sessionId) {
-        try { await selectSession(sessionId) } catch { /* ignore reload errors */ }
+      if (!isCancelled(controller, e) && isViewingSession(sessionId)) {
+        markPendingChatFailed(tempAssistantId, e)
+      }
+      if (isViewingSession(sessionId)) {
+        try { await reloadSessionIfCurrent(sessionId) } catch { /* ignore reload errors */ }
       }
       throw e
     } finally {
@@ -657,7 +706,7 @@ export const useSessionStore = defineStore('session', () => {
 
   // Polling for draw generation status
   async function applyMessageStatus(sessionId: number, status: MessageStatusResponse) {
-    if (activeSessionId.value !== sessionId) return
+    if (!isViewingSession(sessionId)) return
     const message = messages.value.find((item) => item.id === status.messageId)
     if (message) {
       message.status = status.status
@@ -671,14 +720,26 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  async function pollMessageStatus(sessionId: number, messageId: number) {
-    const status = await sessionApi.getMessageStatus(sessionId, messageId)
-    polledMessageStatuses.value.set(messageId, {
-      status: status.status,
-      stage: status.processingInfo || '',
-    })
-    await applyMessageStatus(sessionId, status)
-    return status
+  async function pollMessageStatus(sessionId: number, messageId: number, generation: number) {
+    const run = pollingRuns.get(messageId)
+    if (!run || run.generation !== generation || run.inFlight) return null
+
+    run.inFlight = true
+    try {
+      const status = await sessionApi.getMessageStatus(sessionId, messageId)
+      const current = pollingRuns.get(messageId)
+      if (!current || current.generation !== generation) return null
+
+      polledMessageStatuses.value.set(messageId, {
+        status: status.status,
+        stage: status.processingInfo || '',
+      })
+      await applyMessageStatus(sessionId, status)
+      return status
+    } finally {
+      const current = pollingRuns.get(messageId)
+      if (current?.generation === generation) current.inFlight = false
+    }
   }
 
   /**
@@ -688,9 +749,9 @@ export const useSessionStore = defineStore('session', () => {
    * is still viewing the same session.
    */
   async function handlePolledTerminalStatus(sessionId: number) {
-    if (activeSessionId.value === sessionId) {
+    if (isViewingSession(sessionId)) {
       try {
-        await selectSession(sessionId)
+        await reloadSessionIfCurrent(sessionId)
       } catch {
         /* ignore reload errors; still refresh list below */
       }
@@ -702,28 +763,30 @@ export const useSessionStore = defineStore('session', () => {
 
   function startPolling(sessionId: number, messageId: number) {
     stopPolling(messageId)
-    const interval = setInterval(async () => {
+    const generation = ++pollingGeneration
+    pollingRuns.set(messageId, { generation, inFlight: false })
+
+    const pollOnce = async () => {
       try {
-        const status = await pollMessageStatus(sessionId, messageId)
-        if (status.status === 'SUCCESS' || status.status === 'FAILED') {
-          stopPolling(messageId)
-          await handlePolledTerminalStatus(sessionId)
-        }
+        const status = await pollMessageStatus(sessionId, messageId, generation)
+        if (!status || status.status === 'PENDING') return
+        const current = pollingRuns.get(messageId)
+        if (!current || current.generation !== generation) return
+        stopPolling(messageId)
+        await handlePolledTerminalStatus(sessionId)
       } catch {
         // Keep the placeholder visible and retry on the next interval. A transient
         // network failure should not turn a durable queued message into a failure.
       }
-    }, 3000)
+    }
+
+    const interval = setInterval(() => void pollOnce(), 3000)
     pollingIntervals.value.set(messageId, interval)
-    void pollMessageStatus(sessionId, messageId).then(async (status) => {
-      if (status.status === 'SUCCESS' || status.status === 'FAILED') {
-        stopPolling(messageId)
-        await handlePolledTerminalStatus(sessionId)
-      }
-    }).catch(() => undefined)
+    void pollOnce()
   }
 
   function stopPolling(messageId: number) {
+    pollingRuns.delete(messageId)
     const interval = pollingIntervals.value.get(messageId)
     if (interval) {
       clearInterval(interval)
@@ -733,6 +796,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   function stopAllPolling() {
+    pollingRuns.clear()
     pollingIntervals.value.forEach((interval) => clearInterval(interval))
     pollingIntervals.value.clear()
     polledMessageStatuses.value.clear()
@@ -740,7 +804,7 @@ export const useSessionStore = defineStore('session', () => {
 
   async function draw(request: DrawRequest, referenceFiles: UploadResponse[] = []) {
     const sessionId = activeSessionId.value
-    if (sessionId == null) return
+    if (sessionId == null || !isViewingSession(sessionId)) return
     loading.value = true
     const tempAssistantId = addDrawPlaceholder(request, referenceFiles)
     const controller = beginOperation(
@@ -755,11 +819,11 @@ export const useSessionStore = defineStore('session', () => {
       if (result.status === 'PENDING' && result.assistantMessageId) {
         startPolling(sessionId, result.assistantMessageId)
       }
-      if (activeSessionId.value === sessionId) await selectSession(sessionId)
+      await reloadSessionIfCurrent(sessionId)
       await fetchSessions()
       return result
     } catch (e) {
-      if (!isCancelled(controller, e)) {
+      if (!isCancelled(controller, e) && isViewingSession(sessionId)) {
         const pending = messages.value.find((item) => item.id === tempAssistantId)
         if (pending) {
           pending.status = 'FAILED'
@@ -767,9 +831,7 @@ export const useSessionStore = defineStore('session', () => {
           pending.errorMessage = e instanceof Error ? e.message : String(e)
           pending.drawPlaceholder = undefined
         }
-        if (activeSessionId.value === sessionId) {
-          try { await selectSession(sessionId) } catch { /* ignore reload errors */ }
-        }
+        try { await reloadSessionIfCurrent(sessionId) } catch { /* ignore reload errors */ }
       }
       throw e
     } finally {
@@ -780,13 +842,14 @@ export const useSessionStore = defineStore('session', () => {
   // Manual refresh for a message that's still PENDING
   async function manualRefreshMessage(messageId: number) {
     const sessionId = activeSessionId.value
-    if (sessionId == null) return
+    if (sessionId == null || !isViewingSession(sessionId)) return
     try {
       const status = await sessionApi.getMessageStatus(sessionId, messageId)
       await applyMessageStatus(sessionId, status)
       if (status.status === 'SUCCESS' || status.status === 'FAILED') {
         stopPolling(messageId)
-        await selectSession(sessionId)
+        await reloadSessionIfCurrent(sessionId)
+        await fetchSessions()
         return true
       } else {
         // Still pending, resume polling
@@ -811,7 +874,7 @@ export const useSessionStore = defineStore('session', () => {
     imageProviderId?: number | null,
   ) {
     const sessionId = activeSessionId.value
-    if (sessionId == null) return
+    if (sessionId == null || !isViewingSession(sessionId)) return
     const target = messages.value.find((item) => item.id === messageId)
     if (!target) return
     const isDraw = target.messageType === 'DRAW_RESPONSE'
@@ -849,10 +912,11 @@ export const useSessionStore = defineStore('session', () => {
       if (result.status === 'PENDING' && result.messageId) {
         startPolling(sessionId, result.messageId)
       }
-      if (activeSessionId.value === sessionId) await selectSession(sessionId)
+      await reloadSessionIfCurrent(sessionId)
+      await fetchSessions()
       return result
     } catch (e) {
-      if (!isCancelled(controller, e)) {
+      if (!isCancelled(controller, e) && isViewingSession(sessionId)) {
         target.status = 'FAILED'
         target.errorMessage = e instanceof Error ? e.message : String(e)
         target.content = isDraw ? '图片重新生成失败。' : 'AI 重新回应失败。'
@@ -909,7 +973,7 @@ export const useSessionStore = defineStore('session', () => {
     imageProviderId?: number | null,
   ) {
     const sessionId = activeSessionId.value
-    if (sessionId == null) return
+    if (sessionId == null || !isViewingSession(sessionId)) return
     const userMessage = messages.value.find((item) => item.id === messageId)
     if (!userMessage || userMessage.role !== 'USER') return
 
@@ -935,10 +999,11 @@ export const useSessionStore = defineStore('session', () => {
       if (result.status === 'PENDING' && result.messageId) {
         startPolling(sessionId, result.messageId)
       }
-      if (activeSessionId.value === sessionId) await selectSession(sessionId)
+      await reloadSessionIfCurrent(sessionId)
+      await fetchSessions()
       return result
     } catch (e) {
-      if (!isCancelled(controller, e)) {
+      if (!isCancelled(controller, e) && isViewingSession(sessionId)) {
         placeholder.status = 'FAILED'
         placeholder.errorMessage = e instanceof Error ? e.message : String(e)
         placeholder.content = isDraw ? '图片再次生成失败。' : 'AI 再次回应失败。'
@@ -980,6 +1045,7 @@ export const useSessionStore = defineStore('session', () => {
     sessions,
     sortedSessions,
     activeSessionId,
+    selectionTargetId,
     messages,
     loading,
     canCancel,
