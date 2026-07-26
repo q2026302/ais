@@ -58,7 +58,6 @@ const CLOSE_CONFIRM_SAMPLES = 2
 
 let stopVisualViewport: (() => void) | null = null
 let stopFocusKeyboardWatch: (() => void) | null = null
-let onAisVisualViewport: ((event: Event) => void) | null = null
 /** Pending setComposerBlur delay; cleared on unmount / re-focus. */
 let composerBlurTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -84,7 +83,10 @@ const hideBottomNav = computed(
 /** Unforced VV read — force path always reports keyboardOpen=true. */
 function sampleUnforcedViewport(): VisualViewportState | null {
   if (typeof window === 'undefined') return null
-  return readVisualViewport(window, { forceKeyboardFallback: false })
+  return readVisualViewport(window, {
+    forceKeyboardFallback: false,
+    useScreenHeightBaseline: shouldForceOverlayKeyboardFallback(composerFocused.value),
+  })
 }
 
 /**
@@ -292,31 +294,15 @@ function handleCreateSession() {
 onMounted(() => {
   if (typeof window === 'undefined') return
   stopVisualViewport = subscribeVisualViewport(
-    (state) => {
-      // subscribeVisualViewport already pins when pinShell:true; just sync flag.
-      // Force getter samples unforced VV so a pure resize can clear the latch.
-      applyViewportState(state)
+    () => {
+      // All visual-viewport events reconcile through the same shell writer as
+      // focus polling and blur, so fallback/latch policy cannot race itself.
+      pinPageShell()
     },
     {
-      cssTarget: () => pageRef.value,
-      pinShell: true,
       forceKeyboardFallback: () => resolveForceKeyboardFallback(),
     },
   )
-  // main.ts focus watch measures with a keyboard-height fallback and dispatches
-  // here. Re-pin with local fallback policy (not the event detail): main.ts may
-  // force-while-focused, which keeps keyboardOpen=true artificially. After a real
-  // VV open is observed we drop force so system-keyboard dismiss restores the
-  // shell even if the input stays focused. Pure overlay keyboards still force.
-  onAisVisualViewport = (event: Event) => {
-    const detail = (event as CustomEvent<VisualViewportState | undefined>).detail
-    if (detail) {
-      pinPageShell()
-    } else {
-      pinPageShell(false)
-    }
-  }
-  window.addEventListener('ais:visual-viewport', onAisVisualViewport)
   // Initial pin so the shell has concrete top/height before first paint settles.
   pinPageShell(false)
 })
@@ -326,10 +312,6 @@ onBeforeUnmount(() => {
   clearFocusKeyboardWatch()
   stopVisualViewport?.()
   stopVisualViewport = null
-  if (typeof window !== 'undefined' && onAisVisualViewport) {
-    window.removeEventListener('ais:visual-viewport', onAisVisualViewport)
-    onAisVisualViewport = null
-  }
 })
 </script>
 

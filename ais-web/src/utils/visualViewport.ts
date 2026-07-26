@@ -64,6 +64,11 @@ export interface VisualViewportEnv {
   /** Optional inset from VirtualKeyboard API (px). */
   virtualKeyboardInset?: number
   /**
+   * Measure keyboard shrink against the screen/outer-height baseline without
+   * enabling the synthetic overlay fallback.
+   */
+  useScreenHeightBaseline?: boolean
+  /**
    * When true and measured inset is still tiny, apply a standalone-PWA fallback
    * height reduction so bottom composers are not covered by overlay keyboards.
    */
@@ -73,12 +78,12 @@ export interface VisualViewportEnv {
 /**
  * Best-effort "full layout" height used as the keyboard baseline.
  *
- * When `forceKeyboardFallback` is on (composer focused in standalone PWA) we
- * prefer screen/outer metrics that do NOT shrink with soft keyboards so
+ * When `forceKeyboardFallback` or `useScreenHeightBaseline` is on we prefer
+ * screen/outer metrics that do NOT shrink with soft keyboards so
  * `interactive-widget=resizes-content` can still estimate an inset.
  *
- * When fallback is off we stick to live viewport metrics — desktop windows
- * have a large screen.availHeight that must not be treated as a keyboard.
+ * When both are off we stick to live viewport metrics — desktop windows have a
+ * large screen.availHeight that must not be treated as a keyboard.
  */
 function resolveBaselineHeight(env: VisualViewportEnv): number {
   const live = Math.max(
@@ -86,12 +91,19 @@ function resolveBaselineHeight(env: VisualViewportEnv): number {
     env.clientHeight || 0,
     env.visualViewport?.height || 0,
   )
-  if (!env.forceKeyboardFallback) return live
+  if (!env.forceKeyboardFallback && !env.useScreenHeightBaseline) return live
 
   const screen = Math.max(0, env.screenHeight || 0)
   // Only trust screen when it is at least as large as the live viewport.
   if (screen > 0 && screen + 1 >= live) return Math.max(live, screen)
   return live
+}
+
+export function needsStandaloneKeyboardFallback(
+  measuredInset: number,
+  fallbackInset: number,
+): boolean {
+  return fallbackInset > 0 && measuredInset < fallbackInset
 }
 
 /** Pure computation — safe to unit-test without a browser. */
@@ -175,16 +187,9 @@ export function computeVisualViewportState(env: VisualViewportEnv): VisualViewpo
       Math.round(liveHeight * STANDALONE_KEYBOARD_FALLBACK_RATIO),
     )
     if (fallback > 0) {
-      // Detect actual viewport shrink (not screen-chrome gap).
-      // On iOS PWA: vv.height < clientHeight (keyboard shrinks viewport)
-      // On Android PWA overlay: all heights equal (no shrink)
-      const maxUnshrunk = Math.max(
-        env.clientHeight || 0,
-        env.innerHeight || 0,
-        liveHeight,
-      )
-      const actualShrink = Math.max(0, maxUnshrunk - liveHeight)
-      if (actualShrink >= fallback) {
+      // The baseline-relative inset already captures resizes-content even when
+      // visualViewport, innerHeight, and clientHeight shrink together.
+      if (!needsStandaloneKeyboardFallback(keyboardInset, fallback)) {
         keyboardOpen = true
       } else {
         height = Math.max(0, liveHeight - fallback)
@@ -292,7 +297,7 @@ function readScreenHeight(win: Window & typeof globalThis): number {
 
 export function readVisualViewport(
   win: Window & typeof globalThis = window,
-  options?: { forceKeyboardFallback?: boolean },
+  options?: { forceKeyboardFallback?: boolean; useScreenHeightBaseline?: boolean },
 ): VisualViewportState {
   if (typeof win === 'undefined') {
     return {
@@ -324,6 +329,7 @@ export function readVisualViewport(
     screenHeight: readScreenHeight(win),
     virtualKeyboardInset: readVirtualKeyboardInset(win),
     forceKeyboardFallback: options?.forceKeyboardFallback === true,
+    useScreenHeightBaseline: options?.useScreenHeightBaseline === true,
   })
 }
 

@@ -27,22 +27,38 @@ function isEditableField(el: EventTarget | null): el is HTMLElement {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
 }
 
+function isMobileShellField(el: HTMLElement): boolean {
+  return Boolean(el.closest('.feishu-layout'))
+}
+
 /**
  * True when an editable field is focused in an installed standalone PWA
- * (overlay keyboard). Kept in sync for the global :root subscription so a bare
- * window resize cannot overwrite --vv-height with a non-fallback reading while
- * the keyboard is up. Ordinary browser / Feishu WebView are excluded.
+ * (overlay keyboard). The nested mobile shell owns its own fallback geometry,
+ * so the root must stay unforced there.
  */
 function shouldForceRootKeyboardFallback(): boolean {
   if (typeof document === 'undefined' || typeof window === 'undefined') return false
-  return shouldForceOverlayKeyboardFallback(isEditableField(document.activeElement))
+  const active = document.activeElement
+  return isEditableField(active)
+    && !isMobileShellField(active)
+    && shouldForceOverlayKeyboardFallback(true)
 }
 
-// Global CSS tokens on :root — shells read --vv-height / --vv-offset-top.
-// Force the overlay-keyboard fallback while a field is focused so #app-container
-// shrinks above overlay keyboards the same way FeishuMobileLayout does.
+function shouldDeferRootViewportGeometry(): boolean {
+  if (typeof document === 'undefined') return false
+  const active = document.activeElement
+  return isEditableField(active)
+    && isMobileShellField(active)
+    && shouldForceOverlayKeyboardFallback(true)
+}
+
+// The nested mobile workbench owns its focused standalone-PWA shell geometry.
+// Keep root measurements for normal mobile/browser resizing, but do not let
+// #app-container apply a second fallback while the composer owns the keyboard.
 subscribeVisualViewport(() => {}, {
-  cssTarget: document.documentElement,
+  cssTarget: () => (
+    shouldDeferRootViewportGeometry() ? null : document.documentElement
+  ),
   forceKeyboardFallback: shouldForceRootKeyboardFallback,
 })
 
@@ -71,6 +87,11 @@ document.addEventListener(
     const raw = event.target
     if (!isEditableField(raw)) return
     const el: HTMLElement = raw
+
+    // FeishuMobileLayout is the sole geometry owner for the nested mobile
+    // workspace. A second forced root measurement clips that shell when a
+    // standalone PWA reports real resizes-content geometry.
+    if (isMobileShellField(el)) return
 
     cancelFocusWatch?.()
     cancelFocusWatch = null

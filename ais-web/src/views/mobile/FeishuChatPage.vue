@@ -76,6 +76,8 @@ const drawSize = ref('1024x1024')
 const drawQuality = ref('auto')
 const drawFormat = ref('png')
 const originalTitle = document.title
+let disposed = false
+let selectionGeneration = 0
 
 const {
   longPressTriggered,
@@ -222,41 +224,66 @@ function routeSessionId(): number | null {
   return Number.isFinite(id) && id > 0 ? id : null
 }
 
+function beginSelection() {
+  selectionGeneration += 1
+  return selectionGeneration
+}
+
+function isCurrentSelection(generation: number) {
+  return !disposed && selectionGeneration === generation
+}
+
+async function selectCurrentSession(sessionId: number, generation: number) {
+  if (!isCurrentSelection(generation)) return false
+  await store.selectSession(sessionId)
+  return isCurrentSelection(generation)
+}
+
 async function navigateToSession(id: number) {
   if (Number(route.params.id) === id) return
   await router.replace({ name: entryPrefix.value + '-chat', params: { id } })
 }
 
 async function initialize() {
+  const generation = beginSelection()
   initializing.value = true
   try {
     await Promise.all([store.fetchSessions(), store.fetchProviders()])
+    if (!isCurrentSelection(generation)) return
+
     const targetId = routeSessionId()
     if (targetId != null) {
-      await store.selectSession(targetId)
+      if (!await selectCurrentSession(targetId, generation)) return
     } else if (store.activeSessionId != null) {
-      await store.selectSession(store.activeSessionId)
-      await navigateToSession(store.activeSessionId)
+      const activeId = store.activeSessionId
+      if (!await selectCurrentSession(activeId, generation)) return
+      if (!isCurrentSelection(generation)) return
+      await navigateToSession(activeId)
     } else {
       const first = store.sessions[0]
       if (first) {
-        await store.selectSession(first.id)
+        if (!await selectCurrentSession(first.id, generation)) return
+        if (!isCurrentSelection(generation)) return
         await navigateToSession(first.id)
       } else {
         const session = await store.createSession()
-        if (session) {
-          await store.selectSession(session.id)
-          await navigateToSession(session.id)
-        }
+        if (!session || !isCurrentSelection(generation)) return
+        if (!await selectCurrentSession(session.id, generation)) return
+        if (!isCurrentSelection(generation)) return
+        await navigateToSession(session.id)
       }
     }
+    if (!isCurrentSelection(generation)) return
     syncProviderSelection()
     syncDrawOptions()
     await scrollToBottom()
   } catch (error: any) {
-    ElMessage.error(error.message || '初始化创作页面失败')
+    if (!disposed) ElMessage.error(error.message || '初始化创作页面失败')
   } finally {
-    initializing.value = false
+    // A route selection can supersede initialization before its request settles.
+    // This page has no second initialization run, so it must always release the
+    // initial loading state once this run finishes.
+    if (!disposed) initializing.value = false
   }
 }
 
@@ -276,13 +303,16 @@ async function createNewSession() {
 }
 
 async function selectSession(id: number) {
+  const generation = beginSelection()
   try {
-    await store.selectSession(id)
+    if (!await selectCurrentSession(id, generation)) return
     syncProviderSelection()
+    if (!isCurrentSelection(generation)) return
     await navigateToSession(id)
+    if (!isCurrentSelection(generation)) return
     await scrollToBottom()
   } catch (error: any) {
-    ElMessage.error(error.message || '加载会话失败')
+    if (!disposed) ElMessage.error(error.message || '加载会话失败')
   }
 }
 
@@ -811,13 +841,17 @@ watch(
   async (id) => {
     const sessionId = Number(Array.isArray(id) ? id[0] : id)
     if (!Number.isFinite(sessionId) || sessionId <= 0) return
-    if (store.activeSessionId === sessionId) return
+    if (store.activeSessionId === sessionId && store.selectionTargetId === sessionId) {
+      return
+    }
+    const generation = beginSelection()
     try {
-      await store.selectSession(sessionId)
+      if (!await selectCurrentSession(sessionId, generation)) return
       syncProviderSelection()
+      if (!isCurrentSelection(generation)) return
       await scrollToBottom()
     } catch (error: any) {
-      ElMessage.error(error.message || '加载会话失败')
+      if (!disposed) ElMessage.error(error.message || '加载会话失败')
     }
   },
 )
@@ -834,17 +868,15 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  selectionGeneration += 1
   cancelLongPress(true)
   setSelectionSuppressed(false)
   // Ensure layout bottom-nav returns if this page unmounts while focused.
   mobileKeyboard?.setComposerBlur()
-  // Leaving the chat route: drop activeSessionId so list-page isUnread /
-  // syncAutoUnreadFromSessions can show a red-dot for this session when a
-  // background poll / in-flight chat finishes after we leave.
-  const leavingId = routeSessionId()
-  if (leavingId != null && store.activeSessionId === leavingId) {
-    store.clearActiveSession()
-  }
+  // Invalidate the store selection even if its request has not committed yet.
+  // Polling remains active so terminal updates can refresh sessions and unread.
+  store.clearActiveSession()
   document.title = originalTitle
   window.removeEventListener('resize', bumpDebugSample)
   window.visualViewport?.removeEventListener('resize', bumpDebugSample)
