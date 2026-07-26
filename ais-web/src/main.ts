@@ -28,10 +28,10 @@ function isEditableField(el: EventTarget | null): el is HTMLElement {
 }
 
 /**
- * True when an editable field is focused in an overlay-keyboard environment
- * (standalone PWA, or VirtualKeyboard API with zero geometry). Kept in sync
- * for the global :root subscription so a bare window resize cannot overwrite
- * --vv-height with a non-fallback reading while the keyboard is up.
+ * True when an editable field is focused in an installed standalone PWA
+ * (overlay keyboard). Kept in sync for the global :root subscription so a bare
+ * window resize cannot overwrite --vv-height with a non-fallback reading while
+ * the keyboard is up. Ordinary browser / Feishu WebView are excluded.
  */
 function shouldForceRootKeyboardFallback(): boolean {
   if (typeof document === 'undefined' || typeof window === 'undefined') return false
@@ -75,10 +75,10 @@ document.addEventListener(
     cancelFocusWatch?.()
     cancelFocusWatch = null
 
-    // Overlay keyboards (PWA standalone, or VirtualKeyboard API with zero
-    // geometry) leave visualViewport.height unchanged. Force a height fallback
-    // so shells that listen for `ais:visual-viewport` still shrink above the
-    // keyboard without double-shrinking browsers that already resize correctly.
+    // Installed PWA overlay keyboards leave visualViewport.height unchanged.
+    // Force a height fallback only in standalone display mode so shells that
+    // listen for `ais:visual-viewport` still shrink above the keyboard without
+    // double-shrinking ordinary browsers / Feishu WebViews that already resize.
     const forceFallback = () => shouldForceOverlayKeyboardFallback(true)
 
     cancelFocusWatch = watchViewportWhileFocused(

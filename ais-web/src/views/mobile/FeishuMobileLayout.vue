@@ -28,7 +28,7 @@ const store = useSessionStore()
 const route = useRoute()
 const pageRef = ref<HTMLElement | null>(null)
 
-/** Soft keyboard reported by visualViewport / VirtualKeyboard / standalone fallback. */
+/** Soft keyboard reported by visualViewport / PWA standalone fallback. */
 const keyboardOpen = ref(false)
 /** Composer textarea focused — hide bottom-nav immediately (before VV reports). */
 const composerFocused = ref(false)
@@ -57,12 +57,12 @@ const hideBottomNav = computed(
 
 /**
  * Soft keyboards that overlay content without shrinking visualViewport:
- *  - Android standalone / WebAPK (display-mode: standalone|fullscreen|minimal-ui)
- *  - Android browser / WebView with VirtualKeyboard API in overlay mode but
- *    zero geometry (vv/innerHeight stay full-screen; vk.boundingRect.height=0)
+ * only Android/iOS installed PWA / WebAPK
+ * (`display-mode: standalone|fullscreen|minimal-ui`, or navigator.standalone).
  *
- * Ordinary mobile browsers without VirtualKeyboard already resize correctly,
- * so we deliberately do NOT force the height fallback there.
+ * Ordinary mobile browsers and Feishu in-app WebViews already resize the
+ * viewport correctly, so we deliberately do NOT force the height fallback
+ * there (avoids double-shrink / over-collapse).
  */
 function shouldForceKeyboardFallback(): boolean {
   return shouldForceOverlayKeyboardFallback(composerFocused.value)
@@ -92,7 +92,8 @@ function pinPageShell(forceFallback?: boolean) {
 
 function setComposerFocus() {
   composerFocused.value = true
-  // Immediate pin + overlay fallback so Android does not wait for VV / VK geometry.
+  // Immediate pin + overlay fallback (standalone PWA only) so Android WebAPK
+  // does not wait for VV / VK geometry.
   pinPageShell(shouldForceKeyboardFallback())
   // Re-pin on the next frames so delayed keyboard animations still shrink the shell.
   if (typeof requestAnimationFrame === 'function') {
