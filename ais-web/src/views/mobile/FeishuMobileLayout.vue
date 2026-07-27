@@ -6,6 +6,7 @@ import { useSessionStore } from '@/stores/session'
 import {
   pinShellToVisualViewport,
   readVisualViewport,
+  isPwaEntry,
   shouldForceOverlayKeyboardFallback,
   subscribeVisualViewport,
   type VisualViewportState,
@@ -85,7 +86,7 @@ function sampleUnforcedViewport(): VisualViewportState | null {
   if (typeof window === 'undefined') return null
   return readVisualViewport(window, {
     forceKeyboardFallback: false,
-    useScreenHeightBaseline: shouldForceOverlayKeyboardFallback(composerFocused.value),
+    useScreenHeightBaseline: isPwaEntry(),
   })
 }
 
@@ -115,12 +116,14 @@ function clearComposerBlurTimer() {
 
 /**
  * Pure force policy (no sampling side effects):
- * standalone PWA + focused + have not yet observed a real VV open.
- * Ordinary browsers / Feishu WebViews never force (avoids double-shrink).
+ * The dedicated PWA entry path is authoritative. Other contexts retain the
+ * standalone-display fallback so existing installed paths continue to work.
  */
 function shouldForceKeyboardFallback(): boolean {
+  if (!composerFocused.value) return false
+  if (isPwaEntry()) return true
   if (sawRealKeyboardOpen) return false
-  return shouldForceOverlayKeyboardFallback(composerFocused.value)
+  return shouldForceOverlayKeyboardFallback(true)
 }
 
 /**
@@ -129,6 +132,8 @@ function shouldForceKeyboardFallback(): boolean {
  */
 function resolveForceKeyboardFallback(forceFallback?: boolean): boolean {
   if (composerFocused.value) trackUnforcedKeyboard()
+  if (!composerFocused.value) return false
+  if (isPwaEntry()) return true
   if (sawRealKeyboardOpen) return false
   if (forceFallback === true) return shouldForceOverlayKeyboardFallback(true)
   return shouldForceKeyboardFallback()

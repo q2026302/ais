@@ -32,6 +32,7 @@ import { formatTimeHm, parseApiDate } from '@/utils/dateTime'
 import { useLongPress } from '@/composables/useLongPress'
 import { useImageActions } from '@/composables/useImageActions'
 import type { MobileKeyboardApi } from './FeishuMobileLayout.vue'
+import { isPwaEntry, readPwaKeyboardDiagnostics } from '@/utils/visualViewport'
 
 defineOptions({
   name: 'FeishuChatPage',
@@ -961,6 +962,12 @@ const debugInfo = computed(() => {
     ? Math.round((vvH - composerBottom) * 10) / 10
     : null
   const vk = readVirtualKeyboard()
+  const pwaDiagnostics = typeof window !== 'undefined'
+    ? readPwaKeyboardDiagnostics({
+        isPwaWorkspace: route.meta.mobileEntry === 'pwa',
+        focused: mobileKeyboard?.composerFocused.value === true,
+      }, window)
+    : null
 
   const activityMs = s
     ? (parseApiDate(s.lastMessageAt || s.updatedAt)?.getTime() ?? null)
@@ -984,6 +991,14 @@ const debugInfo = computed(() => {
     dims2: `vvh=${vv?.height != null ? Math.round(vv.height) : 'N/A'} vvt=${vv?.offsetTop != null ? Math.round(vv.offsetTop) : 'N/A'} sh=${typeof screen !== 'undefined' ? screen.height : '?'} sah=${typeof screen !== 'undefined' ? screen.availHeight : '?'}`,
     dom: `lay=${layoutEl?.clientHeight ?? 'N/A'} chat=${chatEl?.clientHeight ?? 'N/A'} cbot=${composerBottom != null ? Math.round(composerBottom) : 'N/A'} gap=${gap ?? 'N/A'}`,
     api: `sa=${matchDisplayMode('standalone')} fs=${matchDisplayMode('fullscreen')} mu=${matchDisplayMode('minimal-ui')} nsa=${nStandalone} vk=${vk.has} vkh=${vk.h} vko=${vk.overlays}`,
+    pwaLocation: pwaDiagnostics?.location ?? 'unavailable',
+    pwaReferrer: pwaDiagnostics?.referrer ?? 'unavailable',
+    pwaDisplay: `${pwaDiagnostics?.displayMode ?? 'unavailable'} nsa=${pwaDiagnostics?.navigatorStandalone ?? 'unavailable'}`,
+    pwaUa: `uad=${pwaDiagnostics?.userAgentData ?? 'unavailable'} kw=${pwaDiagnostics?.userAgentKeywords ?? 'unavailable'}`,
+    pwaVirtualKeyboard: pwaDiagnostics?.virtualKeyboard ?? 'unavailable',
+    pwaDimensions: pwaDiagnostics?.dimensions ?? 'unavailable',
+    pwaEntry: isPwaEntry() ? 'pwa' : (route.meta.mobileEntry === 'feishu' ? 'feishu' : 'mobile'),
+    pwaGates: `androidRef=${pwaDiagnostics?.androidAppReferrerGate ?? 'unavailable'} allow=${pwaDiagnostics?.fallbackGate ?? 'unavailable'}`,
     red: `act=${activityMs ?? 'N/A'} view=${viewedMs ?? 'N/A'} gt=${gt ?? 'N/A'} unrd=${unreadHas}`,
     viewed: viewedMs ?? 'N/A',
     lastMsg: s?.lastMessageAt ?? s?.updatedAt ?? 'N/A',
@@ -1294,6 +1309,13 @@ const debugInfo = computed(() => {
       <div><code>vv2: {{ debugInfo.dims2 }}</code></div>
       <div><code>dom: {{ debugInfo.dom }}</code></div>
       <div><code>api: {{ debugInfo.api }}</code></div>
+      <div><code>pwa.loc: {{ debugInfo.pwaLocation }}</code></div>
+      <div><code>pwa.ref: {{ debugInfo.pwaReferrer }} mode: {{ debugInfo.pwaDisplay }}</code></div>
+      <div><code>pwa.ua: {{ debugInfo.pwaUa }}</code></div>
+      <div><code>pwa.vk: {{ debugInfo.pwaVirtualKeyboard }}</code></div>
+      <div><code>pwa.dim: {{ debugInfo.pwaDimensions }}</code></div>
+      <div><code>pwa.entry: {{ debugInfo.pwaEntry }}</code></div>
+      <div><code>pwa.gate: {{ debugInfo.pwaGates }}</code></div>
       <div><code>red: {{ debugInfo.red }}</code></div>
       <div><code>viewed: {{ debugInfo.viewed }}  lastMsg: {{ debugInfo.lastMsg }}</code></div>
       <div><code>{{ debugInfo.ex }}</code></div>

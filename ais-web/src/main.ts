@@ -8,9 +8,9 @@ import { registerPwaUpdates } from './pwa'
 import {
   subscribeVisualViewport,
   applyVisualViewportCssVars,
+  isPwaEntry,
   watchViewportWhileFocused,
   scrollElementIntoVisualViewport,
-  shouldForceOverlayKeyboardFallback,
 } from '@/utils/visualViewport'
 
 const app = createApp(App)
@@ -41,7 +41,7 @@ function shouldForceRootKeyboardFallback(): boolean {
   const active = document.activeElement
   return isEditableField(active)
     && !isMobileShellField(active)
-    && shouldForceOverlayKeyboardFallback(true)
+    && isPwaEntry()
 }
 
 function shouldDeferRootViewportGeometry(): boolean {
@@ -49,7 +49,7 @@ function shouldDeferRootViewportGeometry(): boolean {
   const active = document.activeElement
   return isEditableField(active)
     && isMobileShellField(active)
-    && shouldForceOverlayKeyboardFallback(true)
+    && isPwaEntry()
 }
 
 // The nested mobile workbench owns its focused standalone-PWA shell geometry.
@@ -100,7 +100,7 @@ document.addEventListener(
     // Force a height fallback only in standalone display mode so shells that
     // listen for `ais:visual-viewport` still shrink above the keyboard without
     // double-shrinking ordinary browsers / Feishu WebViews that already resize.
-    const forceFallback = () => shouldForceOverlayKeyboardFallback(true)
+    const forceFallback = () => isPwaEntry()
 
     cancelFocusWatch = watchViewportWhileFocused(
       (state) => {
