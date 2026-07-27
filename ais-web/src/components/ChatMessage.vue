@@ -12,6 +12,8 @@ const props = defineProps<{
   message: Message
   editingMessageId: number | null
   chatProvider?: ModelProvider | null
+  /** Optional list to resolve message.chatProviderId / drawProviderId */
+  providers?: ModelProvider[]
 }>()
 
 const emit = defineEmits<{
@@ -29,11 +31,48 @@ const thumbFailed = ref(false)
 const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.id))
 function onThumbError() { thumbFailed.value = true }
 
+function providerLabel(provider: ModelProvider | null | undefined, fallback = 'AI') {
+  if (!provider) return fallback
+  const name = provider.name || provider.providerId
+  return provider.modelName ? `${name} / ${provider.modelName}` : name
+}
+
+function resolveMessageProvider(): ModelProvider | null {
+  const message = props.message
+  const list = props.providers || []
+  if (message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST') {
+    const drawId = message.drawProviderId
+    if (drawId != null) {
+      return list.find((item) => item.id === drawId) || null
+    }
+    return null
+  }
+  const chatId = message.chatProviderId
+  if (chatId != null) {
+    const found = list.find((item) => item.id === chatId)
+    if (found) return found
+  }
+  return props.chatProvider || null
+}
+
 const displayName = computed(() => {
-  if (props.message.role === 'USER') return '我'
-  if (!props.chatProvider) return 'LLM'
-  const providerName = props.chatProvider.providerId || props.chatProvider.name
-  return `${providerName}|${props.chatProvider.modelName}`
+  if (props.message.role === 'USER') {
+    if (props.message.messageType === 'DRAW_REQUEST') return '绘图请求'
+    return '我'
+  }
+  const provider = resolveMessageProvider()
+  const label = providerLabel(provider, 'AI')
+  if (props.message.messageType === 'DRAW_RESPONSE') {
+    return label === 'AI' ? '[绘图] AI' : `[绘图] ${label}`
+  }
+  return label
+})
+
+const messageTypeClass = computed(() => {
+  const type = props.message.messageType
+  if (type === 'DRAW_REQUEST') return 'msg-type-draw-request'
+  if (type === 'DRAW_RESPONSE') return 'msg-type-draw-response'
+  return 'msg-type-chat'
 })
 
 watch(() => props.editingMessageId, (val) => {
@@ -141,13 +180,13 @@ function formatDateTime(dateStr: string): string {
 </script>
 
 <template>
-  <div class="message" :class="message.role.toLowerCase()">
+  <div class="message" :class="[message.role.toLowerCase(), messageTypeClass]">
     <div class="avatar">
-      {{ message.role === 'USER' ? '👤' : '🤖' }}
+      {{ message.role === 'USER' ? '👤' : (message.messageType === 'DRAW_RESPONSE' ? '🎨' : '🤖') }}
     </div>
     <div class="message-body">
       <div class="message-header">
-        <div class="message-name" :title="displayName">{{ displayName }}</div>
+        <div class="message-name" :class="{ 'draw-speaker': message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST' }" :title="displayName">{{ displayName }}</div>
         <div class="message-date">{{ formatDateTime(message.createdAt) }}</div>
       </div>
       <div class="bubble">
@@ -321,6 +360,9 @@ function formatDateTime(dateStr: string): string {
 .message-name { max-width: 100%; overflow: hidden; color: #495572; font-size: 12px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .message-date { color: #a0a8ba; font-size: 10px; line-height: 1.4; }
 .message.user .message-name { color: #5968d0; }
+.message-name.draw-speaker { color: #6b5bd4; }
+.message.msg-type-draw-response .bubble { border-color: #ddd6ff; background: linear-gradient(180deg, rgba(248, 246, 255, .98), rgba(255, 255, 255, .94)); }
+.message.msg-type-draw-request .bubble { border-style: dashed; border-color: #cfc8f5; }
 .bubble { position: relative; padding: 13px 16px; border: 1px solid #e8ebf6; border-radius: 5px 15px 15px 15px; background: rgba(255, 255, 255, .94); box-shadow: 0 8px 21px rgba(42, 55, 113, .065); }
 .message.user .bubble { color: #fff; border: 0; border-radius: 5px 15px 15px 15px; background: linear-gradient(135deg, #5b70f7 0%, #805de8 100%); box-shadow: 0 9px 20px rgba(83, 90, 222, .22); }
 .text { font-size: 14px; line-height: 1.68; white-space: pre-wrap; word-break: break-word; }

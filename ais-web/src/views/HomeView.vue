@@ -12,6 +12,7 @@ import RegenerateDialog from '@/components/RegenerateDialog.vue'
 import ImageGallery from '@/components/ImageGallery.vue'
 import type { Message, ModelProvider, UploadResponse } from '@/types'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
+import { userDefaultsApi } from '@/api/billing'
 
 const store = useSessionStore()
 const messagesContainer = ref<HTMLElement | null>(null)
@@ -33,6 +34,8 @@ const sidebarOpen = ref(false)
 
 const chatProviderId = ref<number | null>(null)
 const imageProviderId = ref<number | null>(null)
+const defaultChatProviderId = ref<number | null>(null)
+const defaultImageProviderId = ref<number | null>(null)
 
 const activeSessionTitle = computed(() => {
   if (!store.activeSessionId) return 'AI 图像创作'
@@ -44,24 +47,51 @@ const selectedChatProvider = computed<ModelProvider | null>(() => {
   if (chatProviderId.value != null) {
     return store.chatProviders.find((provider) => provider.id === chatProviderId.value) || null
   }
+  if (defaultChatProviderId.value != null) {
+    return store.chatProviders.find((provider) => provider.id === defaultChatProviderId.value) || null
+  }
   return store.chatProviders.find((provider) => provider.active) || null
 })
+
+const allProviders = computed(() => [...store.chatProviders, ...store.imageProviders])
 
 const regenerateTarget = computed<Message | null>(() => {
   if (regenerateTargetId.value == null) return null
   return store.messages.find((message) => message.id === regenerateTargetId.value) || null
 })
 
+function resolveProviderId(sessionValue: number | null | undefined, userDefault: number | null, providers: ModelProvider[]) {
+  if (sessionValue != null) return sessionValue
+  if (userDefault != null && providers.some((item) => item.id === userDefault)) return userDefault
+  return providers.find((item) => item.active)?.id ?? null
+}
+
+function syncProviderSelectionFromSession(session: { chatProviderId: number | null; imageProviderId: number | null }) {
+  chatProviderId.value = resolveProviderId(session.chatProviderId, defaultChatProviderId.value, store.chatProviders)
+  imageProviderId.value = resolveProviderId(session.imageProviderId, defaultImageProviderId.value, store.imageProviders)
+}
+
 watch(() => store.activeSessionId, (sessionId) => {
   if (sessionId == null) return
   const session = store.sessions.find((item) => item.id === sessionId)
   if (!session) return
-  chatProviderId.value = session.chatProviderId
-  imageProviderId.value = session.imageProviderId
+  syncProviderSelectionFromSession(session)
 })
 
 onMounted(async () => {
-  await Promise.all([store.fetchSessions(), store.fetchProviders()])
+  await Promise.all([
+    store.fetchSessions(),
+    store.fetchProviders(),
+    userDefaultsApi.get()
+      .then((defaults) => {
+        defaultChatProviderId.value = defaults.defaultChatProviderId
+        defaultImageProviderId.value = defaults.defaultImageProviderId
+      })
+      .catch(() => {
+        defaultChatProviderId.value = null
+        defaultImageProviderId.value = null
+      }),
+  ])
   if (store.activeSessionId == null && store.sessions.length > 0) {
     const first = store.sessions[0]
     if (first) {
@@ -74,6 +104,8 @@ onMounted(async () => {
     await nextTick()
     scrollToBottom()
   }
+  const active = store.sessions.find((item) => item.id === store.activeSessionId)
+  if (active) syncProviderSelectionFromSession(active)
   initialized.value = true
 })
 
@@ -539,6 +571,7 @@ function fillExample(text: string) {
           :message="msg"
           :editing-message-id="store.editingMessageId"
           :chat-provider="selectedChatProvider"
+          :providers="allProviders"
           @edit="handleEditMessage"
           @resend="handleResend"
           @regenerate="handleRegenerate"

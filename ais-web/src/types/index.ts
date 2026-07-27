@@ -46,6 +46,7 @@ export interface Message {
   drawQuality?: string | null
   drawFormat?: string | null
   drawProviderId?: number | null
+  chatProviderId?: number | null
   attachments: Attachment[]
   tokenUsage: TokenUsage | null
   parentMessageId?: number | null
