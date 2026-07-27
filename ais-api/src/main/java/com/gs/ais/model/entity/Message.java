@@ -60,6 +60,9 @@ public class Message {
     @Column(name = "draw_provider_id")
     private Long drawProviderId;
 
+    @Column(name = "chat_provider_id")
+    private Long chatProviderId;
+
     @OneToMany(mappedBy = "message", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Attachment> attachments = new ArrayList<>();
 
@@ -151,6 +154,8 @@ public class Message {
     public void setDrawFormat(String drawFormat) { this.drawFormat = drawFormat; }
     public Long getDrawProviderId() { return drawProviderId; }
     public void setDrawProviderId(Long drawProviderId) { this.drawProviderId = drawProviderId; }
+    public Long getChatProviderId() { return chatProviderId; }
+    public void setChatProviderId(Long chatProviderId) { this.chatProviderId = chatProviderId; }
     public List<Attachment> getAttachments() { return attachments; }
     public void setAttachments(List<Attachment> attachments) { this.attachments = attachments; }
     public Integer getPromptTokens() { return promptTokens; }

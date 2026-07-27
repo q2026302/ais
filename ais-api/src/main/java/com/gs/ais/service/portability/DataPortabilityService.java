@@ -481,6 +481,7 @@ public class DataPortabilityService {
             message.setDrawQuality(asString(dto.get("drawQuality")));
             message.setDrawFormat(asString(dto.get("drawFormat")));
             message.setDrawProviderId(mapModelId(asLong(dto.get("drawProviderId")), modelIdMap));
+            message.setChatProviderId(mapModelId(asLong(dto.get("chatProviderId")), modelIdMap));
             message.setPromptTokens(asInteger(dto.get("promptTokens")));
             message.setCompletionTokens(asInteger(dto.get("completionTokens")));
             message.setTotalTokens(asInteger(dto.get("totalTokens")));
@@ -619,6 +620,7 @@ public class DataPortabilityService {
         dto.put("drawQuality", message.getDrawQuality());
         dto.put("drawFormat", message.getDrawFormat());
         dto.put("drawProviderId", message.getDrawProviderId());
+        dto.put("chatProviderId", message.getChatProviderId());
         dto.put("promptTokens", message.getPromptTokens());
         dto.put("completionTokens", message.getCompletionTokens());
         dto.put("totalTokens", message.getTotalTokens());

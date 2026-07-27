@@ -1,11 +1,15 @@
 package com.gs.ais.service;
 
 import com.gs.ais.config.StoragePaths;
+import com.gs.ais.model.entity.AppUser;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.model.entity.Session;
 import com.gs.ais.model.enums.MessageType;
+import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.repository.SessionRepository;
+import com.gs.ais.security.AuthContext;
+import com.gs.ais.security.AuthPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -27,13 +31,16 @@ public class SessionService {
 
     private final SessionRepository sessionRepository;
     private final MessageRepository messageRepository;
+    private final AppUserRepository appUserRepository;
     private final Path uploadDir;
 
     public SessionService(SessionRepository sessionRepository,
                           MessageRepository messageRepository,
+                          AppUserRepository appUserRepository,
                           StoragePaths storagePaths) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
+        this.appUserRepository = appUserRepository;
         this.uploadDir = storagePaths.uploadDir();
     }
 
@@ -142,7 +149,25 @@ public class SessionService {
         session.setTitle(normalizeTitle(title));
         session.setAutoTitleEnabled(!hasCustomTitle);
         session.setUserId(userId);
+        Long defaultChatProviderId = resolveCurrentUserDefaultChatProviderId();
+        if (defaultChatProviderId != null) {
+            session.setChatProviderId(defaultChatProviderId);
+        }
         return sessionRepository.save(session);
+    }
+
+    /**
+     * Reads the authenticated user's default chat model so newly created sessions
+     * inherit Profile defaults instead of leaving chatProviderId unset.
+     */
+    private Long resolveCurrentUserDefaultChatProviderId() {
+        AuthPrincipal principal = AuthContext.get();
+        if (principal == null || principal.subject() == null || principal.subject().isBlank()) {
+            return null;
+        }
+        return appUserRepository.findByUsernameIgnoreCase(principal.subject())
+                .map(AppUser::getDefaultChatProviderId)
+                .orElse(null);
     }
 
     /**

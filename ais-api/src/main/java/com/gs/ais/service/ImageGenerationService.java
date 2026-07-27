@@ -213,6 +213,7 @@ public class ImageGenerationService {
         assistantMessage.setStatus(MessageStatus.PENDING);
         assistantMessage.setContent("等待回应...");
         assistantMessage.setParentMessageId(userMessage.getId());
+        assistantMessage.setChatProviderId(chatProvider.getId());
         assistantMessage = messageRepository.save(assistantMessage);
 
         if (isFirstMessage) {
@@ -461,6 +462,7 @@ public class ImageGenerationService {
         message.setStatus(MessageStatus.PENDING);
         message.setContent("等待回应...");
         message.setErrorMessage(null);
+        message.setChatProviderId(chatProvider.getId());
         messageRepository.save(message);
         try {
             long chatStart = System.currentTimeMillis();
@@ -520,6 +522,7 @@ public class ImageGenerationService {
         assistantMessage.setStatus(MessageStatus.PENDING);
         assistantMessage.setContent("等待回应...");
         assistantMessage.setParentMessageId(userMessage.getId());
+        assistantMessage.setChatProviderId(chatProvider.getId());
         assistantMessage = messageRepository.save(assistantMessage);
 
         try {
