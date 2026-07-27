@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/auth'
 import { sessionApi } from '@/api/sessions'
 import { adminApi, type OperationLog } from '@/api/admin'
 import { usersApi, type ManagedUser } from '@/api/users'
+import { userDefaultsApi } from '@/api/billing'
 import type { Message, ModelProvider, Session, UploadResponse } from '@/types'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
@@ -99,6 +100,8 @@ const editVisible = ref(false)
 const editTargetId = ref<number | null>(null)
 const editText = ref('')
 const selectedChatProviderId = ref<number | null>(null)
+const defaultChatProviderId = ref<number | null>(null)
+const defaultImageProviderId = ref<number | null>(null)
 const selectedImageProviderId = ref<number | null>(null)
 const drawSize = ref('1024x1024')
 const drawQuality = ref('auto')
@@ -208,6 +211,16 @@ const selectedProviderLabel = computed(() => {
   const provider = selectedProvider.value
   return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认模型'
 })
+const selectedChatProviderLabel = computed(() => {
+  const provider = selectedChatProviderId.value == null
+    ? null
+    : store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
+  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认模型'
+})
+const selectedChatProvider = computed<ModelProvider | null>(() => {
+  if (selectedChatProviderId.value == null) return null
+  return store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
+})
 const referenceImageCount = computed(() => pendingAttachments.value.filter((attachment) => isImageAttachment(attachment.contentType)).length)
 const editingMessage = computed(() => editTargetId.value == null ? null : store.messages.find((message) => message.id === editTargetId.value) || null)
 const canSubmit = computed(() => !store.loading && (inputText.value.trim().length > 0 || (mode.value === 'chat' && pendingAttachments.value.length > 0)))
@@ -233,9 +246,40 @@ const mobileActionLabels: Record<string, string> = {
 }
 
 function defaultProviderId(providers: ModelProvider[]) { return providers.find((item) => item.active)?.id ?? null }
+function resolveProviderId(sessionValue: number | null | undefined, userDefault: number | null, providers: ModelProvider[]) {
+  if (sessionValue != null) return sessionValue
+  if (userDefault != null && providers.some((item) => item.id === userDefault)) return userDefault
+  return defaultProviderId(providers)
+}
 function syncProviderSelection() {
-  selectedChatProviderId.value = activeSession.value?.chatProviderId ?? defaultProviderId(store.chatProviders)
-  selectedImageProviderId.value = activeSession.value?.imageProviderId ?? defaultProviderId(store.imageProviders)
+  selectedChatProviderId.value = resolveProviderId(activeSession.value?.chatProviderId, defaultChatProviderId.value, store.chatProviders)
+  selectedImageProviderId.value = resolveProviderId(activeSession.value?.imageProviderId, defaultImageProviderId.value, store.imageProviders)
+}
+function providerDisplayName(provider: ModelProvider | null | undefined, fallback = 'AI') {
+  if (!provider) return fallback
+  const name = provider.name || provider.providerId
+  return provider.modelName ? `${name} / ${provider.modelName}` : name
+}
+function messageSpeakerName(message: Message) {
+  if (message.role === 'USER') {
+    return message.messageType === 'DRAW_REQUEST' ? '绘图请求' : '我'
+  }
+  if (message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST') {
+    const provider = message.drawProviderId != null
+      ? store.imageProviders.find((item) => item.id === message.drawProviderId) || null
+      : null
+    const label = providerDisplayName(provider, 'AI')
+    return label === 'AI' ? '[绘图] AI' : `[绘图] ${label}`
+  }
+  const provider = message.chatProviderId != null
+    ? store.chatProviders.find((item) => item.id === message.chatProviderId) || null
+    : selectedChatProvider.value
+  return providerDisplayName(provider, 'AI')
+}
+function messageTypeClass(message: Message) {
+  if (message.messageType === 'DRAW_REQUEST') return 'msg-type-draw-request'
+  if (message.messageType === 'DRAW_RESPONSE') return 'msg-type-draw-response'
+  return 'msg-type-chat'
 }
 function syncDrawOptions() {
   if (!drawSizeOptions.value.includes(drawSize.value)) drawSize.value = usesRatioOptions.value ? '1:1' : '1024x1024'
@@ -247,7 +291,19 @@ async function scrollToBottom() { await nextTick(); if (messagesRef.value) messa
 async function initialize() {
   initializing.value = true
   try {
-    await Promise.all([store.fetchSessions(), store.fetchProviders()])
+    await Promise.all([
+      store.fetchSessions(),
+      store.fetchProviders(),
+      userDefaultsApi.get()
+        .then((defaults) => {
+          defaultChatProviderId.value = defaults.defaultChatProviderId
+          defaultImageProviderId.value = defaults.defaultImageProviderId
+        })
+        .catch(() => {
+          defaultChatProviderId.value = null
+          defaultImageProviderId.value = null
+        }),
+    ])
     if (store.activeSessionId == null) {
       const first = store.sessions[0]
       if (first) await store.selectSession(first.id)
@@ -960,7 +1016,15 @@ async function handleLogout() {
 watch(() => store.messages.length, () => void scrollToBottom())
 watch(() => store.activeSessionId, syncProviderSelection)
 watch(inputText, () => void nextTick(() => autoResizeTextarea()))
-watch(mode, () => { if (mode.value === 'chat' && selectedChatProviderId.value == null) selectedChatProviderId.value = defaultProviderId(store.chatProviders); if (mode.value === 'draw' && selectedImageProviderId.value == null) selectedImageProviderId.value = defaultProviderId(store.imageProviders); syncDrawOptions() })
+watch(mode, () => {
+  if (mode.value === 'chat' && selectedChatProviderId.value == null) {
+    selectedChatProviderId.value = resolveProviderId(null, defaultChatProviderId.value, store.chatProviders)
+  }
+  if (mode.value === 'draw' && selectedImageProviderId.value == null) {
+    selectedImageProviderId.value = resolveProviderId(null, defaultImageProviderId.value, store.imageProviders)
+  }
+  syncDrawOptions()
+})
 watch([selectedImageProviderId, () => store.imageProviders.length], syncDrawOptions)
 function applyViewportState(state: VisualViewportState) {
   keyboardOpen.value = state.keyboardOpen
@@ -1105,9 +1169,9 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <article v-for="message in store.messages" :key="message.id" class="message-card" :class="message.role.toLowerCase()">
+      <article v-for="message in store.messages" :key="message.id" class="message-card" :class="[message.role.toLowerCase(), messageTypeClass(message)]">
         <div class="message-meta">
-          <span>{{ message.role === 'USER' ? '我' : 'AI 创作助手' }}</span>
+          <span :class="{ 'draw-speaker': message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST' }">{{ messageSpeakerName(message) }}</span>
           <time>{{ formatTime(message.createdAt) }}</time>
           <div v-if="message.status !== 'PENDING'" class="message-actions">
             <button v-if="message.content" type="button" title="复制内容" aria-label="复制内容" @click="copyText(messageText(message))"><CopyDocument /></button>
@@ -1233,6 +1297,13 @@ onBeforeUnmount(() => {
           <Picture aria-hidden="true" />
           <span>参考图</span>
           <strong>{{ referenceImageCount || '未添加' }}</strong>
+        </button>
+      </section>
+      <section v-else class="draw-status-bar chat-status-bar" aria-label="当前对话模型">
+        <button type="button" class="draw-status-chip draw-status-model" :title="selectedChatProviderLabel" :aria-label="`当前对话模型：${selectedChatProviderLabel}，点击切换模型`" @click="openModelPicker">
+          <MagicStick aria-hidden="true" />
+          <span>对话模型</span>
+          <strong>{{ selectedChatProviderLabel }}</strong>
         </button>
       </section>
       <div v-if="pendingAttachments.length" class="attachment-strip">
@@ -1636,6 +1707,9 @@ onBeforeUnmount(() => {
 .message-card { width: fit-content; max-width: min(92%, 680px); margin: 0 0 16px; align-self: flex-start; }
 .message-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 7px; margin: 0 4px 6px; color: #a2aabd; font-size: 10px; }
 .message-meta > span { color: #6c7890; font-weight: 800; }
+.message-meta > span.draw-speaker { color: #6b5bd4; }
+.message-card.msg-type-draw-response .message-bubble { border-color: #ddd6ff; background: linear-gradient(180deg, rgba(248, 246, 255, .98), rgba(255, 255, 255, .96)); }
+.message-card.msg-type-draw-request .message-bubble { border-style: dashed; border-color: #cfc8f5; }
 .message-meta time { color: #a6aec0; }
 .message-bubble {
   min-width: 54px;
@@ -1796,6 +1870,7 @@ onBeforeUnmount(() => {
 .composer { position: relative; z-index: 8; flex: 0 0 auto; padding: 8px 12px 2px; border-top: 1px solid rgba(223, 228, 239, .94); background: rgba(255, 255, 255, .94); box-shadow: 0 -8px 24px rgba(42, 54, 93, .055); backdrop-filter: blur(18px); }
 .composer-toolbar { display: flex; min-width: 0; align-items: center; gap: 4px; margin-bottom: 6px; }
 .draw-status-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0 0 8px; }
+.chat-status-bar { grid-template-columns: minmax(0, 1fr); }
 .draw-status-chip { display: grid; min-width: 0; min-height: 44px; align-content: center; gap: 1px; padding: 6px 8px; color: #748097; text-align: left; cursor: pointer; border: 1px solid #e1e6f1; border-radius: 12px; background: #f6f8fc; }
 .draw-status-chip > svg { width: 15px; height: 15px; grid-row: span 2; align-self: center; color: #6177db; }
 .draw-status-chip > span { overflow: hidden; color: #8b95a7; font-size: 10px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
