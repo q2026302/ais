@@ -12,7 +12,8 @@
  * stays 0. For those cases we combine:
  *  - min(visualViewport.height, innerHeight, clientHeight)
  *  - VirtualKeyboard API geometry when available
- *  - focus-driven fallback inset (installed standalone PWA only)
+ *  - focus-driven fallback inset (installed standalone PWA or the dedicated
+ *    PWA workspace when a WebAPK fails to report display mode)
  *
  * Ordinary browser tabs and in-app WebViews (e.g. Feishu) already resize the
  * viewport themselves — do NOT force the overlay fallback there, or the shell
@@ -69,7 +70,7 @@ export interface VisualViewportEnv {
    */
   useScreenHeightBaseline?: boolean
   /**
-   * When true and measured inset is still tiny, apply a standalone-PWA fallback
+   * When true and measured inset is still tiny, apply a PWA overlay fallback
    * height reduction so bottom composers are not covered by overlay keyboards.
    */
   forceKeyboardFallback?: boolean
@@ -226,11 +227,17 @@ export function isStandaloneDisplayMode(
   return Boolean(nav?.standalone)
 }
 
+/** Dedicated PWA entry path is the authoritative keyboard fallback signal. */
+export function isPwaEntry(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.location.pathname.startsWith('/ais/pwa')
+}
+
 /**
  * Chromium VirtualKeyboard API presence. Geometry is still read when available
  * (see `readVirtualKeyboardInset`); this helper is kept for diagnostics /
- * debug panels. Presence of the API alone no longer forces the overlay
- * keyboard height fallback — only installed standalone display mode does.
+ * debug panels. Presence of the API alone never forces the overlay keyboard
+ * height fallback.
  */
 export function hasVirtualKeyboardApi(
   win: Window & typeof globalThis = window,
@@ -249,21 +256,161 @@ export function hasVirtualKeyboardApi(
  * When to force the overlay-keyboard height fallback while an editable field
  * / composer is focused.
  *
- * Only installed PWAs / WebAPKs (`display-mode: standalone|fullscreen|minimal-ui`,
- * or iOS `navigator.standalone`) leave layout/visual height unchanged while the
- * soft keyboard overlays content. Ordinary browser tabs and in-app WebViews
- * (Feishu etc.) typically resize the viewport themselves — forcing the
- * fallback there double-shrinks the shell (over-collapse on Xiaomi browser /
- * Feishu). VirtualKeyboard geometry is still read when present; it just no
- * longer gates this force path.
+ * Installed PWAs / WebAPKs normally identify themselves with
+ * `display-mode: standalone|fullscreen|minimal-ui` or iOS
+ * `navigator.standalone`. This remains a fallback for callers that do not have
+ * the dedicated PWA entry-path signal.
  */
+export function hasAndroidAppLaunchReferrer(
+  win: Window & typeof globalThis = window,
+): boolean {
+  if (typeof win === 'undefined') return false
+  try {
+    return win.document.referrer.startsWith('android-app://')
+  } catch {
+    return false
+  }
+}
+
+export interface PwaWebApkFallbackEvidence {
+  isPwaWorkspace: boolean
+  manifestLinked: boolean
+  androidAppLaunchReferrer: boolean
+  allowPwaWebApkFallback: boolean
+}
+
+export interface PwaKeyboardDiagnostics {
+  location: string
+  referrer: string
+  displayMode: string
+  navigatorStandalone: string
+  userAgentData: string
+  userAgentKeywords: string
+  virtualKeyboard: string
+  dimensions: string
+  manifest: string
+  pwaEntry: string
+  androidAppReferrerGate: string
+  fallbackGate: string
+}
+
+function redactUrl(raw: string): string {
+  if (!raw) return 'none'
+  try {
+    const url = new URL(raw)
+    return `${url.protocol}//${url.host} present`
+  } catch {
+    return 'present invalid'
+  }
+}
+
+function readDisplayModeDiagnostics(win: Window & typeof globalThis): string {
+  const modes = ['standalone', 'fullscreen', 'minimal-ui']
+  const matched = modes.filter((mode) => {
+    try {
+      return Boolean(win.matchMedia?.(`(display-mode: ${mode})`).matches)
+    } catch {
+      return false
+    }
+  })
+  return matched.length ? matched.join(',') : 'browser'
+}
+
+/**
+ * Snapshot-only diagnostics for field testing. Values are redacted and never
+ * participate in layout policy.
+ */
+export function readPwaKeyboardDiagnostics(
+  options: { isPwaWorkspace: boolean; focused?: boolean },
+  win: Window & typeof globalThis = window,
+): PwaKeyboardDiagnostics {
+  if (typeof win === 'undefined') {
+    return {
+      location: 'unavailable', referrer: 'unavailable', displayMode: 'unavailable',
+      navigatorStandalone: 'unavailable', userAgentData: 'unavailable',
+      userAgentKeywords: 'unavailable', virtualKeyboard: 'unavailable',
+      dimensions: 'unavailable', manifest: 'unavailable', pwaEntry: 'unavailable',
+      androidAppReferrerGate: 'unavailable', fallbackGate: 'unavailable',
+    }
+  }
+
+  const nav = win.navigator as Navigator & {
+    standalone?: boolean
+    userAgentData?: { mobile?: boolean; platform?: string; platformVersion?: string }
+    virtualKeyboard?: { overlaysContent?: boolean; boundingRect?: DOMRectReadOnly }
+  }
+  const evidence = getPwaWebApkFallbackEvidence(options, win)
+  const ua = nav.userAgent?.toLowerCase() || ''
+  const keywords = ['android', 'xiaomi', 'miui', 'wv', 'webview', 'lark', 'feishu']
+    .filter((keyword) => ua.includes(keyword))
+  const data = nav.userAgentData
+  const vk = nav.virtualKeyboard
+  const vv = win.visualViewport
+  const manifest = win.document.querySelector('link[rel="manifest"]') as HTMLLinkElement | null
+  const manifestUrl = manifest?.href ? redactUrl(manifest.href) : 'none'
+
+  return {
+    location: `${win.location.origin}${win.location.pathname}`,
+    referrer: redactUrl(win.document.referrer),
+    displayMode: readDisplayModeDiagnostics(win),
+    navigatorStandalone: String(Boolean(nav.standalone)),
+    userAgentData: data
+      ? `m=${data.mobile === true} p=${data.platform || '?'} pv=${data.platformVersion || '?'}`
+      : 'unavailable',
+    userAgentKeywords: keywords.length ? keywords.join(',') : 'none',
+    virtualKeyboard: vk
+      ? `present overlays=${typeof vk.overlaysContent === 'boolean' ? vk.overlaysContent : 'N/A'} h=${Math.round(vk.boundingRect?.height || 0)}`
+      : 'absent',
+    dimensions: `screen=${win.screen?.height ?? '?'} avail=${win.screen?.availHeight ?? '?'} outer=${win.outerHeight} inner=${win.innerHeight} client=${win.document.documentElement.clientHeight} vv=${vv ? Math.round(vv.height) : 'N/A'}`,
+    manifest: manifestUrl,
+    pwaEntry: `route=${options.isPwaWorkspace} manifestLink=${evidence.manifestLinked}`,
+    androidAppReferrerGate: String(evidence.androidAppLaunchReferrer),
+    fallbackGate: `standalone=${isStandaloneDisplayMode(win)} webApkEvidence=${evidence.allowPwaWebApkFallback} entry=${isPwaEntry()} focused=${options.focused === true}`,
+  }
+}
+
+/**
+ * Conservative WebAPK diagnostic evidence. The returned observation is safe to
+ * surface in debug UI and does not control layout behavior.
+ */
+export function getPwaWebApkFallbackEvidence(
+  options: { isPwaWorkspace: boolean },
+  win: Window & typeof globalThis = window,
+): PwaWebApkFallbackEvidence {
+  if (typeof win === 'undefined') {
+    return {
+      isPwaWorkspace: options.isPwaWorkspace,
+      manifestLinked: false,
+      androidAppLaunchReferrer: false,
+      allowPwaWebApkFallback: false,
+    }
+  }
+
+  let manifestLinked = false
+  try {
+    manifestLinked = Boolean(win.document.querySelector('link[rel="manifest"]'))
+  } catch {
+    /* ignore */
+  }
+
+  const androidAppLaunchReferrer = hasAndroidAppLaunchReferrer(win)
+  return {
+    isPwaWorkspace: options.isPwaWorkspace,
+    manifestLinked,
+    androidAppLaunchReferrer,
+    allowPwaWebApkFallback:
+      options.isPwaWorkspace && manifestLinked && androidAppLaunchReferrer,
+  }
+}
+
 export function shouldForceOverlayKeyboardFallback(
   focused: boolean,
   win: Window & typeof globalThis = window,
+  options?: { allowPwaWebApkFallback?: boolean },
 ): boolean {
   if (!focused) return false
   if (typeof win === 'undefined') return false
-  return isStandaloneDisplayMode(win)
+  return isStandaloneDisplayMode(win) || options?.allowPwaWebApkFallback === true
 }
 
 function readVirtualKeyboardInset(win: Window & typeof globalThis): number {
