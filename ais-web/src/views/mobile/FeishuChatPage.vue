@@ -638,6 +638,67 @@ async function handleFileChange(event: Event) {
   for (const file of files) await uploadFile(file)
 }
 
+/**
+ * Dynamically create a file input at the click point and trigger it.
+ * More reliable than a hidden static input for Android PWA standalone,
+ * where .click() must be synchronously invoked within a user gesture.
+ */
+function triggerFilePicker(event: MouseEvent|TouchEvent, accept: string) {
+  if (store.loading || uploading.value) return
+  createAndTriggerFileInput(event, accept, true, (files) => {
+    for (const file of files) void uploadFile(file)
+  })
+}
+
+function triggerImageFilePicker(event: MouseEvent|TouchEvent, capture: boolean) {
+  if (store.loading || uploading.value || referenceAdding.value) return
+  const accept = 'image/*'
+  createAndTriggerFileInput(event, accept, !capture, (files) => {
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue
+      selectedLocalFiles.value.push({
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+      })
+    }
+  })
+}
+
+function createAndTriggerFileInput(
+  event: MouseEvent|TouchEvent,
+  accept: string,
+  multiple: boolean,
+  onChange: (files: File[]) => void,
+) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = accept
+  input.multiple = multiple
+  // Position at click point so it inherits the user gesture context
+  input.style.position = 'fixed'
+  const pos = 'touches' in event ? event.touches[0] : event
+  input.style.top = `${pos.clientY}px`
+  input.style.left = `${pos.clientX}px`
+  input.style.opacity = '0'
+  input.style.pointerEvents = 'none'
+  input.style.zIndex = '-1'
+  document.body.appendChild(input)
+  input.addEventListener('change', (e: Event) => {
+    const target = e.target as HTMLInputElement
+    onChange(Array.from(target.files || []))
+    target.value = ''
+    document.body.removeChild(input)
+  }, { once: true })
+  input.addEventListener('cancel', () => {
+    document.body.removeChild(input)
+  }, { once: true })
+  setTimeout(() => {
+    if (input.parentNode) document.body.removeChild(input)
+  }, 60000) // safety cleanup
+  input.click()
+}
+
 function handleReferenceLocalChange(event: Event) {
   const input = event.target as HTMLInputElement
   const files = Array.from(input.files || []).filter((file) => file.type.startsWith('image/'))
@@ -1303,23 +1364,16 @@ const debugInfo = computed(() => {
           <ChatDotRound v-else aria-hidden="true" />
           <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
         </button>
-        <label
-          class="tool-btn tool-file-label"
-          :class="{ disabled: store.loading || uploading }"
+        <button
+          class="tool-btn"
+          type="button"
+          :disabled="store.loading || uploading"
           aria-label="上传文件"
           title="上传文件"
+          @click="triggerFilePicker($event, mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt')"
         >
-          <input
-            id="feishu-file-input"
-            type="file"
-            class="sr-file-input"
-            :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
-            multiple
-            :disabled="store.loading || uploading"
-            @change="handleFileChange"
-          >
           <Paperclip aria-hidden="true" />
-        </label>
+        </button>
         <button
           class="tool-btn"
           type="button"
@@ -1411,40 +1465,28 @@ const debugInfo = computed(() => {
       <div class="reference-panel">
         <div class="reference-body">
           <aside class="reference-side-rail" aria-label="图片来源">
-            <label
+            <button
               class="reference-side-action"
-              :class="{ disabled: store.loading || uploading || referenceAdding }"
+              type="button"
+              :disabled="store.loading || uploading || referenceAdding"
               title="拍照"
+              aria-label="拍照"
+              @click="triggerImageFilePicker($event, true)"
             >
-              <input
-                id="feishu-ref-camera-input"
-                type="file"
-                class="sr-file-input"
-                accept="image/*"
-                capture="environment"
-                :disabled="store.loading || uploading || referenceAdding"
-                @change="handleReferenceLocalChange"
-              >
               <Camera aria-hidden="true" />
               <span>相机</span>
-            </label>
-            <label
+            </button>
+            <button
               class="reference-side-action"
-              :class="{ disabled: store.loading || uploading || referenceAdding }"
+              type="button"
+              :disabled="store.loading || uploading || referenceAdding"
               title="从相册选择"
+              aria-label="从相册选择"
+              @click="triggerImageFilePicker($event, false)"
             >
-              <input
-                id="feishu-ref-album-input"
-                type="file"
-                class="sr-file-input"
-                accept="image/*"
-                multiple
-                :disabled="store.loading || uploading || referenceAdding"
-                @change="handleReferenceLocalChange"
-              >
               <Picture aria-hidden="true" />
               <span>相册</span>
-            </label>
+            </button>
           </aside>
           <div class="reference-main">
             <template v-if="historyImages.length">
@@ -1961,10 +2003,11 @@ const debugInfo = computed(() => {
   padding: 0;
   margin: 0;
   overflow: hidden;
-  opacity: 0;
+  opacity: 0.01;
   z-index: 1;
   cursor: pointer;
   border: 0;
+  touch-action: manipulation;
 }
 .tool-btn :deep(svg) {
   width: 20px;
