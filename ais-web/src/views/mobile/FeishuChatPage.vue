@@ -55,7 +55,8 @@ const inputChromeCollapsed = computed(() => mobileKeyboard?.inputChromeCollapsed
 const fullscreenInput = ref(false)
 const inputText = ref('')
 const pendingAttachments = ref<UploadResponse[]>([])
-const uploading = ref(false)
+const uploadCount = ref(0)
+const uploading = computed(() => uploadCount.value > 0)
 const initializing = ref(true)
 const mode = ref<'chat' | 'draw'>('draw')
 const referenceVisible = ref(false)
@@ -83,6 +84,8 @@ const drawFormat = ref('png')
 const originalTitle = document.title
 let disposed = false
 let selectionGeneration = 0
+/** Persistent <input type="file"> created in onMounted for PWA standalone compatibility. */
+let persistentFileInput: HTMLInputElement | null = null
 
 const {
   longPressTriggered,
@@ -621,39 +624,36 @@ async function uploadFile(file: File) {
     ElMessage.warning('对话模式支持图片、PDF、Word 和文本文件')
     return
   }
-  uploading.value = true
+  uploadCount.value++
   try {
     pendingAttachments.value.push(await sessionApi.uploadFile(file))
   } catch (error: any) {
     ElMessage.error(error.message || '图片上传失败')
   } finally {
-    uploading.value = false
+    uploadCount.value--
   }
 }
 
-async function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files || [])
-  input.value = ''
-  for (const file of files) await uploadFile(file)
-}
-
 /**
- * Dynamically create a file input at the click point and trigger it.
- * More reliable than a hidden static input for Android PWA standalone,
- * where .click() must be synchronously invoked within a user gesture.
+ * Open the native file picker using a persistent pre-rendered <input type="file">.
+ * the old dynamic createElement + pointer-events:none approach was rejected by
+ * Chrome's transient activation check in standalone mode.
  */
 function triggerFilePicker(event: MouseEvent|TouchEvent, accept: string) {
   if (store.loading || uploading.value) return
-  createAndTriggerFileInput(event, accept, true, (files) => {
+  createAndTriggerFileInput(accept, true, (files) => {
     for (const file of files) void uploadFile(file)
   })
 }
 
 function triggerImageFilePicker(event: MouseEvent|TouchEvent, capture: boolean) {
   if (store.loading || uploading.value || referenceAdding.value) return
-  const accept = 'image/*'
-  createAndTriggerFileInput(event, accept, !capture, (files) => {
+  // Configure capture attribute before triggering
+  if (persistentFileInput) {
+    if (capture) persistentFileInput.setAttribute('capture', 'environment')
+    else persistentFileInput.removeAttribute('capture')
+  }
+  createAndTriggerFileInput('image/*', !capture, (files) => {
     for (const file of files) {
       if (!file.type.startsWith('image/')) continue
       selectedLocalFiles.value.push({
@@ -666,60 +666,45 @@ function triggerImageFilePicker(event: MouseEvent|TouchEvent, capture: boolean) 
 }
 
 function createAndTriggerFileInput(
-  event: MouseEvent|TouchEvent,
   accept: string,
   multiple: boolean,
   onChange: (files: File[]) => void,
 ) {
-  const input = document.createElement('input')
-  input.type = 'file'
+  const input = persistentFileInput
+  if (!input) {
+    console.warn('persistentFileInput not ready — fallback to dynamic input')
+    const fb = document.createElement('input')
+    fb.type = 'file'
+    fb.accept = accept
+    fb.multiple = multiple
+    fb.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;z-index:-1'
+    document.body.appendChild(fb)
+    fb.addEventListener('change', (e: Event) => {
+      const target = e.target as HTMLInputElement
+      onChange(Array.from(target.files || []))
+      target.value = ''
+      document.body.removeChild(fb)
+    }, { once: true })
+    fb.addEventListener('cancel', () => { document.body.removeChild(fb) }, { once: true })
+    setTimeout(() => { if (fb.parentNode) document.body.removeChild(fb) }, 60000)
+    fb.click()
+    return
+  }
+
+  // Reset from previous use
+  input.value = ''
   input.accept = accept
   input.multiple = multiple
-  // Position at click point so it inherits the user gesture context
-  input.style.position = 'fixed'
-  let posX = 0
-  let posY = 0
-  if ('touches' in event) {
-    const touch = (event as TouchEvent).touches[0] || (event as TouchEvent).changedTouches[0]
-    if (touch) { posX = touch.clientX; posY = touch.clientY }
-    else { posX = (event as any).clientX ?? 0; posY = (event as any).clientY ?? 0 }
-  } else {
-    posX = (event as MouseEvent).clientX
-    posY = (event as MouseEvent).clientY
-  }
-  input.style.top = `${posY}px`
-  input.style.left = `${posX}px`
-  input.style.opacity = '0'
-  input.style.pointerEvents = 'none'
-  input.style.zIndex = '-1'
-  document.body.appendChild(input)
-  input.addEventListener('change', (e: Event) => {
+  // Do NOT reset capture here — triggerImageFilePicker owns it
+
+  const handler = (e: Event) => {
     const target = e.target as HTMLInputElement
     onChange(Array.from(target.files || []))
     target.value = ''
-    document.body.removeChild(input)
-  }, { once: true })
-  input.addEventListener('cancel', () => {
-    document.body.removeChild(input)
-  }, { once: true })
-  setTimeout(() => {
-    if (input.parentNode) document.body.removeChild(input)
-  }, 60000) // safety cleanup
-  input.click()
-}
-
-function handleReferenceLocalChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files || []).filter((file) => file.type.startsWith('image/'))
-  input.value = ''
-  if (!files.length) return
-  for (const file of files) {
-    selectedLocalFiles.value.push({
-      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    })
+    input.removeEventListener('change', handler)
   }
+  input.addEventListener('change', handler, { once: true })
+  input.click()
 }
 
 async function handlePaste(event: ClipboardEvent) {
@@ -785,7 +770,7 @@ function openReferencePreview() {
 async function confirmReferenceSelection() {
   if (!canConfirmReference.value) return
   referenceAdding.value = true
-  uploading.value = true
+  uploadCount.value++
   let added = 0
   try {
     for (const local of selectedLocalFiles.value) {
@@ -812,7 +797,7 @@ async function confirmReferenceSelection() {
     ElMessage.error(error.message || '添加参考图失败')
   } finally {
     referenceAdding.value = false
-    uploading.value = false
+    uploadCount.value--
   }
 }
 
@@ -1076,12 +1061,23 @@ watch(
 onMounted(() => {
   document.title = 'AI 创作'
   void initialize()
+  // Create a persistent <input type="file"> that stays in DOM for PWA standalone.
+  // PWA mode requires the input to exist BEFORE the user gesture, so we create it
+  // at mount time (not dynamically in the click handler).  NO pointer-events:none,
+  // NO display:none, NO visibility:hidden — off-screen with opacity:0 only.
+  const pwaInput = document.createElement('input')
+  pwaInput.type = 'file'
+  pwaInput.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;z-index:-1'
+  document.body.appendChild(pwaInput)
+  persistentFileInput = pwaInput
   // Debug sampling only — does not affect keyboard pin / layout.
-  bumpDebugSample()
-  window.addEventListener('resize', bumpDebugSample)
-  window.visualViewport?.addEventListener('resize', bumpDebugSample)
-  window.visualViewport?.addEventListener('scroll', bumpDebugSample)
-  debugSampleTimer = setInterval(bumpDebugSample, 500)
+  if (import.meta.env.DEV) {
+    bumpDebugSample()
+    window.addEventListener('resize', bumpDebugSample)
+    window.visualViewport?.addEventListener('resize', bumpDebugSample)
+    window.visualViewport?.addEventListener('scroll', bumpDebugSample)
+    debugSampleTimer = setInterval(bumpDebugSample, 500)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1089,18 +1085,25 @@ onBeforeUnmount(() => {
   selectionGeneration += 1
   cancelLongPress(true)
   setSelectionSuppressed(false)
+  // Clean up the persistent file input
+  if (persistentFileInput?.parentNode) {
+    persistentFileInput.parentNode.removeChild(persistentFileInput)
+  }
+  persistentFileInput = null
   // Ensure layout bottom-nav returns if this page unmounts while focused.
   mobileKeyboard?.setComposerBlur()
   // Invalidate the store selection even if its request has not committed yet.
   // Polling remains active so terminal updates can refresh sessions and unread.
   store.clearActiveSession()
   document.title = originalTitle
-  window.removeEventListener('resize', bumpDebugSample)
-  window.visualViewport?.removeEventListener('resize', bumpDebugSample)
-  window.visualViewport?.removeEventListener('scroll', bumpDebugSample)
-  if (debugSampleTimer != null) {
-    clearInterval(debugSampleTimer)
-    debugSampleTimer = null
+  if (import.meta.env.DEV) {
+    window.removeEventListener('resize', bumpDebugSample)
+    window.visualViewport?.removeEventListener('resize', bumpDebugSample)
+    window.visualViewport?.removeEventListener('scroll', bumpDebugSample)
+    if (debugSampleTimer != null) {
+      clearInterval(debugSampleTimer)
+      debugSampleTimer = null
+    }
   }
 })
 
@@ -1626,7 +1629,7 @@ const debugInfo = computed(() => {
     </Teleport>
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
     <!-- Debug overlay — always visible on top -->
-    <div class="debug-overlay">
+    <div v-if="import.meta.env.DEV" class="debug-overlay">
       <div><code>kbd: {{ debugInfo.kbd }}</code></div>
       <div><code>entry: {{ debugInfo.entry }}  mode: {{ debugInfo.mode }}  vv: {{ debugInfo.vv }}</code></div>
       <div><code>win: {{ debugInfo.dims }}</code></div>
