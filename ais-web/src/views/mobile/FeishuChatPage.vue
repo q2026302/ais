@@ -82,6 +82,7 @@ const drawSize = ref('1024x1024')
 const drawQuality = ref('auto')
 const drawFormat = ref('png')
 const originalTitle = document.title
+const isDev = import.meta.env.DEV
 let disposed = false
 let selectionGeneration = 0
 /** Persistent <input type="file"> created in onMounted for PWA standalone compatibility. */
@@ -1629,7 +1630,7 @@ const debugInfo = computed(() => {
     </Teleport>
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
     <!-- Debug overlay — always visible on top -->
-    <div v-if="import.meta.env.DEV" class="debug-overlay">
+    <div v-if="isDev" class="debug-overlay">
       <div><code>kbd: {{ debugInfo.kbd }}</code></div>
       <div><code>entry: {{ debugInfo.entry }}  mode: {{ debugInfo.mode }}  vv: {{ debugInfo.vv }}</code></div>
       <div><code>win: {{ debugInfo.dims }}</code></div>
