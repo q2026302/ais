@@ -38,10 +38,10 @@ export type VisualViewportListener = (state: VisualViewportState) => void
 export const KEYBOARD_OPEN_THRESHOLD_PX = 120
 
 /** Fallback keyboard fraction of the layout height when VV does not shrink (Android PWA overlay). */
-export const STANDALONE_KEYBOARD_FALLBACK_RATIO = 0.42
+export const STANDALONE_KEYBOARD_FALLBACK_RATIO = 0.5
 
 /** Cap for the standalone overlay fallback so tablets / landscape stay usable. */
-export const STANDALONE_KEYBOARD_FALLBACK_MAX_PX = 360
+export const STANDALONE_KEYBOARD_FALLBACK_MAX_PX = 500
 
 export interface VisualViewportEnv {
   visualViewport?: {
