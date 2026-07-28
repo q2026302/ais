@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
+  Camera,
   ChatDotRound,
+  Check,
   Close,
   FullScreen,
   Paperclip,
   Picture,
   Promotion,
+  Scissor,
   Setting,
-  UploadFilled,
+  View,
 } from '@element-plus/icons-vue'
 import type { Message, ModelProvider, UploadResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
@@ -38,11 +41,15 @@ const mode = ref<'chat' | 'draw'>('chat')
 const fullscreenInput = ref(false)
 const settingsVisible = ref(false)
 const referenceVisible = ref(false)
-const referenceImportingId = ref<number | null>(null)
-const fileInputRef = ref<HTMLInputElement | null>(null)
-const imageFileInputRef = ref<HTMLInputElement | null>(null)
+const referenceAdding = ref(false)
+const referenceUseOriginal = ref(false)
+const selectedHistoryIds = ref<string[]>([])
+const selectedLocalFiles = ref<{ id: string; file: File; previewUrl: string }[]>([])
+const isDragging = ref(false)
+const dragDepth = ref(0)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const fullscreenInputRef = ref<HTMLTextAreaElement | null>(null)
+const composerRootRef = ref<HTMLElement | null>(null)
 
 const canSend = computed(() => inputText.value.trim().length > 0 || pendingAttachments.value.length > 0)
 const referenceImageCount = computed(
@@ -103,6 +110,26 @@ const historyImages = computed<HistoryImageItem[]>(() => {
   return items.reverse()
 })
 
+const selectedHistoryItems = computed(() =>
+  selectedHistoryIds.value
+    .map((id) => historyImages.value.find((item) => item.id === id))
+    .filter((item): item is HistoryImageItem => item != null),
+)
+const referenceSelectionCount = computed(() => selectedHistoryIds.value.length + selectedLocalFiles.value.length)
+const canConfirmReference = computed(() => referenceSelectionCount.value > 0 && !referenceAdding.value && !props.loading)
+const referencePreviewItems = computed(() => [
+  ...selectedLocalFiles.value.map((item) => ({ id: item.id, url: item.previewUrl, kind: 'local' as const })),
+  ...selectedHistoryItems.value.map((item) => ({
+    id: item.id,
+    url: item.thumbUrl || item.url,
+    kind: 'history' as const,
+  })),
+])
+const referencePreviewUrls = computed(() => [
+  ...selectedLocalFiles.value.map((item) => item.previewUrl),
+  ...selectedHistoryItems.value.map((item) => item.url),
+])
+
 watch(
   () => [props.activeSessionId, defaultProviderId.value] as const,
   ([, providerId]) => {
@@ -153,6 +180,20 @@ async function handleFileChange(event: Event) {
   for (const file of files) await uploadFile(file)
 }
 
+function handleReferenceLocalChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || []).filter((file) => file.type.startsWith('image/'))
+  input.value = ''
+  if (!files.length) return
+  for (const file of files) {
+    selectedLocalFiles.value.push({
+      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+    })
+  }
+}
+
 async function handlePaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items) return
@@ -171,21 +212,42 @@ async function handlePaste(e: ClipboardEvent) {
   }
 }
 
+function onDragEnter(event: DragEvent) {
+  if (!event.dataTransfer?.types?.includes('Files')) return
+  event.preventDefault()
+  dragDepth.value += 1
+  isDragging.value = true
+}
+
+function onDragOver(event: DragEvent) {
+  if (!event.dataTransfer?.types?.includes('Files')) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  isDragging.value = true
+}
+
+function onDragLeave(event: DragEvent) {
+  if (!event.dataTransfer?.types?.includes('Files')) return
+  event.preventDefault()
+  dragDepth.value = Math.max(0, dragDepth.value - 1)
+  if (dragDepth.value === 0) isDragging.value = false
+}
+
+async function onDrop(event: DragEvent) {
+  event.preventDefault()
+  dragDepth.value = 0
+  isDragging.value = false
+  if (props.loading || uploading.value) return
+  const files = Array.from(event.dataTransfer?.files || [])
+  for (const file of files) await uploadFile(file)
+}
+
 function removeAttachment(id: number) {
   pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== id)
 }
 
-function openFilePicker() {
-  if (props.loading || uploading.value) return
-  fileInputRef.value?.click()
-}
-
-function openImageFilePicker() {
-  if (props.loading || uploading.value) return
-  imageFileInputRef.value?.click()
-}
-
 function openReferencePanel() {
+  clearReferenceSelection()
   referenceVisible.value = true
 }
 
@@ -216,6 +278,31 @@ function toggleFullscreenInput() {
   })
 }
 
+async function handleScreenshot() {
+  if (props.loading || uploading.value) return
+  try {
+    if (navigator.clipboard && 'read' in navigator.clipboard) {
+      const items = await navigator.clipboard.read()
+      const imageFiles: File[] = []
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith('image/'))
+        if (!imageType) continue
+        const blob = await item.getType(imageType)
+        const ext = imageType.split('/')[1] || 'png'
+        imageFiles.push(new File([blob], `screenshot-${Date.now()}.${ext}`, { type: imageType }))
+      }
+      if (imageFiles.length) {
+        for (const file of imageFiles) await uploadFile(file)
+        ElMessage.success(imageFiles.length === 1 ? '已从剪贴板添加截图' : `已从剪贴板添加 ${imageFiles.length} 张截图`)
+        return
+      }
+    }
+  } catch {
+    // Fall through to guidance when clipboard permission is denied.
+  }
+  ElMessage.info('请使用系统截图（Print Screen / Win+Shift+S），然后按 Ctrl+V 粘贴到输入框')
+}
+
 function handleSend() {
   if (!canSend.value || props.loading) return
   const chatProviderId = selectedProviderId.value
@@ -244,18 +331,77 @@ function handleInputKeydown(event: KeyboardEvent) {
   }
 }
 
-async function selectHistoryImage(item: HistoryImageItem) {
-  if (props.loading || referenceImportingId.value != null) return
-  referenceImportingId.value = item.messageId
+function isHistorySelected(id: string) {
+  return selectedHistoryIds.value.includes(id)
+}
+
+function toggleHistorySelection(item: HistoryImageItem) {
+  if (props.loading || referenceAdding.value) return
+  if (isHistorySelected(item.id)) {
+    selectedHistoryIds.value = selectedHistoryIds.value.filter((id) => id !== item.id)
+  } else {
+    selectedHistoryIds.value = [...selectedHistoryIds.value, item.id]
+  }
+}
+
+function removeLocalSelection(id: string) {
+  const target = selectedLocalFiles.value.find((item) => item.id === id)
+  if (target) URL.revokeObjectURL(target.previewUrl)
+  selectedLocalFiles.value = selectedLocalFiles.value.filter((item) => item.id !== id)
+}
+
+function removeHistorySelection(id: string) {
+  selectedHistoryIds.value = selectedHistoryIds.value.filter((item) => item !== id)
+}
+
+function clearReferenceSelection() {
+  for (const item of selectedLocalFiles.value) URL.revokeObjectURL(item.previewUrl)
+  selectedLocalFiles.value = []
+  selectedHistoryIds.value = []
+  referenceUseOriginal.value = false
+}
+
+function resetReferencePanel() {
+  clearReferenceSelection()
+  referenceAdding.value = false
+}
+
+function openReferencePreview() {
+  if (!referencePreviewUrls.value.length) return
+  window.open(referencePreviewUrls.value[0], '_blank', 'noopener')
+}
+
+async function confirmReferenceSelection() {
+  if (!canConfirmReference.value) return
+  referenceAdding.value = true
+  uploading.value = true
+  let added = 0
   try {
-    const attachment = await sessionApi.uploadImageReference(item.url, `history-${item.messageId}.${item.format}`)
-    pendingAttachments.value.push(attachment)
+    for (const local of selectedLocalFiles.value) {
+      if (mode.value === 'draw' && !local.file.type.startsWith('image/')) {
+        ElMessage.warning('绘画模式仅支持添加图片参考图')
+        continue
+      }
+      pendingAttachments.value.push(await sessionApi.uploadFile(local.file))
+      added += 1
+    }
+    for (const item of selectedHistoryItems.value) {
+      const sourceUrl = referenceUseOriginal.value ? item.url : (item.thumbUrl || item.url)
+      const attachment = await sessionApi.uploadImageReference(
+        sourceUrl,
+        `history-${item.messageId}.${item.format}`,
+      )
+      pendingAttachments.value.push(attachment)
+      added += 1
+    }
     referenceVisible.value = false
-    ElMessage.success('历史图片已添加为参考图')
+    resetReferencePanel()
+    if (added > 0) ElMessage.success(added === 1 ? '参考图已添加' : `已添加 ${added} 张参考图`)
   } catch (error: any) {
-    ElMessage.error(error.message || '添加历史图片失败')
+    ElMessage.error(error.message || '添加参考图失败')
   } finally {
-    referenceImportingId.value = null
+    referenceAdding.value = false
+    uploading.value = false
   }
 }
 
@@ -264,11 +410,28 @@ function clearDraft() {
   pendingAttachments.value = []
 }
 
+onBeforeUnmount(() => {
+  clearReferenceSelection()
+})
+
 defineExpose({ clearDraft })
 </script>
 
 <template>
-  <div class="chat-input">
+  <div
+    ref="composerRootRef"
+    class="chat-input"
+    :class="{ dragging: isDragging }"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
+    <div v-if="isDragging" class="drag-overlay" aria-hidden="true">
+      <el-icon><Picture /></el-icon>
+      <span>拖放文件到此处上传</span>
+    </div>
+
     <div v-if="pendingAttachments.length > 0" class="attachment-bar">
       <div
         v-for="att in pendingAttachments"
@@ -295,22 +458,6 @@ defineExpose({ clearDraft })
     </div>
 
     <div class="composer-main">
-      <input
-        ref="fileInputRef"
-        type="file"
-        :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
-        multiple
-        hidden
-        @change="handleFileChange"
-      >
-      <input
-        ref="imageFileInputRef"
-        type="file"
-        accept="image/*"
-        multiple
-        hidden
-        @change="handleFileChange"
-      >
       <textarea
         ref="inputRef"
         v-model="inputText"
@@ -335,16 +482,23 @@ defineExpose({ clearDraft })
         <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
       </button>
 
-      <button
-        class="tool-btn"
-        type="button"
-        :disabled="loading || uploading"
+      <label
+        class="tool-btn tool-file-label"
+        :class="{ disabled: loading || uploading }"
         title="上传文件"
         aria-label="上传文件"
-        @click="openFilePicker"
       >
+        <input
+          id="desktop-file-input"
+          type="file"
+          class="sr-file-input"
+          :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
+          multiple
+          :disabled="loading || uploading"
+          @change="handleFileChange"
+        >
         <el-icon><Paperclip /></el-icon>
-      </button>
+      </label>
 
       <button
         class="tool-btn"
@@ -356,6 +510,17 @@ defineExpose({ clearDraft })
       >
         <el-icon><Picture /></el-icon>
         <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
+      </button>
+
+      <button
+        class="tool-btn desktop-only"
+        type="button"
+        :disabled="loading || uploading"
+        title="截图（读取剪贴板或提示系统截图后粘贴）"
+        aria-label="截图"
+        @click="handleScreenshot"
+      >
+        <el-icon><Scissor /></el-icon>
       </button>
 
       <button
@@ -378,7 +543,7 @@ defineExpose({ clearDraft })
         <el-icon><FullScreen /></el-icon>
       </button>
 
-      <span class="input-hint">Enter 发送, Shift+Enter 换行</span>
+      <span class="input-hint">Enter 发送, Shift+Enter 换行 · 支持拖拽/粘贴</span>
 
       <el-button
         v-if="loading && cancelable"
@@ -469,44 +634,127 @@ defineExpose({ clearDraft })
       </div>
     </el-drawer>
 
-    <el-drawer v-model="referenceVisible" direction="btt" size="auto" class="desktop-composer-drawer" :with-header="false">
+    <el-drawer
+      v-model="referenceVisible"
+      direction="btt"
+      size="auto"
+      class="desktop-composer-drawer"
+      :with-header="false"
+      @closed="resetReferencePanel"
+    >
       <div class="drawer-title">
         <div>
           <strong>添加参考图</strong>
-          <span>从系统上传或选择历史作品</span>
+          <span>相机 / 相册 / 历史作品多选后确认添加</span>
         </div>
       </div>
       <div class="reference-panel">
-        <button
-          type="button"
-          class="reference-upload-entry"
-          :disabled="loading || uploading"
-          @click="openImageFilePicker"
-        >
-          <el-icon><UploadFilled /></el-icon>
-          <span>
-            <strong>从系统上传</strong>
-            <small>打开文件选择器添加本地图片</small>
-          </span>
-        </button>
-        <template v-if="historyImages.length">
-          <div class="reference-history-label">从历史作品选择</div>
-          <div class="history-reference-grid">
-            <button
-              v-for="item in historyImages"
-              :key="item.id"
-              type="button"
-              class="history-reference-tile"
-              :disabled="referenceImportingId != null || loading"
-              @click="selectHistoryImage(item)"
+        <div class="reference-body">
+          <aside class="reference-side-rail" aria-label="图片来源">
+            <label
+              class="reference-side-action"
+              :class="{ disabled: loading || uploading || referenceAdding }"
+              title="拍照"
             >
-              <el-image :src="item.thumbUrl || item.url" fit="cover" />
-              <span v-if="referenceImportingId === item.messageId" class="history-reference-status">添加中…</span>
-              <small>{{ item.label }}</small>
-            </button>
+              <input
+                id="desktop-ref-camera-input"
+                type="file"
+                class="sr-file-input"
+                accept="image/*"
+                capture="environment"
+                :disabled="loading || uploading || referenceAdding"
+                @change="handleReferenceLocalChange"
+              >
+              <el-icon><Camera /></el-icon>
+              <span>相机</span>
+            </label>
+            <label
+              class="reference-side-action"
+              :class="{ disabled: loading || uploading || referenceAdding }"
+              title="从相册选择"
+            >
+              <input
+                id="desktop-ref-album-input"
+                type="file"
+                class="sr-file-input"
+                accept="image/*"
+                multiple
+                :disabled="loading || uploading || referenceAdding"
+                @change="handleReferenceLocalChange"
+              >
+              <el-icon><Picture /></el-icon>
+              <span>相册</span>
+            </label>
+          </aside>
+          <div class="reference-main">
+            <template v-if="historyImages.length">
+              <div class="history-reference-grid">
+                <button
+                  v-for="item in historyImages"
+                  :key="item.id"
+                  type="button"
+                  class="history-reference-tile"
+                  :class="{ selected: isHistorySelected(item.id) }"
+                  :disabled="referenceAdding || loading"
+                  :aria-pressed="isHistorySelected(item.id)"
+                  @click="toggleHistorySelection(item)"
+                >
+                  <el-image :src="item.thumbUrl || item.url" fit="cover" />
+                  <span class="history-check" :class="{ checked: isHistorySelected(item.id) }" aria-hidden="true">
+                    <el-icon v-if="isHistorySelected(item.id)"><Check /></el-icon>
+                  </span>
+                </button>
+              </div>
+            </template>
+            <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先用左侧相机或相册添加。</p>
           </div>
-        </template>
-        <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先从系统上传。</p>
+        </div>
+        <div class="reference-footer">
+          <label class="reference-original">
+            <input v-model="referenceUseOriginal" type="checkbox">
+            <span>原图</span>
+          </label>
+          <div class="reference-preview-strip" aria-label="已选参考图">
+            <template v-if="referencePreviewItems.length">
+              <div
+                v-for="(item, index) in referencePreviewItems"
+                :key="item.id"
+                class="reference-preview-chip"
+              >
+                <el-image :src="item.url" fit="cover" />
+                <em v-if="index === 0 && referenceSelectionCount > 1" class="reference-preview-count">{{ referenceSelectionCount }}</em>
+                <button
+                  type="button"
+                  class="reference-preview-remove"
+                  aria-label="移除已选图片"
+                  @click.stop="item.kind === 'local' ? removeLocalSelection(item.id) : removeHistorySelection(item.id)"
+                >
+                  <el-icon><Close /></el-icon>
+                </button>
+              </div>
+            </template>
+            <span v-else class="reference-preview-empty">未选择图片</span>
+          </div>
+          <button
+            type="button"
+            class="reference-preview-btn"
+            :disabled="!referenceSelectionCount"
+            title="预览已选图片"
+            @click="openReferencePreview"
+          >
+            <el-icon><View /></el-icon>
+            <span>预览</span>
+          </button>
+          <button
+            type="button"
+            class="reference-add-btn"
+            :class="{ active: canConfirmReference }"
+            :disabled="!canConfirmReference"
+            @click="confirmReferenceSelection"
+          >
+            {{ referenceAdding ? '添加中…' : '添加' }}
+          </button>
+        </div>
       </div>
     </el-drawer>
   </div>
@@ -514,6 +762,7 @@ defineExpose({ clearDraft })
 
 <style scoped>
 .chat-input {
+  position: relative;
   margin: 0 clamp(12px, 3vw, 36px) 18px;
   padding: 12px 14px 10px;
   border: 1px solid rgba(220, 225, 244, .95);
@@ -522,6 +771,28 @@ defineExpose({ clearDraft })
   box-shadow: 0 12px 32px rgba(46, 59, 117, .1);
   backdrop-filter: blur(12px);
 }
+.chat-input.dragging {
+  border-color: #8ea0f5;
+  box-shadow: 0 0 0 3px rgba(83, 103, 232, .12), 0 12px 32px rgba(46, 59, 117, .1);
+}
+.drag-overlay {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #4e62d2;
+  font-size: 14px;
+  font-weight: 700;
+  pointer-events: none;
+  border-radius: 18px;
+  background: rgba(239, 243, 255, .92);
+  border: 2px dashed #8ea0f5;
+}
+.drag-overlay .el-icon { font-size: 28px; }
 .attachment-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 2px 9px; border-bottom: 1px solid #edf0f8; margin-bottom: 8px; }
 .attachment-chip { display: flex; align-items: center; gap: 7px; padding: 5px 6px 5px 7px; font-size: 12px; border: 1px solid #e5e9f7; border-radius: 9px; background: #f7f8fe; }
 .attachment-thumb { width: 30px; height: 30px; border-radius: 6px; }
@@ -585,7 +856,20 @@ defineExpose({ clearDraft })
   background: transparent;
 }
 .tool-btn:hover { color: var(--app-primary, #536bf5); background: #f0f2ff; }
-.tool-btn:disabled { opacity: .45; cursor: not-allowed; }
+.tool-btn:disabled,
+.tool-btn.disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
+.tool-btn.tool-file-label { margin: 0; }
+.sr-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .tool-btn.mode-btn {
   color: #4e62d2;
   background: #eef1ff;
@@ -725,67 +1009,222 @@ defineExpose({ clearDraft })
 .model-row span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .model-row strong { color: #314063; font-size: 13px; }
 .model-row small { color: #8a94aa; font-size: 11px; }
+
 .reference-panel { display: grid; gap: 12px; padding-top: 8px; }
-.reference-upload-entry {
+.reference-body {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  min-height: 64px;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  text-align: left;
-  cursor: pointer;
-  border: 1px solid #e1e7f5;
+  grid-template-columns: minmax(72px, 1fr) minmax(0, 5fr);
+  min-height: min(46vh, 380px);
+  overflow: hidden;
+  border: 1px solid #e7ebf3;
   border-radius: 14px;
-  background: linear-gradient(180deg, #f7f9ff 0%, #eef3ff 100%);
+  background: #fff;
 }
-.reference-upload-entry:disabled { opacity: .55; cursor: not-allowed; }
-.reference-upload-entry .el-icon { font-size: 26px; color: #5b8ff9; }
-.reference-upload-entry span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.reference-upload-entry strong { color: #314063; font-size: 14px; }
-.reference-upload-entry small { color: #8a94aa; font-size: 11px; }
-.reference-history-label { color: #6d7890; font-size: 12px; font-weight: 700; }
-.reference-empty-hint { margin: 0; padding: 8px 4px; color: #9aa3b5; font-size: 12px; text-align: center; }
+.reference-side-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
+  padding: 18px 10px;
+  background: #2f3545;
+}
+.reference-side-action {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 4px;
+  color: #f4f6fb;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  border-radius: 12px;
+}
+.reference-side-action.disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.reference-side-action .el-icon { font-size: 22px; }
+.reference-main {
+  min-width: 0;
+  padding: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.reference-empty-hint {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  margin: 0;
+  padding: 16px 12px;
+  color: #9aa3b5;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+.reference-footer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+}
+.reference-original {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #5d6a84;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reference-original input {
+  width: 15px;
+  height: 15px;
+  accent-color: #536bea;
+}
+.reference-preview-strip {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0;
+}
+.reference-preview-empty { color: #a0a8b8; font-size: 12px; }
+.reference-preview-chip {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+}
+.reference-preview-chip :deep(.el-image) {
+  display: block;
+  width: 42px;
+  height: 42px;
+  overflow: hidden;
+  border: 1px solid #dfe4ef;
+  border-radius: 10px;
+}
+.reference-preview-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  color: #fff;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 99px;
+  background: #5b8ff9;
+}
+.reference-preview-remove {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  padding: 0;
+  color: #fff;
+  cursor: pointer;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(55, 64, 88, .88);
+}
+.reference-preview-btn,
+.reference-add-btn {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  border: 0;
+  border-radius: 10px;
+}
+.reference-preview-btn {
+  color: #5a6790;
+  background: #eef1f7;
+}
+.reference-preview-btn:disabled,
+.reference-add-btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.reference-add-btn {
+  min-width: 72px;
+  color: #fff;
+  background: #c5cad6;
+}
+.reference-add-btn.active {
+  background: linear-gradient(140deg, #536bea, #7657d4);
+  box-shadow: 0 4px 10px rgba(83, 96, 229, .2);
+}
 .history-reference-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   max-height: min(42vh, 360px);
   overflow-y: auto;
+  padding: 2px;
 }
 .history-reference-tile {
   position: relative;
   min-width: 0;
+  aspect-ratio: 1;
   padding: 0;
   overflow: hidden;
-  text-align: left;
   cursor: pointer;
-  border: 1px solid #e5e9f2;
+  border: 2px solid transparent;
   border-radius: 11px;
   background: #f5f6fa;
 }
-.history-reference-tile:disabled { cursor: wait; opacity: .7; }
-.history-reference-tile :deep(.el-image) { display: block; width: 100%; height: 88px; }
-.history-reference-tile small {
-  display: block;
-  overflow: hidden;
-  padding: 7px;
-  color: #68738d;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: #fff;
+.history-reference-tile.selected {
+  border-color: #5b8ff9;
+  box-shadow: 0 0 0 1px rgba(91, 143, 249, .25);
 }
-.history-reference-status {
+.history-reference-tile:disabled { cursor: wait; opacity: .7; }
+.history-reference-tile :deep(.el-image) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.history-check {
   position: absolute;
   top: 6px;
   right: 6px;
-  padding: 3px 6px;
-  color: #fff;
-  font-size: 9px;
-  border-radius: 99px;
-  background: rgba(65, 78, 151, .88);
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: transparent;
+  border: 1.5px solid rgba(255, 255, 255, .95);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .35);
+  box-shadow: 0 1px 4px rgba(20, 28, 48, .18);
 }
+.history-check.checked {
+  color: #fff;
+  border-color: #5b8ff9;
+  background: #5b8ff9;
+}
+.history-check .el-icon { font-size: 12px; }
 
 :deep(.desktop-composer-drawer.el-drawer) {
   max-width: 720px;
@@ -799,11 +1238,18 @@ defineExpose({ clearDraft })
 @media (max-width: 780px) {
   .chat-input { margin: 0 12px 12px; }
   .input-hint { display: none; }
+  .desktop-only { display: none; }
   .history-reference-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
   .composer-toolbar { flex-wrap: wrap; }
   .send-button, .cancel-btn { min-width: 64px; }
   .history-reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reference-footer {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+  .reference-preview-btn { justify-self: start; }
+  .reference-add-btn { justify-self: end; }
 }
 </style>
