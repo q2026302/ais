@@ -678,7 +678,7 @@ function createAndTriggerFileInput(
     fb.type = 'file'
     fb.accept = accept
     fb.multiple = multiple
-    fb.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;z-index:-1'
+    fb.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647'
     document.body.appendChild(fb)
     fb.addEventListener('change', (e: Event) => {
       const target = e.target as HTMLInputElement
@@ -1068,7 +1068,10 @@ onMounted(() => {
   // NO display:none, NO visibility:hidden — off-screen with opacity:0 only.
   const pwaInput = document.createElement('input')
   pwaInput.type = 'file'
-  pwaInput.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;z-index:-1'
+  // CRITICAL: Must be within the viewport and opacity > 0 for PWA standalone mode,
+  // otherwise Chrome's transient activation check rejects .click().
+  // pointer-events:none prevents the 1x1px element at (0,0) from stealing clicks.
+  pwaInput.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647'
   document.body.appendChild(pwaInput)
   persistentFileInput = pwaInput
   // Debug sampling only — does not affect keyboard pin / layout.

@@ -640,6 +640,9 @@ defineExpose({ clearDraft })
       size="auto"
       class="desktop-composer-drawer"
       :with-header="false"
+      :z-index="2100"
+      :teleported="false"
+      :append-to-body="false"
       @closed="resetReferencePanel"
     >
       <div class="drawer-title">
@@ -1232,9 +1235,13 @@ defineExpose({ clearDraft })
   max-width: 720px;
   margin: 0 auto;
   border-radius: 20px 20px 0 0;
+  z-index: 2100 !important;
 }
 :deep(.desktop-composer-drawer .el-drawer__body) {
   padding: 18px 18px calc(18px + env(safe-area-inset-bottom, 0px));
+}
+:deep(.desktop-composer-drawer .el-overlay) {
+  z-index: 2099 !important;
 }
 
 @media (max-width: 780px) {
