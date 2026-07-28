@@ -637,19 +637,26 @@ async function uploadFile(file: File) {
 
 /**
  * Open the native file picker using a persistent pre-rendered <input type="file">.
- * the old dynamic createElement + pointer-events:none approach was rejected by
- * Chrome's transient activation check in standalone mode.
+ * Uses native <label for="pwa-file-input"> activation for iOS PWA compatibility
+ * (programmatic .click() is rejected by the user activation security check).
+ * When validation fails, preventDefault stops the label from activating the input.
  */
 function triggerFilePicker(event: MouseEvent|TouchEvent, accept: string) {
-  if (store.loading || uploading.value) return
+  if (store.loading || uploading.value) {
+    event.preventDefault()
+    return
+  }
   createAndTriggerFileInput(accept, true, (files) => {
     for (const file of files) void uploadFile(file)
   })
 }
 
 function triggerImageFilePicker(event: MouseEvent|TouchEvent, capture: boolean) {
-  if (store.loading || uploading.value || referenceAdding.value) return
-  // Configure capture attribute before triggering
+  if (store.loading || uploading.value || referenceAdding.value) {
+    event.preventDefault()
+    return
+  }
+  // Configure capture attribute before the label activates the input
   if (persistentFileInput) {
     if (capture) persistentFileInput.setAttribute('capture', 'environment')
     else persistentFileInput.removeAttribute('capture')
@@ -678,7 +685,7 @@ function createAndTriggerFileInput(
     fb.type = 'file'
     fb.accept = accept
     fb.multiple = multiple
-    fb.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647'
+    fb.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;z-index:2147483647'
     document.body.appendChild(fb)
     fb.addEventListener('change', (e: Event) => {
       const target = e.target as HTMLInputElement
@@ -696,16 +703,18 @@ function createAndTriggerFileInput(
   input.value = ''
   input.accept = accept
   input.multiple = multiple
-  // Do NOT reset capture here — triggerImageFilePicker owns it
-
-  const handler = (e: Event) => {
-    const target = e.target as HTMLInputElement
-    onChange(Array.from(target.files || []))
-    target.value = ''
-    input.removeEventListener('change', handler)
+  // Queue callback for the permanent change listener
+  ;(window as any).__pwaFileCallback?.(onChange)
+  // Do NOT call .click() — on iOS PWA standalone, programmatic .click() on
+  // reduced-opacity elements is rejected by the user activation security check.
+  // The caller's template <label for="pwa-file-input"> handles native activation.
+  // If this function is called outside a label context (e.g. from JS), dispatch
+  // a synthetic click so the reworked flow still works.
+  if (document.activeElement?.closest('label[for="pwa-file-input"]')) {
+    // Label activation handles it
+  } else {
+    input.click()
   }
-  input.addEventListener('change', handler, { once: true })
-  input.click()
 }
 
 async function handlePaste(event: ClipboardEvent) {
@@ -1064,16 +1073,36 @@ onMounted(() => {
   void initialize()
   // Create a persistent <input type="file"> that stays in DOM for PWA standalone.
   // PWA mode requires the input to exist BEFORE the user gesture, so we create it
-  // at mount time (not dynamically in the click handler).  NO pointer-events:none,
-  // NO display:none, NO visibility:hidden — off-screen with opacity:0 only.
+  // at mount time (not dynamically in the click handler).
+  //
+  // CRITICAL: No pointer-events:none! On iOS Safari PWA, pointer-events:none breaks
+  // the user activation chain — the browser rejects programmatic .click() and may
+  // even reject label-mediated activation if the linked input has pointer-events:none.
+  // The 1x1px at (0,0) with high z-index is small enough not to steal real clicks.
   const pwaInput = document.createElement('input')
   pwaInput.type = 'file'
-  // CRITICAL: Must be within the viewport and opacity > 0 for PWA standalone mode,
-  // otherwise Chrome's transient activation check rejects .click().
-  // pointer-events:none prevents the 1x1px element at (0,0) from stealing clicks.
-  pwaInput.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:2147483647'
+  pwaInput.id = 'pwa-file-input'
+  pwaInput.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;z-index:2147483647'
   document.body.appendChild(pwaInput)
   persistentFileInput = pwaInput
+
+  // Permanent change listener on the persistent input. The callback is set by
+  // the label-based activation handlers (onFileButtonClick) before the label
+  // natively triggers the input via its 'for' attribute.
+  let pendingFileCallback: ((files: File[]) => void) | null = null
+  pwaInput.addEventListener('change', (e: Event) => {
+    const target = e.target as HTMLInputElement
+    const files = Array.from(target.files || [])
+    target.value = ''
+    const cb = pendingFileCallback
+    pendingFileCallback = null
+    cb?.(files)
+  })
+
+  // Expose a helper so triggerFilePicker / triggerImageFilePicker can queue a callback
+  ;(window as any).__pwaFileCallback = (cb: (files: File[]) => void) => {
+    pendingFileCallback = cb
+  }
   // Debug sampling only — does not affect keyboard pin / layout.
   if (import.meta.env.DEV) {
     bumpDebugSample()
@@ -1380,16 +1409,16 @@ const debugInfo = computed(() => {
           <ChatDotRound v-else aria-hidden="true" />
           <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
         </button>
-        <button
+        <label
+          for="pwa-file-input"
           class="tool-btn"
-          type="button"
-          :disabled="store.loading || uploading"
+          :class="{ disabled: store.loading || uploading }"
           aria-label="上传文件"
           title="上传文件"
           @click="triggerFilePicker($event, mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt')"
         >
           <Paperclip aria-hidden="true" />
-        </button>
+        </label>
         <button
           class="tool-btn"
           type="button"
@@ -1481,28 +1510,28 @@ const debugInfo = computed(() => {
       <div class="reference-panel">
         <div class="reference-body">
           <aside class="reference-side-rail" aria-label="图片来源">
-            <button
+            <label
+              for="pwa-file-input"
               class="reference-side-action"
-              type="button"
-              :disabled="store.loading || uploading || referenceAdding"
+              :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="拍照"
               aria-label="拍照"
               @click="triggerImageFilePicker($event, true)"
             >
               <Camera aria-hidden="true" />
               <span>相机</span>
-            </button>
-            <button
+            </label>
+            <label
+              for="pwa-file-input"
               class="reference-side-action"
-              type="button"
-              :disabled="store.loading || uploading || referenceAdding"
+              :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="从相册选择"
               aria-label="从相册选择"
               @click="triggerImageFilePicker($event, false)"
             >
               <Picture aria-hidden="true" />
               <span>相册</span>
-            </button>
+            </label>
           </aside>
           <div class="reference-main">
             <template v-if="historyImages.length">

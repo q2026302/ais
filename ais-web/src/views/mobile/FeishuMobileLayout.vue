@@ -150,27 +150,39 @@ function adjustComposerVisibility() {
   const composer = pageRef.value.querySelector('.composer') as HTMLElement | null
   if (!composer) return
 
-  const composerBottom = composer.getBoundingClientRect().bottom
-  const visualBottom = window.visualViewport
-    ? window.visualViewport.height
-    : window.innerHeight
-
-  // Gap between composer bottom and visible viewport bottom.
-  // Positive = composer is fully visible (space above keyboard).
-  // Negative = composer is behind the keyboard.
-  const gap = visualBottom - composerBottom
+  // Gap between composer bottom and shell bottom.
+  // Positive = space remaining within the shell (below composer).
+  // Negative = composer extends beyond shell bottom (behind keyboard overlay).
+  //
+  // KEY BUGFIX: previously used `window.visualViewport.height - composerRect.bottom`
+  // as the gap reference. In PWA overlay mode the visualViewport does NOT shrink
+  // when the keyboard opens, so the gap was always large (> 40), triggering the
+  // "expand" branch and undoing the keyboard fallback shrink — causing ALL input
+  // methods (pinyin, handwriting) to be obscured.
+  //
+  // The correct reference is the shell's own bottom edge. After pinShellToVisualViewport
+  // with forceKeyboardFallback=true, the shell is already shrunk by the estimated
+  // keyboard size. The gap then measures remaining headroom within that shrunk area.
+  const gap = pageRef.value.getBoundingClientRect().bottom - composer.getBoundingClientRect().bottom
 
   if (gap < -5) {
-    // Composer is hidden behind keyboard — shrink shell more.
+    // Composer extends beyond shell bottom — shrink shell more.
+    // This handles taller keyboards (handwriting ~50%) that exceed the
+    // fallback ratio estimate (~35%).
     const additionalShrink = Math.abs(gap) + 12
     const newH = Math.max(60, pageRef.value.clientHeight - additionalShrink)
     pageRef.value.style.height = `${newH}px`
     pageRef.value.style.maxHeight = `${newH}px`
   } else if (gap > 40 && pageRef.value.style.height) {
-    // Too much empty space above keyboard (pinyin case) — expand shell
-    // but never exceed visual viewport height.
+    // Too much empty space below composer — expand shell slightly.
+    // This handles shorter keyboards (pinyin ~30%) so there's less
+    // dead space above the keyboard.
     const currentH = pageRef.value.clientHeight
     const expandBy = Math.min(gap - 20, 80)
+    // Use visualViewport as the ceiling so shell never exceeds visible area.
+    const visualBottom = window.visualViewport
+      ? window.visualViewport.height
+      : window.innerHeight
     const newH = Math.min(currentH + expandBy, visualBottom)
     pageRef.value.style.height = `${newH}px`
     pageRef.value.style.maxHeight = `${newH}px`
