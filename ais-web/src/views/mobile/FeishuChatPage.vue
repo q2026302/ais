@@ -954,6 +954,13 @@ function openReferenceShortcut() {
 
 function onComposerFocus() {
   mobileKeyboard?.setComposerFocus()
+  // PWA standalone: force the composer into view after keyboard opens,
+  // since some Android overlay keyboards do not trigger a layout resize.
+  void nextTick(() => {
+    if (isPwaEntry() && inputRef.value) {
+      inputRef.value.scrollIntoView({ block: 'center', behavior: 'instant' })
+    }
+  })
 }
 
 function onComposerBlur() {
@@ -1948,13 +1955,15 @@ const debugInfo = computed(() => {
 }
 .sr-file-input {
   position: absolute;
-  width: 1px;
-  height: 1px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   padding: 0;
-  margin: -1px;
+  margin: 0;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
+  opacity: 0;
+  z-index: 1;
+  cursor: pointer;
   border: 0;
 }
 .tool-btn :deep(svg) {

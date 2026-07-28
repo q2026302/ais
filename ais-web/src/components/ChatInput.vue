@@ -861,13 +861,15 @@ defineExpose({ clearDraft })
 .tool-btn.tool-file-label { margin: 0; }
 .sr-file-input {
   position: absolute;
-  width: 1px;
-  height: 1px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   padding: 0;
-  margin: -1px;
+  margin: 0;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
+  opacity: 0;
+  z-index: 1;
+  cursor: pointer;
   border: 0;
 }
 .tool-btn.mode-btn {
