@@ -6,19 +6,18 @@ import {
   ArrowRight,
   ChatDotRound,
   Check,
-  Clock,
   Close,
   CopyDocument,
   Delete,
   Download,
   EditPen,
-  FullScreen,
   MagicStick,
   Paperclip,
   Picture,
   Plus,
   Promotion,
   RefreshRight,
+  Setting,
   UploadFilled,
 } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
@@ -59,11 +58,11 @@ const pendingAttachments = ref<UploadResponse[]>([])
 const uploading = ref(false)
 const initializing = ref(true)
 const mode = ref<'chat' | 'draw'>('draw')
-const composerExtraVisible = ref(false)
 const referenceVisible = ref(false)
 const referenceImportingId = ref<number | null>(null)
 const modelVisible = ref(false)
 const drawSettingsVisible = ref(false)
+const imageFileInputRef = ref<HTMLInputElement | null>(null)
 const imageViewerVisible = ref(false)
 const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
@@ -572,7 +571,25 @@ function handleInputKeydown(event: KeyboardEvent) {
 }
 
 function openFilePicker() {
+  // Must stay synchronous with the user gesture for Android PWA standalone.
   if (!store.loading && !uploading.value) fileInputRef.value?.click()
+}
+
+function openImageFilePicker() {
+  if (store.loading || uploading.value) return
+  referenceVisible.value = false
+  // Deferred one frame so the drawer can close without eating the gesture on most
+  // browsers; the button that opens history still uses a direct click path.
+  imageFileInputRef.value?.click()
+}
+
+function toggleMode() {
+  mode.value = mode.value === 'draw' ? 'chat' : 'draw'
+}
+
+function openSettingsPanel() {
+  if (mode.value === 'draw') openDrawSettings()
+  else openModelPicker()
 }
 
 function autoResizeTextarea() {
@@ -580,7 +597,8 @@ function autoResizeTextarea() {
   if (!el) return
   el.style.height = 'auto'
   const lineHeight = parseInt(getComputedStyle(el).lineHeight, 10) || 20
-  const maxHeight = lineHeight * 4 + 16
+  // Feishu-style compact composer: grow up to 6 lines.
+  const maxHeight = lineHeight * 6 + 16
   el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px'
   el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
 }
@@ -837,36 +855,17 @@ function formatTime(value: string) {
   return formatTimeHm(value, '')
 }
 
-function openComposerExtras() {
-  composerExtraVisible.value = true
-}
-
-function openReferencePicker() {
-  composerExtraVisible.value = false
-  if (!historyImages.value.length) {
-    ElMessage.info('当前会话还没有可用的历史图片')
-    return
-  }
-  referenceVisible.value = true
-}
-
 function openModelPicker() {
-  composerExtraVisible.value = false
   modelVisible.value = true
 }
 
 function openDrawSettings() {
-  composerExtraVisible.value = false
   drawSettingsVisible.value = true
 }
 
+/** 🖼 reference button: panel with system upload + optional history. */
 function openReferenceShortcut() {
-  if (historyImages.value.length) {
-    openReferencePicker()
-    return
-  }
-  openComposerExtras()
-  ElMessage.info('还没有历史图，可在创作工具中添加参考图')
+  referenceVisible.value = true
 }
 
 function onComposerFocus() {
@@ -1179,37 +1178,6 @@ const debugInfo = computed(() => {
     </div>
 
     <footer class="composer">
-      <div class="mode-toggle-bar">
-        <button :class="{ active: mode === 'draw' }" type="button" @click="mode = 'draw'"><Picture /> 绘画</button>
-        <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
-      </div>
-      <section v-if="mode === 'draw'" class="draw-status-bar" aria-label="当前绘画设置">
-        <button type="button" class="draw-status-chip draw-status-model" :title="selectedProviderLabel" :aria-label="`当前绘画模型：${selectedProviderLabel}，点击切换模型`" @click="openModelPicker">
-          <MagicStick aria-hidden="true" />
-          <span>模型</span>
-          <strong>{{ selectedProviderLabel }}</strong>
-        </button>
-        <button type="button" class="draw-status-chip" :title="`当前尺寸或比例：${drawSize}`" :aria-label="`当前尺寸或比例：${drawSize}，点击设置`" @click="openDrawSettings">
-          <span>尺寸</span>
-          <strong>{{ drawSize }}</strong>
-        </button>
-        <button type="button" class="draw-status-chip" :title="`当前质量：${drawQuality}`" :aria-label="`当前质量：${drawQuality}，点击设置`" @click="openDrawSettings">
-          <span>质量</span>
-          <strong>{{ drawQuality }}</strong>
-        </button>
-        <button type="button" class="draw-status-chip" :title="referenceImageCount ? `已添加 ${referenceImageCount} 张参考图` : '暂无参考图'" :aria-label="referenceImageCount ? `已添加 ${referenceImageCount} 张参考图，点击管理参考图` : '暂无参考图，点击添加'" @click="openReferenceShortcut">
-          <Picture aria-hidden="true" />
-          <span>参考图</span>
-          <strong>{{ referenceImageCount || '未添加' }}</strong>
-        </button>
-      </section>
-      <section v-else class="draw-status-bar chat-status-bar" aria-label="当前对话模型">
-        <button type="button" class="draw-status-chip draw-status-model" :title="selectedChatProviderLabel" :aria-label="`当前对话模型：${selectedChatProviderLabel}，点击切换模型`" @click="openModelPicker">
-          <MagicStick aria-hidden="true" />
-          <span>对话模型</span>
-          <strong>{{ selectedChatProviderLabel }}</strong>
-        </button>
-      </section>
       <div v-if="pendingAttachments.length" class="attachment-strip">
         <div v-for="attachment in pendingAttachments" :key="attachment.id" class="attachment-preview">
           <el-image v-if="isImageAttachment(attachment.contentType)" :src="attachment.fileUrl" fit="cover" />
@@ -1219,12 +1187,12 @@ const debugInfo = computed(() => {
       </div>
       <div class="composer-main">
         <input ref="fileInputRef" type="file" :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'" multiple hidden @change="handleFileChange">
-        <button class="upload-button" type="button" :disabled="store.loading || uploading" aria-label="更多创作选项" @click="openComposerExtras"><Plus /></button>
+        <input ref="imageFileInputRef" type="file" accept="image/*" multiple hidden @change="handleFileChange">
         <textarea
           ref="inputRef"
           v-model="inputText"
           :disabled="store.loading"
-          :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'"
+          :placeholder="mode === 'draw' ? '描述你想生成的画面...' : '输入消息或 /help 查看命令'"
           rows="1"
           enterkeyhint="enter"
           @paste="handlePaste"
@@ -1233,9 +1201,61 @@ const debugInfo = computed(() => {
           @focus="onComposerFocus"
           @blur="onComposerBlur"
         ></textarea>
-        <button class="send-button" :class="{ disabled: !canSubmit }" type="button" :disabled="!canSubmit" :aria-label="mode === 'draw' ? '生成图片' : '发送消息'" @click="handleSubmit"><span>{{ mode === 'draw' ? '生成' : '发送' }}</span></button>
       </div>
-      <p class="composer-hint">{{ mode === 'draw' ? '点“+”添加参考图、切换模型和设置参数' : '点“+”添加附件、切换对话模型' }}</p>
+      <div class="composer-toolbar" role="toolbar" aria-label="创作工具">
+        <button
+          class="tool-btn mode-btn"
+          type="button"
+          :title="mode === 'draw' ? '当前：绘画，点击切换到对话' : '当前：对话，点击切换到绘画'"
+          :aria-label="mode === 'draw' ? '当前绘画模式，点击切换到对话' : '当前对话模式，点击切换到绘画'"
+          @click="toggleMode"
+        >
+          <Picture v-if="mode === 'draw'" aria-hidden="true" />
+          <ChatDotRound v-else aria-hidden="true" />
+          <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
+        </button>
+        <button
+          class="tool-btn"
+          type="button"
+          :disabled="store.loading || uploading"
+          aria-label="上传文件"
+          title="上传文件"
+          @click="openFilePicker"
+        >
+          <Paperclip aria-hidden="true" />
+        </button>
+        <button
+          class="tool-btn"
+          type="button"
+          :disabled="store.loading || uploading"
+          :aria-label="referenceImageCount ? `参考图（已添加 ${referenceImageCount} 张）` : '添加参考图'"
+          :title="referenceImageCount ? `参考图 · ${referenceImageCount}` : '参考图'"
+          @click="openReferenceShortcut"
+        >
+          <Picture aria-hidden="true" />
+          <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
+        </button>
+        <button
+          class="tool-btn"
+          type="button"
+          :aria-label="mode === 'draw' ? '绘画设置' : '选择对话模型'"
+          :title="mode === 'draw' ? `设置 · ${drawSize} · ${drawQuality}` : `模型 · ${selectedChatProviderLabel}`"
+          @click="openSettingsPanel"
+        >
+          <Setting aria-hidden="true" />
+        </button>
+        <button
+          class="send-button"
+          :class="{ disabled: !canSubmit }"
+          type="button"
+          :disabled="!canSubmit"
+          :aria-label="mode === 'draw' ? '生成图片' : '发送消息'"
+          @click="handleSubmit"
+        >
+          <Promotion v-if="mode === 'chat'" aria-hidden="true" />
+          <span>{{ mode === 'draw' ? '生成' : '发送' }}</span>
+        </button>
+      </div>
     </footer>
 
     <div v-if="fullscreenInput" class="fullscreen-input-overlay">
@@ -1263,33 +1283,14 @@ const debugInfo = computed(() => {
       flush above the keyboard. Nav returns on blur / keyboard close.
     -->
 
-    <el-drawer v-model="composerExtraVisible" direction="btt" size="auto" class="h5-drawer composer-extra-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>创作工具</strong><span>附件、参考图、模型和参数都在这里</span></div></div>
-      <div class="composer-extra-grid">
-        <button type="button" @click="openFilePicker"><UploadFilled /><span>添加附件</span><small>{{ mode === 'draw' ? '上传参考图' : '图片或文档' }}</small></button>
-        <button type="button" :disabled="!historyImages.length" @click="openReferencePicker"><Clock /><span>历史图</span><small>选择已有作品</small></button>
-        <button type="button" @click="openModelPicker"><MagicStick /><span>模型</span><small>{{ selectedProviderLabel }}</small></button>
-        <button type="button" @click="toggleFullscreenInput(); composerExtraVisible = false"><FullScreen /><span>扩展输入</span><small>全屏编辑内容</small></button>
-      </div>
-      <div class="mode-picker">
-        <span>创作模式</span>
-        <div class="mode-switch" aria-label="创作模式">
-          <button :class="{ active: mode === 'draw' }" type="button" @click="mode = 'draw'"><Picture /> 绘画</button>
-          <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
-        </div>
-      </div>
-      <div v-if="mode === 'draw'" class="drawer-draw-options">
-        <span>绘画参数</span>
-        <div class="draw-options-inline-fields">
-          <label><span>尺寸</span><el-select v-model="drawSize"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
-          <label><span>质量</span><el-select v-model="drawQuality"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-          <label><span>格式</span><el-select v-model="drawFormat"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-        </div>
-      </div>
-    </el-drawer>
-
     <el-drawer v-model="drawSettingsVisible" direction="btt" size="auto" class="h5-drawer draw-settings-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>绘画设置</strong><span>快速调整尺寸、质量与格式</span></div></div>
+      <div class="drawer-title compact">
+        <div>
+          <strong>绘画设置</strong>
+          <span>调整尺寸、质量与格式 · 当前模型 {{ selectedProviderLabel }}</span>
+        </div>
+        <button type="button" @click="openModelPicker(); drawSettingsVisible = false">换模型</button>
+      </div>
       <div class="draw-settings-fields">
         <label><span>尺寸 / 比例</span><el-select v-model="drawSize" aria-label="绘画尺寸或比例"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
         <label><span>质量</span><el-select v-model="drawQuality" aria-label="绘画质量"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
@@ -1298,13 +1299,38 @@ const debugInfo = computed(() => {
     </el-drawer>
 
     <el-drawer v-model="referenceVisible" direction="btt" size="auto" class="h5-drawer reference-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>选择历史图片</strong><span>添加到当前绘画的参考图</span></div></div>
-      <div class="history-reference-grid">
-        <button v-for="item in historyImages" :key="item.id" type="button" class="history-reference-tile" :disabled="referenceImportingId != null || store.loading" @click="selectHistoryImage(item)">
-          <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
-          <span v-if="referenceImportingId === item.messageId" class="history-reference-status">添加中…</span>
-          <small>{{ item.label }}</small>
+      <div class="drawer-title compact"><div><strong>添加参考图</strong><span>从系统上传或选择历史作品</span></div></div>
+      <div class="reference-panel">
+        <button
+          type="button"
+          class="reference-upload-entry"
+          :disabled="store.loading || uploading"
+          @click="openImageFilePicker"
+        >
+          <UploadFilled aria-hidden="true" />
+          <span>
+            <strong>从系统上传</strong>
+            <small>打开文件选择器添加本地图片</small>
+          </span>
         </button>
+        <template v-if="historyImages.length">
+          <div class="reference-history-label">从历史作品选择</div>
+          <div class="history-reference-grid">
+            <button
+              v-for="item in historyImages"
+              :key="item.id"
+              type="button"
+              class="history-reference-tile"
+              :disabled="referenceImportingId != null || store.loading"
+              @click="selectHistoryImage(item)"
+            >
+              <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
+              <span v-if="referenceImportingId === item.messageId" class="history-reference-status">添加中…</span>
+              <small>{{ item.label }}</small>
+            </button>
+          </div>
+        </template>
+        <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先从系统上传。</p>
       </div>
     </el-drawer>
 
@@ -1495,15 +1521,7 @@ const debugInfo = computed(() => {
  *    input under the keyboard on some Android WebAPKs.
  */
 .chat-page.keyboard-open .composer {
-  padding-bottom: 8px;
-}
-.chat-page.keyboard-open .composer-hint {
-  display: none;
-}
-.chat-page.keyboard-open .mode-toggle-bar,
-.chat-page.keyboard-open .draw-status-bar {
-  /* Reclaim vertical space while typing on short viewports. */
-  display: none;
+  padding-bottom: 6px;
 }
 .chat-page.keyboard-open .conversation {
   /* Conversation is the only scroll container; keep it shrinkable. */
@@ -1705,46 +1723,79 @@ const debugInfo = computed(() => {
 }
 
 .mode-toggle-bar {
-  display: flex;
-  gap: 4px;
-  margin: 0 0 8px;
-  padding: 3px;
-  border-radius: 11px;
-  background: #f0f2f7;
+  display: none;
 }
-.mode-toggle-bar button {
+.composer {
+  position: relative;
+  z-index: 8;
+  flex: 0 0 auto;
+  padding: 8px 12px max(8px, env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid rgba(223, 228, 239, .94);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 -8px 24px rgba(42, 54, 93, .055);
+  backdrop-filter: blur(18px);
+}
+.composer-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.tool-btn {
+  position: relative;
   display: inline-flex;
-  flex: 1;
-  min-height: 30px;
+  flex: 0 0 auto;
+  min-width: 36px;
+  min-height: 36px;
   align-items: center;
   justify-content: center;
   gap: 4px;
   padding: 0 8px;
-  color: #7e899e;
-  font-size: 11px;
+  color: #657080;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
 }
-.mode-toggle-bar button.active {
-  color: #4e62d2;
-  background: #fff;
-  box-shadow: 0 2px 7px rgba(62, 76, 133, .1);
+.tool-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
 }
-.mode-toggle-bar button svg { width: 16px; height: 16px; }
-.composer { position: relative; z-index: 8; flex: 0 0 auto; padding: 8px 12px 2px; border-top: 1px solid rgba(223, 228, 239, .94); background: rgba(255, 255, 255, .94); box-shadow: 0 -8px 24px rgba(42, 54, 93, .055); backdrop-filter: blur(18px); }
-.composer-toolbar { display: flex; min-width: 0; align-items: center; gap: 4px; margin-bottom: 6px; }
-.draw-status-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0 0 8px; }
-.chat-status-bar { grid-template-columns: minmax(0, 1fr); }
-.draw-status-chip { display: grid; min-width: 0; min-height: 44px; align-content: center; gap: 1px; padding: 6px 8px; color: #748097; text-align: left; cursor: pointer; border: 1px solid #e1e6f1; border-radius: 12px; background: #f6f8fc; }
-.draw-status-chip > svg { width: 15px; height: 15px; grid-row: span 2; align-self: center; color: #6177db; }
-.draw-status-chip > span { overflow: hidden; color: #8b95a7; font-size: 10px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
-.draw-status-chip > strong { overflow: hidden; color: #53617b; font-size: 11px; font-weight: 750; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.draw-status-model { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-column: 1 / -1; column-gap: 6px; }
-.draw-status-model > span, .draw-status-model > strong { grid-column: 2; }
-.draw-status-model > strong { max-width: 100%; }
+.tool-btn :deep(svg) {
+  width: 20px;
+  height: 20px;
+}
+.tool-btn.mode-btn {
+  color: #4e62d2;
+  background: #eef1ff;
+  padding: 0 10px;
+}
+.tool-btn.mode-btn span {
+  font-size: 12px;
+  line-height: 1;
+}
+.tool-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  color: #fff;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 14px;
+  text-align: center;
+  border-radius: 99px;
+  background: #5b8ff9;
+}
+.draw-status-bar { display: none; }
+.chat-status-bar { display: none; }
+.draw-status-chip { display: none; }
 .draw-settings-fields { display: grid; gap: 12px; padding: 14px 0 4px; }
 .draw-settings-fields label { display: grid; grid-template-columns: 86px minmax(0, 1fr); min-height: 44px; align-items: center; gap: 10px; color: #65718a; font-size: 12px; font-weight: 700; }
 .draw-settings-fields :deep(.el-select) { width: 100%; }
@@ -1773,16 +1824,84 @@ const debugInfo = computed(() => {
 .attachment-preview > button :deep(svg) { width: 10px; }
 .attachment-file-icon { display: flex; width: 50px; height: 50px; align-items: center; justify-content: center; flex-direction: column; gap: 2px; overflow: hidden; color: #6372d4; border: 1px solid #e3e7f4; border-radius: 11px; background: #f1f3ff; }
 .attachment-file-icon small { max-width: 42px; overflow: hidden; color: #77819a; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
-.composer-main { display: flex; min-height: 50px; align-items: flex-end; gap: 7px; padding: 6px 7px 6px 12px; border: 1px solid #dfe4ee; border-radius: 16px; background: #f7f9fc; transition: border-color .18s, box-shadow .18s; }
+.composer-main {
+  display: flex;
+  min-height: 42px;
+  align-items: flex-end;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 1px solid #dfe4ee;
+  border-radius: 16px;
+  background: #f7f9fc;
+  transition: border-color .18s, box-shadow .18s;
+}
 .composer-main:focus-within { border-color: #aeb8ed; box-shadow: 0 0 0 3px rgba(83, 103, 232, .08); }
-.composer-main textarea { flex: 1; min-width: 0; max-height: 112px; padding: 8px 0 6px; color: #35415d; font: inherit; font-size: 14px; line-height: 1.45; resize: none; border: 0; outline: 0; background: transparent; }
+.composer-main textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: 148px;
+  padding: 2px 0;
+  color: #35415d;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.45;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
 .composer-main textarea::placeholder { color: #a1a9b8; }
-.upload-button, .send-button { display: grid; flex: 0 0 auto; width: 30px; height: 30px; padding: 0; place-items: center; cursor: pointer; border: 0; border-radius: 9px; }
-.upload-button { color: #69758e; background: #e9edf4; }
+.upload-button, .send-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; padding: 0; cursor: pointer; border: 0; border-radius: 10px; }
+.upload-button { color: #69758e; background: #e9edf4; width: 30px; height: 30px; }
 .upload-button:disabled { opacity: .5; }
-.send-button { color: #fff; background: linear-gradient(140deg, #526bea, #7657d4); box-shadow: 0 5px 13px rgba(72, 83, 202, .24); }
+.send-button {
+  margin-left: auto;
+  min-width: 64px;
+  height: 36px;
+  gap: 4px;
+  padding: 0 14px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  background: linear-gradient(140deg, #526bea, #7657d4);
+  box-shadow: 0 5px 13px rgba(72, 83, 202, .24);
+}
+.send-button :deep(svg) { width: 15px; height: 15px; }
 .send-button.disabled { color: #aab1c1; background: #e6eaf1; box-shadow: none; }
-.composer-hint { margin: 3px 3px 0; color: #9ba4b5; font-size: 10px; line-height: 1.35; }
+.composer-hint { display: none; }
+.reference-panel { display: grid; gap: 12px; padding-top: 4px; }
+.reference-upload-entry {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  min-height: 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid #e1e7f5;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f7f9ff 0%, #eef3ff 100%);
+}
+.reference-upload-entry:disabled { opacity: .55; cursor: not-allowed; }
+.reference-upload-entry :deep(svg) { width: 28px; height: 28px; color: #5b8ff9; }
+.reference-upload-entry span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.reference-upload-entry strong { color: #314063; font-size: 14px; }
+.reference-upload-entry small { color: #8a94aa; font-size: 11px; }
+.reference-history-label {
+  margin-top: 2px;
+  color: #6d7890;
+  font-size: 12px;
+  font-weight: 700;
+}
+.reference-empty-hint {
+  margin: 0;
+  padding: 10px 4px 4px;
+  color: #9aa3b5;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
 
 .fullscreen-toggle {
   display: grid;
@@ -2066,34 +2185,18 @@ const debugInfo = computed(() => {
 .message-attachments { gap: 8px; margin-bottom: 10px; }
 .result-image { border-radius: 12px; }
 .composer {
-  padding: 12px 14px 8px;
+  padding: 10px 14px max(8px, env(safe-area-inset-bottom, 0px));
   border-top-color: #e8eaee;
   background: rgba(255, 255, 255, .98);
   box-shadow: 0 -4px 16px rgba(37, 49, 72, .04);
 }
-.composer-main { min-height: 48px; gap: 9px; padding: 5px 5px 5px 8px; border: 0; border-radius: 12px; background: #f1f2f4; }
+.composer-main { min-height: 42px; gap: 9px; padding: 8px 12px; border: 0; border-radius: 12px; background: #f1f2f4; }
 .composer-main:focus-within { border-color: transparent; box-shadow: 0 0 0 2px rgba(91, 143, 249, .18); }
-.composer-main textarea { padding: 9px 2px 8px; font-size: 15px; line-height: 1.6; }
-.upload-button { width: 34px; height: 34px; color: #657080; border-radius: 9px; background: transparent; }
-.upload-button svg { width: 21px; height: 21px; }
-.send-button { width: auto; min-width: 54px; height: 34px; padding: 0 11px; font-size: 13px; font-weight: 700; border-radius: 9px; background: #5b8ff9; box-shadow: none; }
+.composer-main textarea { padding: 2px 0; font-size: 15px; line-height: 1.6; }
+.send-button { min-width: 58px; height: 34px; padding: 0 12px; font-size: 13px; font-weight: 700; border-radius: 9px; background: #5b8ff9; box-shadow: none; }
 .send-button.disabled { color: #a7adb7; background: #e3e5e8; }
-.composer-hint { margin: 6px 3px 0; color: #a3a9b2; font-size: 10px; line-height: 1.45; }
-.composer-extra-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 15px 0; }
-.composer-extra-grid button { display: flex; min-width: 0; min-height: 92px; align-items: center; justify-content: center; flex-direction: column; gap: 4px; padding: 8px 5px; color: #4e5b6e; cursor: pointer; border: 0; border-radius: 12px; background: #f5f6f8; }
-.composer-extra-grid button:disabled { color: #a9afb8; cursor: not-allowed; opacity: .65; }
-.composer-extra-grid button svg { width: 22px; height: 22px; color: #5b8ff9; }
-.composer-extra-grid button span { overflow: hidden; max-width: 100%; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.composer-extra-grid button small { overflow: hidden; max-width: 100%; color: #9aa1ab; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.mode-picker, .drawer-draw-options { padding: 13px 0; border-top: 1px solid #edf0f3; }
-.mode-picker > span, .drawer-draw-options > span { display: block; margin-bottom: 9px; color: #697485; font-size: 12px; font-weight: 700; }
-.mode-picker .mode-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.mode-picker .mode-switch button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 6px; color: #6e7785; cursor: pointer; border: 0; border-radius: 10px; background: #f3f4f6; }
-.mode-picker .mode-switch button.active { color: #3979e8; background: #eaf2ff; }
-.mode-picker .mode-switch svg { width: 17px; }
-.draw-options-inline-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.draw-options-inline-fields label { display: grid; gap: 5px; min-width: 0; color: #8a93a0; font-size: 10px; }
-.draw-options-inline-fields :deep(.el-select) { width: 100%; }
+.tool-btn.mode-btn { background: #eaf2ff; color: #3979e8; }
+.reference-upload-entry { border-radius: 12px; }
 /* Mobile administrator workspace remains in-page and never navigates to desktop routes. */
 .mobile-admin-overlay { position: fixed; z-index: 2100; inset: 0; display: flex; flex-direction: column; color: #303744; background: #f5f6f8; }
 .mobile-admin-header { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; flex: 0 0 auto; min-height: calc(56px + env(safe-area-inset-top)); align-items: end; padding: env(safe-area-inset-top) 12px 8px; border-bottom: 1px solid #e8eaed; background: rgba(255, 255, 255, .97); box-sizing: border-box; }
@@ -2163,10 +2266,7 @@ const debugInfo = computed(() => {
   .welcome-card h1 { font-size: 20px; }
   .composer { padding-right: 9px; padding-left: 9px; }
   .composer-main textarea { font-size: 16px; }
-  .mode-toggle-bar button { font-size: 10px; }
-  .composer-hint { display: none; }
-  .draw-status-chip { padding-right: 6px; padding-left: 6px; }
-  .draw-status-chip > strong { font-size: 10px; }
+  .tool-btn.mode-btn span { font-size: 11px; }
   .history-reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .draw-options label, .draw-settings-fields label { grid-template-columns: 74px minmax(0, 1fr); }
 }
@@ -2174,7 +2274,6 @@ const debugInfo = computed(() => {
 @media (max-height: 620px) {
   .mobile-header { min-height: calc(56px + env(safe-area-inset-top)); padding-top: calc(7px + env(safe-area-inset-top)); padding-bottom: 7px; }
   .brand-icon { width: 36px; height: 36px; }
-  .composer-hint { display: none; }
   :deep(.model-drawer.el-drawer) {
     height: 78% !important;
     max-height: 90vh;

@@ -147,6 +147,17 @@ function pinPageShell(forceFallback?: boolean) {
   const force = resolveForceKeyboardFallback(forceFallback)
   const state = pinShellToVisualViewport(pageRef.value, { forceKeyboardFallback: force })
   applyViewportState(state)
+  // pinShell writes left via CSS vars only; keep explicit left for wide-screen
+  // centered column so PC Feishu does not jump when keyboard geometry updates.
+  if (pageRef.value && typeof window !== 'undefined' && window.matchMedia('(min-width: 769px)').matches) {
+    pageRef.value.style.left = '50%'
+    pageRef.value.style.right = 'auto'
+    pageRef.value.style.width = 'min(100%, 860px)'
+  } else if (pageRef.value) {
+    pageRef.value.style.left = `${state.offsetLeft}px`
+    pageRef.value.style.right = '0'
+    pageRef.value.style.width = '100%'
+  }
   // If a real open was first observed via subscribe / ais event after the open
   // probe timed out, restart sampling so a later dismiss-without-blur still
   // restores the shell (force is already off once the latch is set).
@@ -399,6 +410,9 @@ onBeforeUnmount(() => {
    * Fixed shell pinned to visualViewport via pinShellToVisualViewport().
    * Explicit top/height are also written inline so Android WebAPK cannot
    * ignore CSS custom properties when the soft keyboard opens.
+   *
+   * Always fill the viewport (including PC Feishu / wide screens) so the
+   * embedded H5 never collapses to a blank zero-height page.
    */
   position: fixed;
   top: var(--vv-offset-top, 0px);
@@ -410,6 +424,8 @@ onBeforeUnmount(() => {
   flex-direction: column;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+  min-height: 0;
   box-sizing: border-box;
   height: 100%;
   height: 100dvh;
@@ -420,6 +436,20 @@ onBeforeUnmount(() => {
   background:
     radial-gradient(circle at 95% -5%, rgba(106, 90, 238, .12), transparent 24rem),
     linear-gradient(180deg, #f7f9fd 0%, #f2f5fa 100%);
+}
+
+/* PC Feishu / wide embedded browsers: keep a readable column without blank sides. */
+@media (min-width: 769px) {
+  .feishu-layout {
+    left: 50%;
+    right: auto;
+    width: min(100%, 860px);
+    max-width: 860px;
+    transform: translateX(-50%);
+    border-left: 1px solid rgba(225, 230, 240, .85);
+    border-right: 1px solid rgba(225, 230, 240, .85);
+    box-shadow: 0 18px 60px rgba(41, 55, 94, .08);
+  }
 }
 
 /* Composer-focused / keyboard-open: drop any residual bottom chrome. */
