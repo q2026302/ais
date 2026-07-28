@@ -677,7 +677,9 @@ function createAndTriggerFileInput(
   input.multiple = multiple
   // Position at click point so it inherits the user gesture context
   input.style.position = 'fixed'
-  const pos = 'touches' in event ? event.touches[0] : event
+  const pos: { clientX: number; clientY: number } = 'touches' in event
+    ? (event.touches[0] || event.changedTouches[0] || event)
+    : event
   input.style.top = `${pos.clientY}px`
   input.style.left = `${pos.clientX}px`
   input.style.opacity = '0'
