@@ -614,6 +614,7 @@ function fillExample(text: string) {
         :provider-options="store.chatProviders"
         :active-session-id="store.activeSessionId"
         :active-chat-provider-id="chatProviderId"
+        :history-messages="store.messages"
         @send="handleSend"
         @draw="handleDraw"
         @cancel="store.cancelActiveRequest"

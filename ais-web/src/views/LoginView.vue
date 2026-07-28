@@ -10,6 +10,7 @@ import {
   scrollElementIntoVisualViewport,
   subscribeVisualViewport,
 } from '@/utils/visualViewport'
+import { resolvePostLoginTarget } from '@/utils/mobileWorkspace'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -109,11 +110,10 @@ async function handleLogin() {
 }
 
 async function redirectAfterLogin() {
-  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
-  const target = redirect.startsWith('/') ? redirect : '/'
+  const target = resolvePostLoginTarget(route.query.redirect)
   if (target.startsWith('/admin') && !auth.isAdmin) {
     ElMessage.warning('当前账号无管理权限，已进入首页')
-    await router.replace('/')
+    await router.replace(resolvePostLoginTarget(undefined))
     return
   }
   await router.replace(target)

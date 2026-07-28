@@ -2,6 +2,10 @@ import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '@/views/HomeView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { getAppBasePath } from '@/utils/appBasePath'
+import {
+  isMobileClient,
+  resolvePostLoginTarget,
+} from '@/utils/mobileWorkspace'
 
 const router = createRouter({
   history: createWebHistory(getAppBasePath()),
@@ -141,8 +145,7 @@ router.beforeEach(async (to) => {
 
   if (to.meta.public) {
     if (auth.isAuthenticated && to.name === 'login') {
-      const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/'
-      return redirect.startsWith('/') ? redirect : '/'
+      return resolvePostLoginTarget(to.query.redirect)
     }
     return true
   }
@@ -152,6 +155,11 @@ router.beforeEach(async (to) => {
       name: 'login',
       query: { redirect: to.fullPath },
     }
+  }
+
+  // Desktop HomeView is not touch-friendly — send phone browsers to /mobile.
+  if (to.name === 'home' && isMobileClient()) {
+    return { path: '/mobile/sessions', replace: true }
   }
 
   if (to.meta.requiresAdmin && !auth.isAdmin) {
