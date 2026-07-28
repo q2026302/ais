@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowRight,
+  Camera,
   ChatDotRound,
   Check,
   Close,
@@ -18,7 +19,7 @@ import {
   Promotion,
   RefreshRight,
   Setting,
-  UploadFilled,
+  View,
 } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
 import { sessionApi } from '@/api/sessions'
@@ -45,7 +46,6 @@ const route = useRoute()
 const entryPrefix = computed(() => route.meta.mobileEntry ?? 'mobile')
 
 const messagesRef = ref<HTMLElement | null>(null)
-const fileInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 
 /** Keyboard state owned by FeishuMobileLayout (single visualViewport subscription). */
@@ -59,10 +59,12 @@ const uploading = ref(false)
 const initializing = ref(true)
 const mode = ref<'chat' | 'draw'>('draw')
 const referenceVisible = ref(false)
-const referenceImportingId = ref<number | null>(null)
+const referenceAdding = ref(false)
+const referenceUseOriginal = ref(false)
+const selectedHistoryIds = ref<string[]>([])
+const selectedLocalFiles = ref<{ id: string; file: File; previewUrl: string }[]>([])
 const modelVisible = ref(false)
 const drawSettingsVisible = ref(false)
-const imageFileInputRef = ref<HTMLInputElement | null>(null)
 const imageViewerVisible = ref(false)
 const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
@@ -212,6 +214,21 @@ const referenceImageCount = computed(() => pendingAttachments.value.filter((item
 const editingMessage = computed(() => store.messages.find((item) => item.id === editTargetId.value) || null)
 const canSubmit = computed(() => !store.loading && !uploading.value && (Boolean(inputText.value.trim()) || pendingAttachments.value.length > 0))
 const activeSessionTitle = computed(() => activeSession.value?.title || 'AI 创作')
+const selectedHistoryItems = computed(() =>
+  selectedHistoryIds.value
+    .map((id) => historyImages.value.find((item) => item.id === id))
+    .filter((item): item is HistoryImageItem => item != null),
+)
+const referenceSelectionCount = computed(() => selectedHistoryIds.value.length + selectedLocalFiles.value.length)
+const canConfirmReference = computed(() => referenceSelectionCount.value > 0 && !referenceAdding.value && !store.loading)
+const referencePreviewItems = computed(() => [
+  ...selectedLocalFiles.value.map((item) => ({ id: item.id, url: item.previewUrl, kind: 'local' as const })),
+  ...selectedHistoryItems.value.map((item) => ({
+    id: item.id,
+    url: historyDisplayUrl(item),
+    kind: 'history' as const,
+  })),
+])
 
 function defaultProviderId(providers: ModelProvider[]) {
   return providers.find((item) => item.active)?.id ?? null
@@ -570,19 +587,6 @@ function handleInputKeydown(event: KeyboardEvent) {
   void handleSubmit()
 }
 
-function openFilePicker() {
-  // Must stay synchronous with the user gesture for Android PWA standalone.
-  if (!store.loading && !uploading.value) fileInputRef.value?.click()
-}
-
-function openImageFilePicker() {
-  if (store.loading || uploading.value) return
-  referenceVisible.value = false
-  // Deferred one frame so the drawer can close without eating the gesture on most
-  // browsers; the button that opens history still uses a direct click path.
-  imageFileInputRef.value?.click()
-}
-
 function toggleMode() {
   mode.value = mode.value === 'draw' ? 'chat' : 'draw'
 }
@@ -634,6 +638,20 @@ async function handleFileChange(event: Event) {
   for (const file of files) await uploadFile(file)
 }
 
+function handleReferenceLocalChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || []).filter((file) => file.type.startsWith('image/'))
+  input.value = ''
+  if (!files.length) return
+  for (const file of files) {
+    selectedLocalFiles.value.push({
+      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+    })
+  }
+}
+
 async function handlePaste(event: ClipboardEvent) {
   const files = Array.from(event.clipboardData?.items || [])
     .filter((item) => item.type.startsWith('image/'))
@@ -648,18 +666,83 @@ function removeAttachment(id: number) {
   pendingAttachments.value = pendingAttachments.value.filter((item) => item.id !== id)
 }
 
-async function selectHistoryImage(item: HistoryImageItem) {
-  if (store.loading || referenceImportingId.value != null) return
-  referenceImportingId.value = item.messageId
+function isHistorySelected(id: string) {
+  return selectedHistoryIds.value.includes(id)
+}
+
+function toggleHistorySelection(item: HistoryImageItem) {
+  if (store.loading || referenceAdding.value) return
+  if (isHistorySelected(item.id)) {
+    selectedHistoryIds.value = selectedHistoryIds.value.filter((id) => id !== item.id)
+  } else {
+    selectedHistoryIds.value = [...selectedHistoryIds.value, item.id]
+  }
+}
+
+function removeLocalSelection(id: string) {
+  const target = selectedLocalFiles.value.find((item) => item.id === id)
+  if (target) URL.revokeObjectURL(target.previewUrl)
+  selectedLocalFiles.value = selectedLocalFiles.value.filter((item) => item.id !== id)
+}
+
+function removeHistorySelection(id: string) {
+  selectedHistoryIds.value = selectedHistoryIds.value.filter((item) => item !== id)
+}
+
+function clearReferenceSelection() {
+  for (const item of selectedLocalFiles.value) URL.revokeObjectURL(item.previewUrl)
+  selectedLocalFiles.value = []
+  selectedHistoryIds.value = []
+  referenceUseOriginal.value = false
+}
+
+function resetReferencePanel() {
+  clearReferenceSelection()
+  referenceAdding.value = false
+}
+
+function openReferencePreview() {
+  const urls = referencePreviewItems.value.map((item) => {
+    if (item.kind === 'history') {
+      const history = historyImages.value.find((entry) => entry.id === item.id)
+      return history?.url || item.url
+    }
+    return item.url
+  }).filter(Boolean)
+  openImageViewer(urls, 0)
+}
+
+async function confirmReferenceSelection() {
+  if (!canConfirmReference.value) return
+  referenceAdding.value = true
+  uploading.value = true
+  let added = 0
   try {
-    const attachment = await sessionApi.uploadImageReference(item.url, `history-${item.messageId}.${item.format}`)
-    pendingAttachments.value.push(attachment)
+    for (const local of selectedLocalFiles.value) {
+      if (mode.value === 'draw' && !local.file.type.startsWith('image/')) {
+        ElMessage.warning('绘画模式仅支持添加图片参考图')
+        continue
+      }
+      pendingAttachments.value.push(await sessionApi.uploadFile(local.file))
+      added += 1
+    }
+    for (const item of selectedHistoryItems.value) {
+      const sourceUrl = referenceUseOriginal.value ? item.url : (item.thumbUrl || item.url)
+      const attachment = await sessionApi.uploadImageReference(
+        sourceUrl,
+        `history-${item.messageId}.${item.format}`,
+      )
+      pendingAttachments.value.push(attachment)
+      added += 1
+    }
     referenceVisible.value = false
-    ElMessage.success('历史图片已添加为参考图')
+    resetReferencePanel()
+    if (added > 0) ElMessage.success(added === 1 ? '参考图已添加' : `已添加 ${added} 张参考图`)
   } catch (error: any) {
-    ElMessage.error(error.message || '添加历史图片失败')
+    ElMessage.error(error.message || '添加参考图失败')
   } finally {
-    referenceImportingId.value = null
+    referenceAdding.value = false
+    uploading.value = false
   }
 }
 
@@ -863,8 +946,9 @@ function openDrawSettings() {
   drawSettingsVisible.value = true
 }
 
-/** 🖼 reference button: panel with system upload + optional history. */
+/** 🖼 reference button: panel with camera/album + multi-select history. */
 function openReferenceShortcut() {
+  resetReferencePanel()
   referenceVisible.value = true
 }
 
@@ -1186,8 +1270,6 @@ const debugInfo = computed(() => {
         </div>
       </div>
       <div class="composer-main">
-        <input ref="fileInputRef" type="file" :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'" multiple hidden @change="handleFileChange">
-        <input ref="imageFileInputRef" type="file" accept="image/*" multiple hidden @change="handleFileChange">
         <textarea
           ref="inputRef"
           v-model="inputText"
@@ -1214,16 +1296,23 @@ const debugInfo = computed(() => {
           <ChatDotRound v-else aria-hidden="true" />
           <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
         </button>
-        <button
-          class="tool-btn"
-          type="button"
-          :disabled="store.loading || uploading"
+        <label
+          class="tool-btn tool-file-label"
+          :class="{ disabled: store.loading || uploading }"
           aria-label="上传文件"
           title="上传文件"
-          @click="openFilePicker"
         >
+          <input
+            id="feishu-file-input"
+            type="file"
+            class="sr-file-input"
+            :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
+            multiple
+            :disabled="store.loading || uploading"
+            @change="handleFileChange"
+          >
           <Paperclip aria-hidden="true" />
-        </button>
+        </label>
         <button
           class="tool-btn"
           type="button"
@@ -1298,39 +1387,127 @@ const debugInfo = computed(() => {
       </div>
     </el-drawer>
 
-    <el-drawer v-model="referenceVisible" direction="btt" size="auto" class="h5-drawer reference-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>添加参考图</strong><span>从系统上传或选择历史作品</span></div></div>
+    <el-drawer
+      v-model="referenceVisible"
+      direction="btt"
+      size="auto"
+      class="h5-drawer reference-drawer"
+      :with-header="false"
+      @closed="resetReferencePanel"
+    >
+      <div class="drawer-title compact">
+        <div>
+          <strong>添加参考图</strong>
+          <span>相机 / 相册 / 历史作品多选后确认添加</span>
+        </div>
+      </div>
       <div class="reference-panel">
-        <button
-          type="button"
-          class="reference-upload-entry"
-          :disabled="store.loading || uploading"
-          @click="openImageFilePicker"
-        >
-          <UploadFilled aria-hidden="true" />
-          <span>
-            <strong>从系统上传</strong>
-            <small>打开文件选择器添加本地图片</small>
-          </span>
-        </button>
-        <template v-if="historyImages.length">
-          <div class="reference-history-label">从历史作品选择</div>
-          <div class="history-reference-grid">
-            <button
-              v-for="item in historyImages"
-              :key="item.id"
-              type="button"
-              class="history-reference-tile"
-              :disabled="referenceImportingId != null || store.loading"
-              @click="selectHistoryImage(item)"
+        <div class="reference-body">
+          <aside class="reference-side-rail" aria-label="图片来源">
+            <label
+              class="reference-side-action"
+              :class="{ disabled: store.loading || uploading || referenceAdding }"
+              title="拍照"
             >
-              <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
-              <span v-if="referenceImportingId === item.messageId" class="history-reference-status">添加中…</span>
-              <small>{{ item.label }}</small>
-            </button>
+              <input
+                id="feishu-ref-camera-input"
+                type="file"
+                class="sr-file-input"
+                accept="image/*"
+                capture="environment"
+                :disabled="store.loading || uploading || referenceAdding"
+                @change="handleReferenceLocalChange"
+              >
+              <Camera aria-hidden="true" />
+              <span>相机</span>
+            </label>
+            <label
+              class="reference-side-action"
+              :class="{ disabled: store.loading || uploading || referenceAdding }"
+              title="从相册选择"
+            >
+              <input
+                id="feishu-ref-album-input"
+                type="file"
+                class="sr-file-input"
+                accept="image/*"
+                multiple
+                :disabled="store.loading || uploading || referenceAdding"
+                @change="handleReferenceLocalChange"
+              >
+              <Picture aria-hidden="true" />
+              <span>相册</span>
+            </label>
+          </aside>
+          <div class="reference-main">
+            <template v-if="historyImages.length">
+              <div class="history-reference-grid">
+                <button
+                  v-for="item in historyImages"
+                  :key="item.id"
+                  type="button"
+                  class="history-reference-tile"
+                  :class="{ selected: isHistorySelected(item.id) }"
+                  :disabled="referenceAdding || store.loading"
+                  :aria-pressed="isHistorySelected(item.id)"
+                  @click="toggleHistorySelection(item)"
+                >
+                  <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
+                  <span class="history-check" :class="{ checked: isHistorySelected(item.id) }" aria-hidden="true">
+                    <Check v-if="isHistorySelected(item.id)" />
+                  </span>
+                </button>
+              </div>
+            </template>
+            <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先用左侧相机或相册添加。</p>
           </div>
-        </template>
-        <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先从系统上传。</p>
+        </div>
+        <div class="reference-footer">
+          <label class="reference-original">
+            <input v-model="referenceUseOriginal" type="checkbox">
+            <span>原图</span>
+          </label>
+          <div class="reference-preview-strip" aria-label="已选参考图">
+            <template v-if="referencePreviewItems.length">
+              <div
+                v-for="(item, index) in referencePreviewItems"
+                :key="item.id"
+                class="reference-preview-chip"
+              >
+                <el-image :src="item.url" fit="cover" />
+                <em v-if="index === 0 && referenceSelectionCount > 1" class="reference-preview-count">{{ referenceSelectionCount }}</em>
+                <button
+                  type="button"
+                  class="reference-preview-remove"
+                  aria-label="移除已选图片"
+                  @click.stop="item.kind === 'local' ? removeLocalSelection(item.id) : removeHistorySelection(item.id)"
+                >
+                  <Close />
+                </button>
+              </div>
+            </template>
+            <span v-else class="reference-preview-empty">未选择图片</span>
+          </div>
+          <button
+            type="button"
+            class="reference-preview-btn"
+            :disabled="!referenceSelectionCount"
+            title="预览已选图片"
+            @click="openReferencePreview"
+          >
+            <View aria-hidden="true" />
+            <span>预览</span>
+          </button>
+          <button
+            type="button"
+            class="reference-add-btn"
+            :class="{ active: canConfirmReference }"
+            :disabled="!canConfirmReference"
+            @click="confirmReferenceSelection"
+          >
+            {{ referenceAdding ? '添加中…' : '添加' }}
+          </button>
+        </div>
       </div>
     </el-drawer>
 
@@ -1760,9 +1937,25 @@ const debugInfo = computed(() => {
   border-radius: 10px;
   background: transparent;
 }
-.tool-btn:disabled {
+.tool-btn:disabled,
+.tool-btn.disabled {
   opacity: .45;
   cursor: not-allowed;
+  pointer-events: none;
+}
+.tool-btn.tool-file-label {
+  margin: 0;
+}
+.sr-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .tool-btn :deep(svg) {
   width: 20px;
@@ -1869,38 +2062,190 @@ const debugInfo = computed(() => {
 .send-button :deep(svg) { width: 15px; height: 15px; }
 .send-button.disabled { color: #aab1c1; background: #e6eaf1; box-shadow: none; }
 .composer-hint { display: none; }
-.reference-panel { display: grid; gap: 12px; padding-top: 4px; }
-.reference-upload-entry {
+.reference-panel {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  min-height: 64px;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  text-align: left;
-  cursor: pointer;
-  border: 1px solid #e1e7f5;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #f7f9ff 0%, #eef3ff 100%);
+  gap: 10px;
+  padding-top: 4px;
 }
-.reference-upload-entry:disabled { opacity: .55; cursor: not-allowed; }
-.reference-upload-entry :deep(svg) { width: 28px; height: 28px; color: #5b8ff9; }
-.reference-upload-entry span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.reference-upload-entry strong { color: #314063; font-size: 14px; }
-.reference-upload-entry small { color: #8a94aa; font-size: 11px; }
-.reference-history-label {
-  margin-top: 2px;
-  color: #6d7890;
-  font-size: 12px;
+.reference-body {
+  display: grid;
+  grid-template-columns: minmax(64px, 1fr) minmax(0, 5fr);
+  min-height: min(46vh, 360px);
+  overflow: hidden;
+  border: 1px solid #e7ebf3;
+  border-radius: 14px;
+  background: #fff;
+}
+.reference-side-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
+  padding: 18px 8px;
+  background: #2f3545;
+}
+.reference-side-action {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 4px;
+  color: #f4f6fb;
+  font-size: 11px;
   font-weight: 700;
+  cursor: pointer;
+  border-radius: 12px;
+}
+.reference-side-action.disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.reference-side-action :deep(svg) {
+  width: 22px;
+  height: 22px;
+}
+.reference-main {
+  min-width: 0;
+  padding: 10px;
+  background: #fff;
+  overflow: hidden;
 }
 .reference-empty-hint {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
   margin: 0;
-  padding: 10px 4px 4px;
+  padding: 16px 12px;
   color: #9aa3b5;
   font-size: 12px;
   line-height: 1.5;
   text-align: center;
+}
+.reference-footer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 4px 2px 2px;
+}
+.reference-original {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #5d6a84;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reference-original input {
+  width: 15px;
+  height: 15px;
+  accent-color: #536bea;
+}
+.reference-preview-strip {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0;
+}
+.reference-preview-empty {
+  color: #a0a8b8;
+  font-size: 12px;
+}
+.reference-preview-chip {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+}
+.reference-preview-chip :deep(.el-image) {
+  display: block;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border: 1px solid #dfe4ef;
+  border-radius: 10px;
+}
+.reference-preview-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  color: #fff;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 99px;
+  background: #5b8ff9;
+}
+.reference-preview-remove {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  padding: 0;
+  color: #fff;
+  cursor: pointer;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(55, 64, 88, .88);
+}
+.reference-preview-remove :deep(svg) {
+  width: 10px;
+  height: 10px;
+}
+.reference-preview-btn,
+.reference-add-btn {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  border: 0;
+  border-radius: 10px;
+}
+.reference-preview-btn {
+  color: #5a6790;
+  background: #eef1f7;
+}
+.reference-preview-btn:disabled,
+.reference-add-btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.reference-preview-btn :deep(svg) {
+  width: 15px;
+  height: 15px;
+}
+.reference-add-btn {
+  min-width: 68px;
+  color: #fff;
+  background: #c5cad6;
+}
+.reference-add-btn.active {
+  background: linear-gradient(140deg, #536bea, #7657d4);
+  box-shadow: 0 4px 10px rgba(83, 96, 229, .2);
 }
 
 .fullscreen-toggle {
@@ -2106,12 +2451,58 @@ const debugInfo = computed(() => {
 .install-guide-steps span { display: grid; width: 23px; height: 23px; flex: 0 0 auto; place-items: center; color: #5368d8; font-size: 11px; font-weight: 800; border-radius: 50%; background: #edf0ff; }
 .install-guide-confirm { width: 100%; min-height: 40px; margin-top: 17px; color: #fff; font-size: 13px; font-weight: 750; cursor: pointer; border: 0; border-radius: 11px; background: linear-gradient(140deg, #536bea, #7657d4); }
 
-.history-reference-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; max-height: min(46vh, 330px); overflow-y: auto; padding-top: 11px; }
-.history-reference-tile { position: relative; min-width: 0; padding: 0; overflow: hidden; text-align: left; cursor: pointer; border: 1px solid #e5e9f2; border-radius: 11px; background: #f5f6fa; }
+.history-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+  padding: 2px;
+}
+.history-reference-tile {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: #f5f6fa;
+}
+.history-reference-tile.selected {
+  border-color: #5b8ff9;
+  box-shadow: 0 0 0 1px rgba(91, 143, 249, .25);
+}
 .history-reference-tile:disabled { cursor: wait; opacity: .7; }
-.history-reference-tile :deep(.el-image) { display: block; width: 100%; height: 94px; }
-.history-reference-tile small { display: block; overflow: hidden; padding: 7px; color: #68738d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; background: #fff; }
-.history-reference-status { position: absolute; top: 6px; right: 6px; padding: 3px 6px; color: #fff; font-size: 9px; border-radius: 99px; background: rgba(65, 78, 151, .88); }
+.history-reference-tile :deep(.el-image) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.history-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: transparent;
+  border: 1.5px solid rgba(255, 255, 255, .95);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .35);
+  box-shadow: 0 1px 4px rgba(20, 28, 48, .18);
+}
+.history-check.checked {
+  color: #fff;
+  border-color: #5b8ff9;
+  background: #5b8ff9;
+}
+.history-check :deep(svg) {
+  width: 12px;
+  height: 12px;
+}
 .draw-options { display: grid; gap: 12px; padding-top: 15px; }
 .draw-options label { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; color: #65718a; font-size: 12px; }
 .draw-options label > span { font-weight: 700; }
@@ -2196,7 +2587,6 @@ const debugInfo = computed(() => {
 .send-button { min-width: 58px; height: 34px; padding: 0 12px; font-size: 13px; font-weight: 700; border-radius: 9px; background: #5b8ff9; box-shadow: none; }
 .send-button.disabled { color: #a7adb7; background: #e3e5e8; }
 .tool-btn.mode-btn { background: #eaf2ff; color: #3979e8; }
-.reference-upload-entry { border-radius: 12px; }
 /* Mobile administrator workspace remains in-page and never navigates to desktop routes. */
 .mobile-admin-overlay { position: fixed; z-index: 2100; inset: 0; display: flex; flex-direction: column; color: #303744; background: #f5f6f8; }
 .mobile-admin-header { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px; flex: 0 0 auto; min-height: calc(56px + env(safe-area-inset-top)); align-items: end; padding: env(safe-area-inset-top) 12px 8px; border-bottom: 1px solid #e8eaed; background: rgba(255, 255, 255, .97); box-sizing: border-box; }
@@ -2267,7 +2657,10 @@ const debugInfo = computed(() => {
   .composer { padding-right: 9px; padding-left: 9px; }
   .composer-main textarea { font-size: 16px; }
   .tool-btn.mode-btn span { font-size: 11px; }
-  .history-reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-reference-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .reference-footer { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; }
+  .reference-preview-btn { justify-self: start; }
+  .reference-add-btn { justify-self: end; }
   .draw-options label, .draw-settings-fields label { grid-template-columns: 74px minmax(0, 1fr); }
 }
 
