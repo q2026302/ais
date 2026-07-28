@@ -139,6 +139,44 @@ function resolveForceKeyboardFallback(forceFallback?: boolean): boolean {
   return shouldForceKeyboardFallback()
 }
 
+/**
+ * After the shell is pinned, check if the composer element is visible and
+ * fine-tune the shell height to avoid over-shrinking (pinyin keyboard) or
+ * under-shrinking (handwriting keyboard). This handles keyboard types that
+ * report no usable inset via VK API or VV.
+ */
+function adjustComposerVisibility() {
+  if (!composerFocused.value || !pageRef.value || typeof window === 'undefined') return
+  const composer = pageRef.value.querySelector('.composer') as HTMLElement | null
+  if (!composer) return
+
+  const composerBottom = composer.getBoundingClientRect().bottom
+  const visualBottom = window.visualViewport
+    ? window.visualViewport.height
+    : window.innerHeight
+
+  // Gap between composer bottom and visible viewport bottom.
+  // Positive = composer is fully visible (space above keyboard).
+  // Negative = composer is behind the keyboard.
+  const gap = visualBottom - composerBottom
+
+  if (gap < -5) {
+    // Composer is hidden behind keyboard — shrink shell more.
+    const additionalShrink = Math.abs(gap) + 12
+    const newH = Math.max(60, pageRef.value.clientHeight - additionalShrink)
+    pageRef.value.style.height = `${newH}px`
+    pageRef.value.style.maxHeight = `${newH}px`
+  } else if (gap > 40 && pageRef.value.style.height) {
+    // Too much empty space above keyboard (pinyin case) — expand shell
+    // but never exceed visual viewport height.
+    const currentH = pageRef.value.clientHeight
+    const expandBy = Math.min(gap - 20, 80)
+    const newH = Math.min(currentH + expandBy, visualBottom)
+    pageRef.value.style.height = `${newH}px`
+    pageRef.value.style.maxHeight = `${newH}px`
+  }
+}
+
 function applyViewportState(state: VisualViewportState) {
   keyboardOpen.value = state.keyboardOpen
 }
@@ -147,6 +185,10 @@ function pinPageShell(forceFallback?: boolean) {
   const force = resolveForceKeyboardFallback(forceFallback)
   const state = pinShellToVisualViewport(pageRef.value, { forceKeyboardFallback: force })
   applyViewportState(state)
+  // Fine-tune shell height based on composer's actual position relative to VV.
+  // This adapts to different keyboard types (pinyin ~35%, handwriting ~50%)
+  // without a hard-coded fallback ratio.
+  adjustComposerVisibility()
   // pinShell writes left via CSS vars only; keep explicit left for wide-screen
   // centered column so PC Feishu does not jump when keyboard geometry updates.
   if (pageRef.value && typeof window !== 'undefined' && window.matchMedia('(min-width: 769px)').matches) {
