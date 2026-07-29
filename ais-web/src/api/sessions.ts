@@ -143,7 +143,9 @@ export const sessionApi = {
   },
 
   reuseAttachment(fileUrl: string, originalName?: string, contentType?: string): Promise<UploadResponse> {
-    const body: Record<string, string> = { fileUrl }
+    const base = getAppBasePath().replace(/\/$/, '')
+    const rawUrl = fileUrl.startsWith(base) ? fileUrl.slice(base.length) || '/' : fileUrl
+    const body: Record<string, string> = { fileUrl: rawUrl }
     if (originalName) body.originalName = originalName
     if (contentType) body.contentType = contentType
     return client.post('/api/attachments/reuse', body).then((r) => normalizeUpload(r.data))
