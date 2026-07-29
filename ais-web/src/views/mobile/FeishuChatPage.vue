@@ -793,9 +793,8 @@ async function confirmReferenceSelection() {
     }
     for (const item of selectedHistoryItems.value) {
       const sourceUrl = referenceUseOriginal.value ? item.url : (item.thumbUrl || item.url)
-      const attachment = await sessionApi.uploadImageReference(
+      const attachment = await sessionApi.reuseAttachment(
         sourceUrl,
-        `history-${item.messageId}.${item.format}`,
       )
       pendingAttachments.value.push(attachment)
       added += 1
@@ -975,7 +974,7 @@ async function copyText(text: string, successMessage = '内容已复制') {
 
 async function deleteMessage(message: Message) {
   try {
-    await ElMessageBox.confirm('删除此消息及其后续消息？', '确认删除', {
+    await ElMessageBox.confirm('确认删除此消息？', '确认删除', {
       type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
     })
     await store.deleteMessage(message.id)

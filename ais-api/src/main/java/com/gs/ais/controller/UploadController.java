@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api")
@@ -75,5 +76,30 @@ public class UploadController {
         operationLogService.record(AuthContext.get(), "UPLOAD", "ATTACHMENT", null,
                 "批量上传文件：" + responses.size() + " 个", httpRequest);
         return ResponseEntity.status(HttpStatus.CREATED).body(responses);
+    }
+
+    @Operation(summary = "复用已有文件作为附件", description = """
+            根据已有的服务器文件 URL（如历史消息中的图片或已上传的附件）直接创建新的附件记录，
+            避免重新下载和上传的链路损耗。文件会被复制到附件存储目录。
+            """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "附件记录创建成功，返回文件元数据"),
+            @ApiResponse(responseCode = "404", description = "源文件不存在"),
+            @ApiResponse(responseCode = "400", description = "不支持的 fileUrl 格式")
+    })
+    @PostMapping("/attachments/reuse")
+    public ResponseEntity<UploadResponse> reuseAttachment(
+            @RequestBody Map<String, String> body,
+            HttpServletRequest httpRequest) {
+        String fileUrl = body.get("fileUrl");
+        if (fileUrl == null || fileUrl.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        String originalName = body.get("originalName");
+        String contentType = body.get("contentType");
+        UploadResponse response = attachmentService.reuseAttachment(fileUrl, originalName, contentType);
+        operationLogService.record(AuthContext.get(), "ATTACHMENT_REUSE", "ATTACHMENT", response.getId(),
+                "复用文件：" + response.getOriginalName() + " 来自 " + fileUrl, httpRequest);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 }

@@ -142,6 +142,13 @@ export const sessionApi = {
     }).then((r) => normalizeUpload(r.data))
   },
 
+  reuseAttachment(fileUrl: string, originalName?: string, contentType?: string): Promise<UploadResponse> {
+    const body: Record<string, string> = { fileUrl }
+    if (originalName) body.originalName = originalName
+    if (contentType) body.contentType = contentType
+    return client.post('/api/attachments/reuse', body).then((r) => normalizeUpload(r.data))
+  },
+
   async uploadImageReference(fileUrl: string, filename = 'history-reference.png'): Promise<UploadResponse> {
     const base = getAppBasePath().replace(/\/$/, '')
     const rawUrl = fileUrl.startsWith(base) ? fileUrl.slice(base.length) || '/' : fileUrl
