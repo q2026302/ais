@@ -764,13 +764,23 @@ public class ImageGenerationService {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new RuntimeException("Message not found: " + messageId));
 
-        List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        for (Message m : messages) {
-            if (!m.getCreatedAt().isBefore(message.getCreatedAt())) {
-                deleteGeneratedImageIfPresent(m);
-                messageRepository.delete(m);
+        // 1. Delete generated image if present
+        deleteGeneratedImageIfPresent(message);
+
+        // 2. Delete associated attachments (files + records)
+        List<Attachment> attachments = attachmentRepository.findByMessageId(messageId);
+        for (Attachment attachment : attachments) {
+            Path filePath = attachmentDir.resolve(attachment.getFilename());
+            try {
+                Files.deleteIfExists(filePath);
+            } catch (IOException e) {
+                log.warn("Failed to delete attachment file {}: {}", attachment.getFilename(), e.getMessage());
             }
+            attachmentRepository.delete(attachment);
         }
+
+        // 3. Delete the message itself
+        messageRepository.delete(message);
     }
 
     private void deleteGeneratedImageIfPresent(Message message) {
