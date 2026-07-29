@@ -85,8 +85,6 @@ const originalTitle = document.title
 const isDev = import.meta.env.DEV
 let disposed = false
 let selectionGeneration = 0
-/** Persistent <input type="file"> created in onMounted for PWA standalone compatibility. */
-let persistentFileInput: HTMLInputElement | null = null
 
 const {
   longPressTriggered,
@@ -635,85 +633,37 @@ async function uploadFile(file: File) {
   }
 }
 
-/**
- * Open the native file picker using a persistent pre-rendered <input type="file">.
- * Uses native <label for="pwa-file-input"> activation for iOS PWA compatibility
- * (programmatic .click() is rejected by the user activation security check).
- * When validation fails, preventDefault stops the label from activating the input.
- */
-function triggerFilePicker(event: MouseEvent|TouchEvent, accept: string) {
-  if (store.loading || uploading.value) {
-    event.preventDefault()
-    return
-  }
-  createAndTriggerFileInput(accept, true, (files) => {
-    for (const file of files) void uploadFile(file)
-  })
-}
-
-function triggerImageFilePicker(event: MouseEvent|TouchEvent, capture: boolean) {
-  if (store.loading || uploading.value || referenceAdding.value) {
-    event.preventDefault()
-    return
-  }
-  // Configure capture attribute before the label activates the input
-  if (persistentFileInput) {
-    if (capture) persistentFileInput.setAttribute('capture', 'environment')
-    else persistentFileInput.removeAttribute('capture')
-  }
-  createAndTriggerFileInput('image/*', !capture, (files) => {
-    for (const file of files) {
-      if (!file.type.startsWith('image/')) continue
-      selectedLocalFiles.value.push({
-        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        file,
-        previewUrl: URL.createObjectURL(file),
-      })
-    }
-  })
-}
-
-function createAndTriggerFileInput(
-  accept: string,
-  multiple: boolean,
-  onChange: (files: File[]) => void,
-) {
-  const input = persistentFileInput
-  if (!input) {
-    console.warn('persistentFileInput not ready — fallback to dynamic input')
-    const fb = document.createElement('input')
-    fb.type = 'file'
-    fb.accept = accept
-    fb.multiple = multiple
-    fb.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;z-index:2147483647'
-    document.body.appendChild(fb)
-    fb.addEventListener('change', (e: Event) => {
-      const target = e.target as HTMLInputElement
-      onChange(Array.from(target.files || []))
-      target.value = ''
-      document.body.removeChild(fb)
-    }, { once: true })
-    fb.addEventListener('cancel', () => { document.body.removeChild(fb) }, { once: true })
-    setTimeout(() => { if (fb.parentNode) document.body.removeChild(fb) }, 60000)
-    fb.click()
-    return
-  }
-
-  // Reset from previous use
+/** Reset file input after the user picks (or cancels) files. */
+function resetFileInput(input: HTMLInputElement) {
   input.value = ''
-  input.accept = accept
-  input.multiple = multiple
-  // Queue callback for the permanent change listener
-  ;(window as any).__pwaFileCallback?.(onChange)
-  // Do NOT call .click() — on iOS PWA standalone, programmatic .click() on
-  // reduced-opacity elements is rejected by the user activation security check.
-  // The caller's template <label for="pwa-file-input"> handles native activation.
-  // If this function is called outside a label context (e.g. from JS), dispatch
-  // a synthetic click so the reworked flow still works.
-  if (document.activeElement?.closest('label[for="pwa-file-input"]')) {
-    // Label activation handles it
-  } else {
-    input.click()
+}
+
+/**
+ * Handle file selection from the composer toolbar 📎 button.
+ * Called by the native file input change event — no JS click() or label forwarding.
+ */
+function handleFileUpload(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  resetFileInput(input)
+  for (const file of files) void uploadFile(file)
+}
+
+/**
+ * Handle camera capture / album pick from the reference panel 📷 🖼.
+ * Adds selected images to selectedLocalFiles (not uploaded yet).
+ */
+function handleImagePick(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  resetFileInput(input)
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue
+    selectedLocalFiles.value.push({
+      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+    })
   }
 }
 
@@ -1070,39 +1020,6 @@ watch(
 onMounted(() => {
   document.title = 'AI 创作'
   void initialize()
-  // Create a persistent <input type="file"> that stays in DOM for PWA standalone.
-  // PWA mode requires the input to exist BEFORE the user gesture, so we create it
-  // at mount time (not dynamically in the click handler).
-  //
-  // CRITICAL: No pointer-events:none! On iOS Safari PWA, pointer-events:none breaks
-  // the user activation chain — the browser rejects programmatic .click() and may
-  // even reject label-mediated activation if the linked input has pointer-events:none.
-  // The 1x1px at (0,0) with high z-index is small enough not to steal real clicks.
-  const pwaInput = document.createElement('input')
-  pwaInput.type = 'file'
-  pwaInput.id = 'pwa-file-input'
-  pwaInput.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;z-index:2147483647'
-  document.body.appendChild(pwaInput)
-  persistentFileInput = pwaInput
-
-  // Permanent change listener on the persistent input. The callback is set by
-  // the label-based activation handlers (onFileButtonClick) before the label
-  // natively triggers the input via its 'for' attribute.
-  let pendingFileCallback: ((files: File[]) => void) | null = null
-  pwaInput.addEventListener('change', (e: Event) => {
-    const target = e.target as HTMLInputElement
-    const files = Array.from(target.files || [])
-    target.value = ''
-    const cb = pendingFileCallback
-    pendingFileCallback = null
-    cb?.(files)
-  })
-
-  // Expose a helper so triggerFilePicker / triggerImageFilePicker can queue a callback
-  ;(window as any).__pwaFileCallback = (cb: (files: File[]) => void) => {
-    pendingFileCallback = cb
-  }
-  // Debug sampling only — does not affect keyboard pin / layout.
   if (import.meta.env.DEV) {
     bumpDebugSample()
     window.addEventListener('resize', bumpDebugSample)
@@ -1117,11 +1034,6 @@ onBeforeUnmount(() => {
   selectionGeneration += 1
   cancelLongPress(true)
   setSelectionSuppressed(false)
-  // Clean up the persistent file input
-  if (persistentFileInput?.parentNode) {
-    persistentFileInput.parentNode.removeChild(persistentFileInput)
-  }
-  persistentFileInput = null
   // Ensure layout bottom-nav returns if this page unmounts while focused.
   mobileKeyboard?.setComposerBlur()
   // Invalidate the store selection even if its request has not committed yet.
@@ -1408,16 +1320,24 @@ const debugInfo = computed(() => {
           <ChatDotRound v-else aria-hidden="true" />
           <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
         </button>
-        <label
-          for="pwa-file-input"
-          class="tool-btn"
+        <div
+          class="tool-btn-wrapper"
           :class="{ disabled: store.loading || uploading }"
           aria-label="上传文件"
           title="上传文件"
-          @click="triggerFilePicker($event, mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt')"
         >
-          <Paperclip aria-hidden="true" />
-        </label>
+          <span class="tool-btn">
+            <Paperclip aria-hidden="true" />
+          </span>
+          <input
+            type="file"
+            class="sr-file-input"
+            :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
+            multiple
+            :disabled="store.loading || uploading"
+            @change="handleFileUpload"
+          >
+        </div>
         <button
           class="tool-btn"
           type="button"
@@ -1509,28 +1429,40 @@ const debugInfo = computed(() => {
       <div class="reference-panel">
         <div class="reference-body">
           <aside class="reference-side-rail" aria-label="图片来源">
-            <label
-              for="pwa-file-input"
+            <div
               class="reference-side-action"
               :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="拍照"
               aria-label="拍照"
-              @click="triggerImageFilePicker($event, true)"
             >
               <Camera aria-hidden="true" />
               <span>相机</span>
-            </label>
-            <label
-              for="pwa-file-input"
+              <input
+                type="file"
+                class="sr-file-input"
+                accept="image/*"
+                capture="environment"
+                :disabled="store.loading || uploading || referenceAdding"
+                @change="handleImagePick"
+              >
+            </div>
+            <div
               class="reference-side-action"
               :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="从相册选择"
               aria-label="从相册选择"
-              @click="triggerImageFilePicker($event, false)"
             >
               <Picture aria-hidden="true" />
               <span>相册</span>
-            </label>
+              <input
+                type="file"
+                class="sr-file-input"
+                accept="image/*"
+                multiple
+                :disabled="store.loading || uploading || referenceAdding"
+                @change="handleImagePick"
+              >
+            </div>
           </aside>
           <div class="reference-main">
             <template v-if="historyImages.length">
@@ -2011,6 +1943,16 @@ const debugInfo = computed(() => {
   align-items: center;
   gap: 4px;
   margin-top: 6px;
+}
+.tool-btn-wrapper {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.tool-btn-wrapper.disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 .tool-btn {
   position: relative;
