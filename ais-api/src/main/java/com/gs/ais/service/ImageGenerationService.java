@@ -755,10 +755,11 @@ public class ImageGenerationService {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new RuntimeException("Message not found: " + messageId));
 
-        // 1. Delete generated image if present
+        // 1. Delete generated image file if present (file is gone; URL becomes a dangling ref but
+        //    the message record is kept for incremental-sync tombstoning).
         deleteGeneratedImageIfPresent(message);
 
-        // 2. Delete associated attachments (files + records)
+        // 2. Delete associated attachment files (records stay for now since the message is kept).
         List<Attachment> attachments = attachmentRepository.findByMessageId(messageId);
         for (Attachment attachment : attachments) {
             Path filePath = attachmentDir.resolve(attachment.getFilename());
@@ -770,8 +771,9 @@ public class ImageGenerationService {
             attachmentRepository.delete(attachment);
         }
 
-        // 3. Delete the message itself
-        messageRepository.delete(message);
+        // 3. Soft-delete: mark as deleted so incremental-sync clients can detect the tombstone.
+        message.setDeleted(true);
+        messageRepository.save(message);
     }
 
     private void deleteGeneratedImageIfPresent(Message message) {
@@ -799,7 +801,24 @@ public class ImageGenerationService {
 
     @Transactional(readOnly = true)
     public List<Message> getMessages(Long sessionId) {
-        List<Message> chronological = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+        List<Message> chronological = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId)
+                .stream().filter(m -> !m.isDeleted()).toList();
+        return orderMessages(chronological);
+    }
+
+    /**
+     * Incremental fetch: messages updated after {@code since} (deleted = false only).
+     * Used by the frontend cache layer to pull only what changed.
+     */
+    @Transactional(readOnly = true)
+    public List<Message> getMessagesSince(Long sessionId, java.time.LocalDateTime since) {
+        List<Message> chronological =
+                messageRepository.findBySessionIdAndUpdatedAtAfterAndDeletedFalse(sessionId, since);
+        return orderMessages(chronological);
+    }
+
+    /** Shared ordering logic: group assistant replies immediately after their parent user message. */
+    private List<Message> orderMessages(List<Message> chronological) {
         Set<Long> userMessageIds = new HashSet<>();
         for (Message message : chronological) {
             if (message.getRole() == MessageRole.USER) userMessageIds.add(message.getId());
