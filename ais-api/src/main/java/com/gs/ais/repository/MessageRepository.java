@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 
@@ -15,6 +16,12 @@ import java.util.List;
 public interface MessageRepository extends JpaRepository<Message, Long> {
 
     List<Message> findBySessionIdOrderByCreatedAtAsc(Long sessionId);
+
+    /** Incremental fetch: messages in session updated after {@code since} that are not soft-deleted. */
+    @Query("select m from Message m where m.session.id = :sessionId and m.updatedAt > :since and m.deleted = false order by m.createdAt asc")
+    List<Message> findBySessionIdAndUpdatedAtAfterAndDeletedFalse(
+            @Param("sessionId") Long sessionId,
+            @Param("since") LocalDateTime since);
 
     List<Message> findByMessageTypeAndStatus(MessageType messageType, MessageStatus status);
 

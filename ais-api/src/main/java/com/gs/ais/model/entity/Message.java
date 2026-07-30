@@ -96,6 +96,9 @@ public class Message {
     @Column(name = "is_edited")
     private boolean edited;
 
+    @Column(name = "deleted", nullable = false)
+    private boolean deleted = false;
+
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
@@ -178,6 +181,8 @@ public class Message {
     public void setParentMessageId(Long parentMessageId) { this.parentMessageId = parentMessageId; }
     public boolean isEdited() { return edited; }
     public void setEdited(boolean edited) { this.edited = edited; }
+    public boolean isDeleted() { return deleted; }
+    public void setDeleted(boolean deleted) { this.deleted = deleted; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

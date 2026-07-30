@@ -61,6 +61,10 @@ export const useSessionStore = defineStore('session', () => {
   const activeSessionId = ref<number | null>(null)
   const selectionTargetId = ref<number | null>(null)
   const messages = ref<Message[]>([])
+  // Per-session message cache: id → { messages snapshot, maxUpdatedAt }.
+  // Enables incremental ?since= fetches on repeated selectSession calls.
+  // Not cleared by clearActiveSession — survives tab switching.
+  const messagesCache = ref<Map<number, { messages: Message[]; maxUpdatedAt: string }>>(new Map())
   // A session becomes active only after its messages load successfully. This
   // prevents a sessions refresh from acknowledging a merely requested session.
   let sessionSelectionGeneration = 0
@@ -90,6 +94,56 @@ export const useSessionStore = defineStore('session', () => {
   const polledMessageStatuses = ref<Map<number, { status: string; stage: string }>>(new Map())
   const pollingRuns = new Map<number, { generation: number; inFlight: boolean }>()
   let pollingGeneration = 0
+
+  // ── Message-cache helpers ────────────────────────────────────────────────
+
+  /**
+   * Return the ISO-like local-time string (no Z) used as the ?since= parameter.
+   * Backend is LocalDateTime so we must NOT send a UTC "Z" suffix.
+   */
+  function toLocalDateTimeString(d: Date): string {
+    const pad = (n: number, len = 2) => String(n).padStart(len, '0')
+    return (
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    )
+  }
+
+  /** Pick the largest updatedAt (or createdAt when updatedAt is absent) across all messages. */
+  function getMaxUpdatedAt(msgs: Message[]): string {
+    let max = ''
+    for (const m of msgs) {
+      const ts = m.updatedAt || m.createdAt || ''
+      if (ts > max) max = ts
+    }
+    return max
+  }
+
+  /**
+   * Merge incremental messages into a cached snapshot.
+   * - Duplicate ids: keep the one with the newer updatedAt.
+   * - Output order: stable by id (ascending), which matches insertion/creation order.
+   *   We deliberately do NOT sort by updatedAt so that edits don't reorder messages.
+   */
+  function mergeMessages(cached: Message[], incremental: Message[]): Message[] {
+    const byId = new Map<number, Message>()
+    for (const m of cached) byId.set(m.id, m)
+    for (const m of incremental) {
+      const existing = byId.get(m.id)
+      if (!existing) {
+        byId.set(m.id, m)
+      } else {
+        // Prefer the one with a strictly later updatedAt; fall back to createdAt.
+        const existingTs = existing.updatedAt || existing.createdAt || ''
+        const newTs = m.updatedAt || m.createdAt || ''
+        if (newTs > existingTs) byId.set(m.id, m)
+      }
+    }
+    // Sort by id ascending to preserve conversation order.
+    return Array.from(byId.values()).sort((a, b) => a.id - b.id)
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
 
   function togglePin(sessionId: number) {
     const idx = pinnedSessions.value.indexOf(sessionId)
@@ -497,8 +551,32 @@ export const useSessionStore = defineStore('session', () => {
 
   async function selectSession(id: number) {
     const generation = beginSessionSelection(id)
-    const selectedMessages = await sessionApi.getMessages(id)
-    if (generation !== sessionSelectionGeneration || selectionTargetId.value !== id) return
+
+    let selectedMessages: Message[]
+    const cached = messagesCache.value.get(id)
+
+    if (cached) {
+      // Incremental fetch: only retrieve messages updated since our snapshot.
+      // Convert the ISO-like backend string to a Date, subtract 1 second as a
+      // safety margin to avoid missing rows with the same-second updatedAt, then
+      // format as LocalDateTime (no Z) for the backend query parameter.
+      const sinceDate = new Date(cached.maxUpdatedAt)
+      sinceDate.setSeconds(sinceDate.getSeconds() - 1)
+      const sinceParam = toLocalDateTimeString(sinceDate)
+      const incremental = await sessionApi.getMessagesSince(id, sinceParam)
+      if (generation !== sessionSelectionGeneration || selectionTargetId.value !== id) return
+      selectedMessages = mergeMessages(cached.messages, incremental)
+    } else {
+      // No cache — full fetch.
+      selectedMessages = await sessionApi.getMessages(id)
+      if (generation !== sessionSelectionGeneration || selectionTargetId.value !== id) return
+    }
+
+    // Update cache with a defensive copy.
+    messagesCache.value.set(id, {
+      messages: [...selectedMessages],
+      maxUpdatedAt: getMaxUpdatedAt(selectedMessages),
+    })
 
     activeSessionId.value = id
     messages.value = selectedMessages
@@ -863,8 +941,27 @@ export const useSessionStore = defineStore('session', () => {
 
   async function editMessage(messageId: number, newContent: string) {
     if (!activeSessionId.value) return
-    await sessionApi.editMessage(activeSessionId.value, messageId, { content: newContent })
-    await selectSession(activeSessionId.value)
+    const sessionId = activeSessionId.value
+    const updated = await sessionApi.editMessage(sessionId, messageId, { content: newContent })
+
+    // Patch the live list in-place — no need to re-fetch the whole session.
+    const idx = messages.value.findIndex((m) => m.id === messageId)
+    if (idx >= 0) {
+      const existing = messages.value[idx]!
+      messages.value[idx] = { ...existing, content: updated.content, edited: updated.edited, updatedAt: updated.updatedAt }
+    }
+
+    // Keep cache in sync so the next incremental fetch doesn't overwrite the edit.
+    const cacheEntry = messagesCache.value.get(sessionId)
+    if (cacheEntry) {
+      const cacheIdx = cacheEntry.messages.findIndex((m) => m.id === messageId)
+      if (cacheIdx >= 0) {
+        const existing = cacheEntry.messages[cacheIdx]!
+        cacheEntry.messages[cacheIdx] = { ...existing, content: updated.content, edited: updated.edited, updatedAt: updated.updatedAt }
+        cacheEntry.maxUpdatedAt = getMaxUpdatedAt(cacheEntry.messages)
+      }
+    }
+
     editingMessageId.value = null
   }
 
@@ -1017,8 +1114,18 @@ export const useSessionStore = defineStore('session', () => {
 
   async function deleteMessage(messageId: number) {
     if (!activeSessionId.value) return
-    await sessionApi.deleteMessage(activeSessionId.value, messageId)
-    await selectSession(activeSessionId.value)
+    const sessionId = activeSessionId.value
+    await sessionApi.deleteMessage(sessionId, messageId)
+
+    // Remove from the live message list immediately.
+    messages.value = messages.value.filter((m) => m.id !== messageId)
+
+    // Remove from cache so other devices' deletions don't resurface via incremental fetch.
+    const cacheEntry = messagesCache.value.get(sessionId)
+    if (cacheEntry) {
+      cacheEntry.messages = cacheEntry.messages.filter((m) => m.id !== messageId)
+      cacheEntry.maxUpdatedAt = getMaxUpdatedAt(cacheEntry.messages)
+    }
   }
 
   async function uploadFiles(files: File[]): Promise<number[]> {

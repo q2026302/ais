@@ -68,6 +68,11 @@ export const sessionApi = {
     return client.get(`/api/sessions/${id}/messages`).then((r) => (r.data as Message[]).map(normalizeMessage))
   },
 
+  /** Incremental fetch: only messages with updatedAt >= since (LocalDateTime string, no Z). */
+  getMessagesSince(id: number, since: string): Promise<Message[]> {
+    return client.get(`/api/sessions/${id}/messages`, { params: { since } }).then((r) => (r.data as Message[]).map(normalizeMessage))
+  },
+
   getMessageStatus(sessionId: number, messageId: number): Promise<MessageStatusResponse> {
     return client.get(`/api/sessions/${sessionId}/messages/${messageId}/status`).then((r) => {
       const data = r.data as MessageStatusResponse

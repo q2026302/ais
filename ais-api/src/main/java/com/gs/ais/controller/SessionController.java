@@ -30,9 +30,12 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDateTime;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -121,10 +124,14 @@ public class SessionController {
     }
 
     @GetMapping("/{id}/messages")
-    public ResponseEntity<List<MessageResponse>> getMessages(@PathVariable Long id) {
+    public ResponseEntity<List<MessageResponse>> getMessages(
+            @PathVariable Long id,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime since) {
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
-        List<Message> messages = imageGenerationService.getMessages(id);
+        List<Message> messages = since != null
+                ? imageGenerationService.getMessagesSince(id, since)
+                : imageGenerationService.getMessages(id);
         return ResponseEntity.ok(messages.stream().map(MessageResponse::from).toList());
     }
 
