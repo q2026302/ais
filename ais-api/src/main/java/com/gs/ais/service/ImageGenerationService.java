@@ -737,6 +737,7 @@ public class ImageGenerationService {
 
     // ===================== Edit & Delete =====================
 
+    @Transactional
     public Message editMessage(Long sessionId, Long messageId, String newContent) {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new RuntimeException("Message not found: " + messageId));
@@ -747,17 +748,7 @@ public class ImageGenerationService {
 
         message.setContent(newContent);
         message.setEdited(true);
-        messageRepository.save(message);
-
-        List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
-        for (Message m : messages) {
-            if (m.getCreatedAt().isAfter(message.getCreatedAt())) {
-                deleteGeneratedImageIfPresent(m);
-                messageRepository.delete(m);
-            }
-        }
-
-        return message;
+        return messageRepository.save(message);
     }
 
     public void deleteMessage(Long sessionId, Long messageId) {
