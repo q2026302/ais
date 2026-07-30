@@ -34,3 +34,7 @@ ais-api/src/main/resources/version.properties
 
 # Internal requirements docs
 /requirements/
+
+# Hermes install-cn (separate repo, not part of AIS)
+hermes-cn-install.ps1
+/hermes-install-cn/
