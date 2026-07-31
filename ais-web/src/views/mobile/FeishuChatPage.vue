@@ -598,6 +598,22 @@ function openSettingsPanel() {
   else openModelPicker()
 }
 
+const refreshing = ref(false)
+
+async function forceRefresh() {
+  const id = store.activeSessionId
+  if (id == null || refreshing.value) return
+  refreshing.value = true
+  try {
+    await store.forceRefreshSession(id)
+    await scrollToBottom()
+  } catch (error: any) {
+    if (!disposed) ElMessage.error(error.message || '刷新失败')
+  } finally {
+    refreshing.value = false
+  }
+}
+
 function autoResizeTextarea() {
   const el = inputRef.value
   if (!el) return
@@ -1187,6 +1203,7 @@ const debugInfo = computed(() => {
         </div>
       </div>
       <div class="header-actions">
+        <button class="header-icon-button" type="button" aria-label="刷新消息" title="刷新消息" :disabled="!store.activeSessionId || refreshing || store.loading || uploading || referenceAdding" @click="forceRefresh"><RefreshRight /></button>
         <button class="header-icon-button" type="button" aria-label="新建会话" title="新建会话" @click="createNewSession"><Plus /></button>
       </div>
     </header>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onActivated, onDeactivated, nextTick, watch, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Menu } from '@element-plus/icons-vue'
+import { Menu, RefreshRight } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
 import SessionSidebar from '@/components/SessionSidebar.vue'
 import ChatMessage from '@/components/ChatMessage.vue'
@@ -31,6 +31,7 @@ const viewMode = ref<'conversation' | 'gallery'>('conversation')
 const savedScrollTop = ref(0)
 const initialized = ref(false)
 const sidebarOpen = ref(false)
+const refreshing = ref(false)
 
 const chatProviderId = ref<number | null>(null)
 const imageProviderId = ref<number | null>(null)
@@ -500,6 +501,21 @@ async function handleImageProviderChange(id: number | null) {
 function fillExample(text: string) {
   // Example clicks are now handled via ChatInput
 }
+
+async function forceRefresh() {
+  const id = store.activeSessionId
+  if (id == null || refreshing.value) return
+  refreshing.value = true
+  try {
+    await store.forceRefreshSession(id)
+    await nextTick()
+    scrollToBottom()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '刷新失败')
+  } finally {
+    refreshing.value = false
+  }
+}
 </script>
 
 <template>
@@ -522,6 +538,15 @@ function fillExample(text: string) {
           <span class="chat-title">{{ activeSessionTitle }}</span>
         </div>
         <div class="header-actions">
+          <el-button
+            :icon="RefreshRight"
+            :loading="refreshing"
+            :disabled="!store.activeSessionId || store.loading || sending"
+            text
+            title="刷新消息"
+            aria-label="刷新消息"
+            @click="forceRefresh"
+          />
           <el-radio-group v-model="viewMode" size="small">
             <el-radio-button label="conversation">对话</el-radio-button>
             <el-radio-button label="gallery">图片墙</el-radio-button>

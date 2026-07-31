@@ -610,6 +610,14 @@ export const useSessionStore = defineStore('session', () => {
     const selectedMessages = await sessionApi.getMessages(sessionId)
     if (!isViewingSession(sessionId)) return false
 
+    // Keep cache in sync: every write op (chat/draw/regenerate/resend) ends here,
+    // so the cache watermark must advance to the freshly-fetched state. Without
+    // this, the next selectSession incremental fetch starts from the pre-write
+    // snapshot and can miss new rows or resurrect soft-deleted ones.
+    messagesCache.value.set(sessionId, {
+      messages: [...selectedMessages],
+      maxUpdatedAt: getMaxUpdatedAt(selectedMessages),
+    })
     messages.value = selectedMessages
     recordLastViewed(sessionId)
     for (const msg of selectedMessages) {
@@ -618,6 +626,42 @@ export const useSessionStore = defineStore('session', () => {
       }
     }
     return true
+  }
+
+  /**
+   * Force a full (non-incremental) message fetch for the given session.
+   * Evicts the cache entry so selectSession falls into the full-fetch path,
+   * ensuring cross-device changes and post-resend state are always visible.
+   *
+   * Concurrency model:
+   *  - Polling: stop all intervals for this session's messages before evicting
+   *    the cache, so old timers cannot write back stale data during the fetch.
+   *  - Concurrent forceRefreshSession calls: already serialised by
+   *    sessionSelectionGeneration inside selectSession — only the latest call
+   *    wins; earlier in-flight fetches bail at the generation check.
+   *  - Concurrent chat/draw: the refresh button is disabled while store.loading
+   *    is true (both HomeView and FeishuChatPage), so UI-triggered races are
+   *    prevented. Programmatic concurrent calls are also serialised by the
+   *    generation counter.
+   *  - beginOperation / finishOperation are intentionally NOT used here: they
+   *    would abort any active AbortController (killing an ongoing chat/draw
+   *    request) and set loading=true (showing the operation bar). Neither side
+   *    effect is appropriate for a background refresh.
+   */
+  async function forceRefreshSession(id: number) {
+    // Stop polling for the session's messages before evicting the cache.
+    // Without this, old polling intervals can fire during the fetch and write
+    // stale message state back into messagesCache / messages.value, racing with
+    // the fresh selectSession write.
+    if (id === activeSessionId.value) {
+      for (const msg of messages.value) {
+        if (pollingIntervals.value.has(msg.id)) {
+          stopPolling(msg.id)
+        }
+      }
+    }
+    messagesCache.value.delete(id)
+    await selectSession(id)
   }
 
   async function generate(
@@ -1185,6 +1229,7 @@ export const useSessionStore = defineStore('session', () => {
     startEditing,
     cancelEditing,
     cancelActiveRequest,
+    forceRefreshSession,
     startPolling,
     stopPolling,
     stopAllPolling,
