@@ -111,12 +111,13 @@ export const useSessionStore = defineStore('session', () => {
 
   /** Pick the largest updatedAt (or createdAt when updatedAt is absent) across all messages. */
   function getMaxUpdatedAt(msgs: Message[]): string {
-    let max = ''
+    let max = "1970-01-01T00:00:00"
     for (const m of msgs) {
-      const ts = m.updatedAt || m.createdAt || ''
+      const ts = m.updatedAt || m.createdAt || ""
       if (ts > max) max = ts
     }
     return max
+  }
   }
 
   /**

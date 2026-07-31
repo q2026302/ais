@@ -138,11 +138,11 @@ function onHistoryThumbError(id: string) {
 }
 function messageDisplayUrl(message: Message) {
   if (!message.imageUrl) return ''
-  return messageThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id)
+  return messageThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id, 'small')
 }
 function galleryDisplayUrl(message: Message) {
   if (!message.imageUrl) return ''
-  return galleryThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id)
+  return galleryThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id, 'small')
 }
 function historyDisplayUrl(item: HistoryImageItem) {
   if (historyThumbFailedIds.value.has(item.id)) return item.url
@@ -159,7 +159,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
       items.push({
         id: `gen-${message.id}`,
         url: message.imageUrl,
-        thumbUrl: getThumbnailUrl(message.id),
+        thumbUrl: getThumbnailUrl(message.id, 'small'),
         label: message.drawPrompt || 'AI 生成图片',
         format: message.drawFormat || 'png',
         messageId: message.id,
@@ -172,7 +172,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
           items.push({
             id: `att-${message.id}-${attachment.id}`,
             url: attachment.fileUrl,
-            thumbUrl: getAttachmentThumbnailUrl(attachment.id),
+            thumbUrl: getAttachmentThumbnailUrl(attachment.id, 'small'),
             label: attachment.originalName || '用户上传图片',
             format: ext,
             messageId: message.id,
@@ -1015,6 +1015,11 @@ async function handleLogout() {
 
 watch(() => store.messages.length, () => void scrollToBottom())
 watch(() => store.activeSessionId, syncProviderSelection)
+watch(() => store.activeSessionId, () => {
+  imageViewerVisible.value = false
+  imageViewerImages.value = []
+  imageViewerIndex.value = 0
+})
 watch(inputText, () => void nextTick(() => autoResizeTextarea()))
 watch(mode, () => {
   if (mode.value === 'chat' && selectedChatProviderId.value == null) {

@@ -85,7 +85,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
       items.push({
         id: `gen-${message.id}`,
         url: message.imageUrl,
-        thumbUrl: getThumbnailUrl(message.id),
+        thumbUrl: getThumbnailUrl(message.id, 'small'),
         label: message.drawPrompt || 'AI 生成图片',
         format: message.drawFormat || 'png',
         messageId: message.id,
@@ -98,7 +98,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
           items.push({
             id: `att-${message.id}-${attachment.id}`,
             url: attachment.fileUrl,
-            thumbUrl: getAttachmentThumbnailUrl(attachment.id),
+            thumbUrl: getAttachmentThumbnailUrl(attachment.id, 'small'),
             label: attachment.originalName || '用户上传图片',
             format: ext,
             messageId: message.id,
@@ -871,7 +871,7 @@ defineExpose({ clearDraft })
   margin: 0;
   overflow: hidden;
   opacity: 0;
-  z-index: 1;
+  z-index: 3000;
   cursor: pointer;
   border: 0;
 }

@@ -103,7 +103,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
       items.push({
         id: `gen-${message.id}`,
         url: message.imageUrl,
-        thumbUrl: getThumbnailUrl(message.id),
+        thumbUrl: getThumbnailUrl(message.id, 'small'),
         label: message.drawPrompt || '历史图片',
         format: message.drawFormat || 'png',
         sourceKey: `gen-${message.id}`,
@@ -116,7 +116,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
           items.push({
             id: `att-${attachment.id}`,
             url: attachment.fileUrl,
-            thumbUrl: getAttachmentThumbnailUrl(attachment.id),
+            thumbUrl: getAttachmentThumbnailUrl(attachment.id, 'small'),
             label: attachment.originalName || '用户上传图片',
             format: ext,
             sourceKey: `att-${attachment.id}`,

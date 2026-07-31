@@ -28,7 +28,7 @@ const emit = defineEmits<{
 
 const editContent = ref('')
 const thumbFailed = ref(false)
-const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.id))
+const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.id, 'small'))
 function onThumbError() { thumbFailed.value = true }
 
 function providerLabel(provider: ModelProvider | null | undefined, fallback = 'AI') {

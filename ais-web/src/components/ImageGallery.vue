@@ -17,7 +17,7 @@ function onThumbError(message: Message) {
 }
 
 function displayUrl(message: Message): string {
-  return thumbFailedIds.value.has(message.id) ? (message.imageUrl || '') : getThumbnailUrl(message.id)
+  return thumbFailedIds.value.has(message.id) ? (message.imageUrl || '') : getThumbnailUrl(message.id, 'small')
 }
 
 const images = computed(() => props.messages.filter((message) => !!message.imageUrl))
