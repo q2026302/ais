@@ -118,7 +118,6 @@ export const useSessionStore = defineStore('session', () => {
     }
     return max
   }
-  }
 
   /**
    * Merge incremental messages into a cached snapshot.
@@ -556,17 +555,25 @@ export const useSessionStore = defineStore('session', () => {
     let selectedMessages: Message[]
     const cached = messagesCache.value.get(id)
 
-    if (cached) {
+    if (cached && cached.maxUpdatedAt) {
       // Incremental fetch: only retrieve messages updated since our snapshot.
       // Convert the ISO-like backend string to a Date, subtract 1 second as a
       // safety margin to avoid missing rows with the same-second updatedAt, then
       // format as LocalDateTime (no Z) for the backend query parameter.
+      // Guard: if maxUpdatedAt is missing/invalid (e.g. stale cache entry), fall
+      // through to a full fetch instead of sending since=NaN-NaN-NaNTNaN:NaN:NaN.
       const sinceDate = new Date(cached.maxUpdatedAt)
-      sinceDate.setSeconds(sinceDate.getSeconds() - 1)
-      const sinceParam = toLocalDateTimeString(sinceDate)
-      const incremental = await sessionApi.getMessagesSince(id, sinceParam)
-      if (generation !== sessionSelectionGeneration || selectionTargetId.value !== id) return
-      selectedMessages = mergeMessages(cached.messages, incremental)
+      if (Number.isNaN(sinceDate.getTime())) {
+        messagesCache.value.delete(id)
+        selectedMessages = await sessionApi.getMessages(id)
+        if (generation !== sessionSelectionGeneration || selectionTargetId.value !== id) return
+      } else {
+        sinceDate.setSeconds(sinceDate.getSeconds() - 1)
+        const sinceParam = toLocalDateTimeString(sinceDate)
+        const incremental = await sessionApi.getMessagesSince(id, sinceParam)
+        if (generation !== sessionSelectionGeneration || selectionTargetId.value !== id) return
+        selectedMessages = mergeMessages(cached.messages, incremental)
+      }
     } else {
       // No cache — full fetch.
       selectedMessages = await sessionApi.getMessages(id)
