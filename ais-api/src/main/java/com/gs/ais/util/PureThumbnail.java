@@ -13,53 +13,78 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Pure-Java (no AWT) longest-edge PNG thumbnail writer for GraalVM native image.
- * Decodes PNG via PNGJ; non-PNG formats are skipped with a warning.
+ * Pure-Java (no AWT) thumbnail generator for GraalVM native image.
+ * Supports multiple target edge sizes while preserving backward compatibility.
+ * Only PNG is decoded (GraalVM limitation); non-PNG formats are skipped.
  */
 public final class PureThumbnail {
     private static final Logger log = LoggerFactory.getLogger(PureThumbnail.class);
 
     private PureThumbnail() {}
 
+    /**
+     * Backward-compatible method for single-size thumbnails (256px default).
+     * Delegates to the new multi-size API with small size.
+     */
     public static void writeLongestEdgePng(byte[] imageData, Path thumbPath, int maxEdge) {
+        writeThumbnail(imageData, thumbPath, maxEdge, ThumbnailSize.SMALL);
+    }
+
+    /**
+     * New method: generate thumbnail for a specific target edge size.
+     */
+    public static void writeThumbnail(byte[] imageData, Path thumbPath, int targetEdge, ThumbnailSize size) {
+        if (imageData == null || imageData.length == 0) {
+            log.warn("Thumbnail skipped: empty image data");
+            return;
+        }
+
+        if (!isPng(imageData)) {
+            log.warn("Thumbnail skipped: only PNG is supported (no AWT decoder)");
+            return;
+        }
+
+        DecodedPng decoded = decodePngArgb(imageData);
+        int sw = decoded.width;
+        int sh = decoded.height;
+        if (sw <= 0 || sh <= 0) {
+            log.warn("Thumbnail skipped: empty image");
+            return;
+        }
+
+        // DOWNGRADE if original image is already smaller than target
+        if (sw <= targetEdge && sh <= targetEdge) {
+            log.debug("Original image smaller than target; skipping upscale and serving original ({}x{} vs {}x{})",
+                    sw, sh, targetEdge, targetEdge);
+            // Do not write new file - controller will serve original directly
+            return;
+        }
+
+        int tw = targetEdge;
+        int th = (int) ((double) sh / sw * targetEdge);
+
+        if (th > targetEdge) {
+            th = targetEdge;
+            tw = Math.max(1, (int) ((double) sw / sh * targetEdge));
+        }
+
+        tw = Math.max(1, tw);
+        th = Math.max(1, th);
+
+        int[] dst = scaleBilinear(decoded.argb, sw, sh, tw, th);
+        byte[] pngBytes = encodePngRgba(dst, tw, th);
+
         try {
-            if (imageData == null || imageData.length == 0) {
-                log.warn("Thumbnail skipped: empty image data");
-                return;
-            }
-            if (!isPng(imageData)) {
-                log.warn("Thumbnail skipped: only PNG is supported (no AWT decoder)");
-                return;
-            }
-
-            DecodedPng decoded = decodePngArgb(imageData);
-            int sw = decoded.width;
-            int sh = decoded.height;
-            if (sw <= 0 || sh <= 0) {
-                log.warn("Thumbnail skipped: empty image");
-                return;
-            }
-
-            int tw = maxEdge;
-            int th = (int) ((double) sh / sw * maxEdge);
-            if (th > maxEdge) {
-                th = maxEdge;
-                tw = Math.max(1, (int) ((double) sw / sh * maxEdge));
-            }
-            tw = Math.max(1, tw);
-            th = Math.max(1, th);
-
-            int[] dst = scaleBilinear(decoded.argb, sw, sh, tw, th);
-            byte[] pngBytes = encodePngRgba(dst, tw, th);
             Files.createDirectories(thumbPath.getParent());
             Files.write(thumbPath, pngBytes);
-            log.info("Thumbnail saved: {} ({}x{})", thumbPath, tw, th);
-        } catch (Exception e) {
-            log.warn("Failed to generate thumbnail {}: {}", thumbPath, e.getMessage());
+            log.info("Thumbnail saved: {} ({}x{}) (size={})", thumbPath, tw, th, size);
+        } catch (IOException e) {
+            log.warn("Failed to write thumbnail {}: {}", thumbPath, e.getMessage());
         }
     }
 

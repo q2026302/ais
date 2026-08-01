@@ -21,6 +21,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 
+/**
+ * Orphan file cleanup service. Now also respects the new thumbnail naming
+ * convention (xxx_thumb_256.png / xxx_thumb_512.png). Thumbnails are cleaned
+ * only when the original image is no longer referenced.
+ */
 @Service
 public class OrphanFileCleanupService {
 
@@ -153,11 +158,49 @@ public class OrphanFileCleanupService {
             return paths
                     .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
                     .map(path -> path.toAbsolutePath().normalize())
-                    .filter(path -> !referencedFiles.contains(path))
+                    .filter(path -> !isReferencedOrThumbnail(path, referencedFiles))
                     .sorted()
                     .toList();
         } catch (IOException e) {
             throw new IllegalStateException("Failed to scan upload directory: " + uploadRoot, e);
+        }
+    }
+
+    private boolean isReferencedOrThumbnail(Path path, Set<Path> referencedFiles) {
+        Path parent = path.getParent();
+        if (parent == null) return false;
+
+        // Check if this is a thumbnail file
+        String filename = path.getFileName().toString();
+        boolean isThumbnail = filename.endsWith("_thumb_256.png") || filename.endsWith("_thumb_512.png");
+
+        if (!isThumbnail) {
+            // Original file - check if referenced
+            return referencedFiles.contains(path);
+        }
+
+        // Thumbnail file - check if the original image is referenced.
+        // Exact basename match (strip extension) to avoid prefix collisions
+        // (e.g. "a_thumb_256.png" must not be kept because "ab.png" is referenced).
+        String baseName = filename;
+        int thumbPos = baseName.lastIndexOf("_thumb_");
+        if (thumbPos > 0) {
+            baseName = baseName.substring(0, thumbPos);
+        }
+        final String originalBase = baseName;
+        try (Stream<Path> siblings = Files.list(parent)) {
+            return siblings
+                    .filter(p -> !p.equals(path))
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        int dot = name.lastIndexOf('.');
+                        String base = dot >= 0 ? name.substring(0, dot) : name;
+                        return base.equals(originalBase);
+                    })
+                    .anyMatch(referencedFiles::contains);
+        } catch (IOException e) {
+            log.warn("Failed to list siblings for thumbnail check {}", path);
+            return false;
         }
     }
 
