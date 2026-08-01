@@ -616,6 +616,7 @@ defineExpose({ clearDraft })
       size="auto"
       class="desktop-composer-drawer model-composer-drawer"
       modal-class="desktop-composer-overlay"
+      :append-to-body="true"
       :with-header="false"
       :z-index="2101"
     >
@@ -659,6 +660,7 @@ defineExpose({ clearDraft })
       size="auto"
       class="desktop-composer-drawer reference-composer-drawer"
       modal-class="desktop-composer-overlay reference-composer-overlay"
+      :append-to-body="true"
       :with-header="false"
       :z-index="2100"
       @closed="resetReferencePanel"
