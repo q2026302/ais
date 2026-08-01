@@ -35,6 +35,9 @@ ais-api/src/main/resources/version.properties
 # Internal requirements docs
 /requirements/
 
+# Use Yarn as the sole frontend package manager.
+package-lock.json
+
 # Hermes install-cn (separate repo, not part of AIS)
 hermes-cn-install.ps1
 /hermes-install-cn/
