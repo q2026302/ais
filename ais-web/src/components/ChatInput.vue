@@ -1249,19 +1249,20 @@ defineExpose({ clearDraft })
 }
 .history-check .el-icon { font-size: 12px; }
 
-:deep(.desktop-composer-drawer.el-drawer) {
+:global(.desktop-composer-drawer.el-drawer) {
   max-width: 720px;
   margin: 0 auto;
   border-radius: 20px 20px 0 0;
+  z-index: 3001 !important;
 }
-:deep(.desktop-composer-drawer .el-drawer__body) {
+:global(.desktop-composer-drawer .el-drawer__body) {
   padding: 18px 18px calc(18px + env(safe-area-inset-bottom, 0px));
 }
-:deep(.desktop-composer-overlay) {
-  z-index: 2099 !important;
+:global(.desktop-composer-overlay) {
+  z-index: 3000 !important;
 }
-:deep(.desktop-composer-overlay.reference-composer-overlay) {
-  z-index: 2098 !important;
+:global(.desktop-composer-overlay.reference-composer-overlay) {
+  z-index: 2999 !important;
 }
 
 @media (max-width: 780px) {
