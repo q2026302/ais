@@ -610,7 +610,15 @@ defineExpose({ clearDraft })
       </div>
     </div>
 
-    <el-drawer v-model="settingsVisible" direction="btt" size="auto" class="desktop-composer-drawer" :with-header="false">
+    <el-drawer
+      v-model="settingsVisible"
+      direction="btt"
+      size="auto"
+      class="desktop-composer-drawer model-composer-drawer"
+      modal-class="desktop-composer-overlay"
+      :with-header="false"
+      :z-index="2101"
+    >
       <div class="drawer-title">
         <div>
           <strong>选择对话模型</strong>
@@ -649,7 +657,8 @@ defineExpose({ clearDraft })
       v-model="referenceVisible"
       direction="btt"
       size="auto"
-      class="desktop-composer-drawer"
+      class="desktop-composer-drawer reference-composer-drawer"
+      modal-class="desktop-composer-overlay reference-composer-overlay"
       :with-header="false"
       :z-index="2100"
       @closed="resetReferencePanel"
@@ -1244,13 +1253,15 @@ defineExpose({ clearDraft })
   max-width: 720px;
   margin: 0 auto;
   border-radius: 20px 20px 0 0;
-  z-index: 2100 !important;
 }
 :deep(.desktop-composer-drawer .el-drawer__body) {
   padding: 18px 18px calc(18px + env(safe-area-inset-bottom, 0px));
 }
-:deep(.desktop-composer-drawer .el-overlay) {
+:deep(.desktop-composer-overlay) {
   z-index: 2099 !important;
+}
+:deep(.desktop-composer-overlay.reference-composer-overlay) {
+  z-index: 2098 !important;
 }
 
 @media (max-width: 780px) {
