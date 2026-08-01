@@ -138,6 +138,17 @@ watch(
   { immediate: true },
 )
 
+// Close any open composer drawers when switching sessions (PC: 参考图/模型
+// 选择框切会话后必须关闭，否则会被对话窗口挡住且无法关闭).
+watch(
+  () => props.activeSessionId,
+  () => {
+    settingsVisible.value = false
+    referenceVisible.value = false
+    resetReferencePanel()
+  },
+)
+
 watch(inputText, () => {
   void nextTick(() => autoResizeTextarea())
 })
@@ -641,8 +652,6 @@ defineExpose({ clearDraft })
       class="desktop-composer-drawer"
       :with-header="false"
       :z-index="2100"
-      :teleported="false"
-      :append-to-body="false"
       @closed="resetReferencePanel"
     >
       <div class="drawer-title">
