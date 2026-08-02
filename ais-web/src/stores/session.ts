@@ -129,6 +129,10 @@ export const useSessionStore = defineStore('session', () => {
     const byId = new Map<number, Message>()
     for (const m of cached) byId.set(m.id, m)
     for (const m of incremental) {
+      if (m.deleted) {
+        byId.delete(m.id)
+        continue
+      }
       const existing = byId.get(m.id)
       if (!existing) {
         byId.set(m.id, m)

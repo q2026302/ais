@@ -417,7 +417,18 @@ async function handleEditMessage(messageId: number) {
 }
 
 async function handleSaveEdit(messageId: number, content: string) {
-  await store.editMessage(messageId, content)
+  try {
+    await store.editMessage(messageId, content)
+    await store.resendUserMessage(messageId, chatProviderId.value, imageProviderId.value)
+    await nextTick()
+    scrollToBottom()
+  } catch (e: any) {
+    if (e?.name === 'CanceledError') {
+      ElMessage.info('再次发送已终止')
+    } else {
+      ElMessage.error(e.message || '保存并重新生成失败')
+    }
+  }
 }
 
 function handleRegenerate(messageId: number) {

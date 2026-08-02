@@ -63,6 +63,9 @@ public class MessageResponse {
     @Schema(description = "是否已编辑", example = "false")
     private boolean edited;
 
+    @Schema(description = "是否已软删除，用于增量同步墓碑")
+    private boolean deleted;
+
     @Schema(description = "消息创建时间")
     private LocalDateTime createdAt;
 
@@ -102,6 +105,7 @@ public class MessageResponse {
         }
         resp.setParentMessageId(message.getParentMessageId());
         resp.setEdited(message.isEdited());
+        resp.setDeleted(message.isDeleted());
         resp.setCreatedAt(message.getCreatedAt());
         resp.setUpdatedAt(message.getUpdatedAt());
         return resp;
@@ -141,6 +145,8 @@ public class MessageResponse {
     public void setParentMessageId(Long parentMessageId) { this.parentMessageId = parentMessageId; }
     public boolean isEdited() { return edited; }
     public void setEdited(boolean edited) { this.edited = edited; }
+    public boolean isDeleted() { return deleted; }
+    public void setDeleted(boolean deleted) { this.deleted = deleted; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

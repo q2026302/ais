@@ -506,6 +506,8 @@ public class ImageGenerationService {
     private GenerationResult resendUserMessage(Session session, Message userMessage,
                                                Long chatProviderId,
                                                Long imageProviderId) {
+        softDeleteAssistantReplies(session.getId(), userMessage.getId());
+
         if (userMessage.getMessageType() == MessageType.DRAW_REQUEST) {
             return resendDrawRequest(session, userMessage, imageProviderId);
         }
@@ -566,6 +568,19 @@ public class ImageGenerationService {
             assistantMessage.setErrorMessage(error);
             messageRepository.save(assistantMessage);
             throw new RuntimeException(error, e);
+        }
+    }
+
+    private void softDeleteAssistantReplies(Long sessionId, Long userMessageId) {
+        List<Message> replies = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId)
+                .stream()
+                .filter(message -> message.getRole() == MessageRole.ASSISTANT
+                        && userMessageId.equals(message.getParentMessageId())
+                        && !message.isDeleted())
+                .toList();
+        for (Message reply : replies) {
+            reply.setDeleted(true);
+            messageRepository.save(reply);
         }
     }
 
@@ -742,6 +757,10 @@ public class ImageGenerationService {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new RuntimeException("Message not found: " + messageId));
 
+        if (message.getSession() == null || !sessionId.equals(message.getSession().getId())) {
+            throw new RuntimeException("Message does not belong to session: " + sessionId);
+        }
+
         if (message.getRole() != MessageRole.USER) {
             throw new RuntimeException("Can only edit user messages");
         }
@@ -813,7 +832,7 @@ public class ImageGenerationService {
     @Transactional(readOnly = true)
     public List<Message> getMessagesSince(Long sessionId, java.time.LocalDateTime since) {
         List<Message> chronological =
-                messageRepository.findBySessionIdAndUpdatedAtAfterAndDeletedFalse(sessionId, since);
+                messageRepository.findBySessionIdAndUpdatedAtAfter(sessionId, since);
         return orderMessages(chronological);
     }
 

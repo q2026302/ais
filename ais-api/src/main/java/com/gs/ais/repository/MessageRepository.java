@@ -17,9 +17,9 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     List<Message> findBySessionIdOrderByCreatedAtAsc(Long sessionId);
 
-    /** Incremental fetch: messages in session updated after {@code since} that are not soft-deleted. */
-    @Query("select m from Message m where m.session.id = :sessionId and m.updatedAt > :since and m.deleted = false order by m.createdAt asc")
-    List<Message> findBySessionIdAndUpdatedAtAfterAndDeletedFalse(
+    /** Incremental fetch: include soft-deleted messages as tombstones so clients can evict them. */
+    @Query("select m from Message m where m.session.id = :sessionId and m.updatedAt > :since order by m.createdAt asc")
+    List<Message> findBySessionIdAndUpdatedAtAfter(
             @Param("sessionId") Long sessionId,
             @Param("since") LocalDateTime since);
 
