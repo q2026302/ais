@@ -51,6 +51,7 @@ export interface Message {
   tokenUsage: TokenUsage | null
   parentMessageId?: number | null
   edited: boolean
+  deleted?: boolean
   createdAt: string
   /** Advances on content/status updates; auto-unread uses coalesce(updatedAt, createdAt). */
   updatedAt?: string | null

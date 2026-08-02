@@ -456,13 +456,13 @@ class ModelConversationAndImageIntegrationTests {
 
         flushAndClearPersistenceContext();
         List<Message> displayMessages = imageGenerationService.getMessages(session.getId());
-        assertEquals(5, displayMessages.size());
+        assertEquals(4, displayMessages.size());
         assertEquals("第一问", displayMessages.get(0).getContent());
-        assertEquals("第一答", displayMessages.get(1).getContent());
-        assertEquals("第一问的新回答", displayMessages.get(2).getContent());
-        assertEquals(firstUserMessage.getId(), displayMessages.get(2).getParentMessageId());
-        assertEquals("第二问", displayMessages.get(3).getContent());
-        assertEquals("第二答", displayMessages.get(4).getContent());
+        assertEquals("第一问的新回答", displayMessages.get(1).getContent());
+        assertEquals(firstUserMessage.getId(), displayMessages.get(1).getParentMessageId());
+        assertEquals("第二问", displayMessages.get(2).getContent());
+        assertEquals("第二答", displayMessages.get(3).getContent());
+        assertTrue(displayMessages.stream().noneMatch(message -> "第一答".equals(message.getContent())));
     }
 
     @Test
@@ -497,10 +497,11 @@ class ModelConversationAndImageIntegrationTests {
         assertEquals(defaultProvider.getId(), persistedSession.getChatProviderId());
 
         List<Message> messages = imageGenerationService.getMessages(session.getId());
-        assertEquals(3, messages.size());
-        assertEquals("默认模型回答", messages.get(1).getContent());
-        assertEquals("临时模型回答", messages.get(2).getContent());
-        assertEquals(userMessage.getId(), messages.get(2).getParentMessageId());
+        assertEquals(2, messages.size());
+        assertEquals("使用临时模型再次发送", messages.get(0).getContent());
+        assertEquals("临时模型回答", messages.get(1).getContent());
+        assertEquals(userMessage.getId(), messages.get(1).getParentMessageId());
+        assertTrue(messages.stream().noneMatch(message -> "默认模型回答".equals(message.getContent())));
     }
 
     @Test
