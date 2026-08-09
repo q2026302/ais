@@ -1,5 +1,6 @@
 import client from './client'
 import { getAppBasePath, resolveAppUrl } from '@/utils/appBasePath'
+import { buildReuseAttachmentRequest } from '@/utils/historyReference'
 import type {
   Session,
   Message,
@@ -148,11 +149,7 @@ export const sessionApi = {
   },
 
   reuseAttachment(fileUrl: string, originalName?: string, contentType?: string): Promise<UploadResponse> {
-    const base = getAppBasePath().replace(/\/$/, '')
-    const rawUrl = fileUrl.startsWith(base) ? fileUrl.slice(base.length) || '/' : fileUrl
-    const body: Record<string, string> = { fileUrl: rawUrl }
-    if (originalName) body.originalName = originalName
-    if (contentType) body.contentType = contentType
+    const body = buildReuseAttachmentRequest(fileUrl, getAppBasePath(), originalName, contentType)
     return client.post('/api/attachments/reuse', body).then((r) => normalizeUpload(r.data))
   },
 

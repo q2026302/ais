@@ -5,6 +5,7 @@ import { Paperclip, Picture } from '@element-plus/icons-vue'
 import type { Message, ModelProvider, UploadResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
+import { selectHistorySourceUrl } from '@/utils/historyReference'
 
 const props = defineProps<{
   visible: boolean
@@ -406,9 +407,10 @@ async function selectHistoryImage(item: HistoryImageItem) {
   historyImportingId.value = item.id
   uploadTaskCount.value += 1
   try {
-    const uploaded = await sessionApi.uploadImageReference(
-      item.url,
+    const uploaded = await sessionApi.reuseAttachment(
+      selectHistorySourceUrl(item, true),
       historyImageFilename(item),
+      `image/${item.format === 'jpg' ? 'jpeg' : item.format}`,
     )
     references.value.push(uploaded)
     historySelectedIds.value.push(item.id)

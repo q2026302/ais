@@ -6,6 +6,7 @@ import com.gs.ais.model.entity.Attachment;
 import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.model.entity.Message;
+import com.gs.ais.util.ThumbnailSize;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -144,56 +145,76 @@ public class AttachmentService {
             throw new RuntimeException("fileUrl must not be empty");
         }
 
-        // Generated image: /api/images/{id}/thumbnail  → load Message → get imageUrl
-        if (fileUrl.matches("^/api/images/\\d+/thumbnail$")) {
-            String idStr = fileUrl.replaceAll("^/api/images/(\\d+)/thumbnail$", "$1");
+        int queryStart = fileUrl.indexOf('?');
+        String path = queryStart >= 0 ? fileUrl.substring(0, queryStart) : fileUrl;
+        String sizeParam = queryStart >= 0 ? fileUrl.substring(queryStart + 1) : "";
+
+        // Generated image: /api/images/{id}/thumbnail → resolve the requested thumbnail file.
+        if (path.matches("^/api/images/\\d+/thumbnail$")) {
+            String idStr = path.replaceAll("^/api/images/(\\d+)/thumbnail$", "$1");
             Long messageId = Long.parseLong(idStr);
             Message msg = messageRepository.findById(messageId)
                     .orElseThrow(() -> new RuntimeException("Message not found: " + messageId));
             String imageUrl = msg.getImageUrl();
-            if (imageUrl == null || imageUrl.isBlank() || !imageUrl.startsWith("/api/images/")) {
-                throw new RuntimeException("Message has no valid imageUrl");
-            }
-            String relative = imageUrl.substring("/api/images/".length());
-            return uploadDir.resolve(relative).normalize();
+            Path original = resolveStoredPath(imageUrl, "/api/images/", uploadDir, "Message has no valid imageUrl");
+            return thumbnailPathFor(original, thumbnailSize(sizeParam));
         }
 
-        // Attachment thumbnail: /api/attachments/{id}/thumbnail → load Attachment → get fileUrl
-        if (fileUrl.matches("^/api/attachments/\\d+/thumbnail$")) {
-            String idStr = fileUrl.replaceAll("^/api/attachments/(\\d+)/thumbnail$", "$1");
+        // Attachment thumbnail: /api/attachments/{id}/thumbnail → resolve the requested thumbnail file.
+        if (path.matches("^/api/attachments/\\d+/thumbnail$")) {
+            String idStr = path.replaceAll("^/api/attachments/(\\d+)/thumbnail$", "$1");
             Long attachmentId = Long.parseLong(idStr);
             Attachment att = attachmentRepository.findById(attachmentId)
                     .orElseThrow(() -> new RuntimeException("Attachment not found: " + attachmentId));
-            String attFileUrl = att.getFileUrl();
-            if (attFileUrl == null || attFileUrl.isBlank() || !attFileUrl.startsWith("/api/attachments/")) {
-                throw new RuntimeException("Attachment has no valid fileUrl");
-            }
-            String filename = attFileUrl.substring("/api/attachments/".length());
-            return attachmentDir.resolve(filename).normalize();
+            Path original = resolveStoredPath(att.getFileUrl(), "/api/attachments/", attachmentDir,
+                    "Attachment has no valid fileUrl");
+            return thumbnailPathFor(original, thumbnailSize(sizeParam));
         }
 
         // Generated image: /api/images/...
-        if (fileUrl.startsWith("/api/images/")) {
-            String relative = fileUrl.substring("/api/images/".length());
-            Path resolved = uploadDir.resolve(relative).normalize();
-            // Security: prevent directory traversal
-            if (!resolved.startsWith(uploadDir.normalize())) {
-                throw new RuntimeException("Invalid image path");
-            }
-            return resolved;
+        if (path.startsWith("/api/images/")) {
+            return resolvePath(path.substring("/api/images/".length()), uploadDir, "Invalid image path");
         }
 
         // Attachment: /api/attachments/...
-        if (fileUrl.startsWith("/api/attachments/")) {
-            String relative = fileUrl.substring("/api/attachments/".length());
-            Path resolved = attachmentDir.resolve(relative).normalize();
-            if (!resolved.startsWith(attachmentDir.normalize())) {
-                throw new RuntimeException("Invalid attachment path");
-            }
-            return resolved;
+        if (path.startsWith("/api/attachments/")) {
+            return resolvePath(path.substring("/api/attachments/".length()), attachmentDir, "Invalid attachment path");
         }
 
         throw new RuntimeException("Unsupported fileUrl format: " + fileUrl);
+    }
+
+    private static ThumbnailSize thumbnailSize(String query) {
+        for (String parameter : query.split("&")) {
+            int separator = parameter.indexOf('=');
+            if (separator >= 0 && "size".equals(parameter.substring(0, separator))) {
+                return ThumbnailSize.fromParam(parameter.substring(separator + 1));
+            }
+        }
+        return ThumbnailSize.fromParam(null);
+    }
+
+    private static Path thumbnailPathFor(Path original, ThumbnailSize size) {
+        String filename = original.getFileName().toString();
+        int lastDot = filename.lastIndexOf('.');
+        String baseName = lastDot >= 0 ? filename.substring(0, lastDot) : filename;
+        return original.resolveSibling(baseName + "_thumb_" + size.getEdge() + ".png");
+    }
+
+    private static Path resolveStoredPath(String fileUrl, String prefix, Path root, String errorMessage) {
+        if (fileUrl == null || fileUrl.isBlank() || !fileUrl.startsWith(prefix)) {
+            throw new RuntimeException(errorMessage);
+        }
+        return resolvePath(fileUrl.substring(prefix.length()), root, errorMessage);
+    }
+
+    private static Path resolvePath(String relative, Path root, String errorMessage) {
+        Path normalizedRoot = root.normalize();
+        Path resolved = normalizedRoot.resolve(relative).normalize();
+        if (!resolved.startsWith(normalizedRoot)) {
+            throw new RuntimeException(errorMessage);
+        }
+        return resolved;
     }
 
     private static String probeContentType(Path path) {

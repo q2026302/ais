@@ -17,6 +17,7 @@ import {
 import type { Message, ModelProvider, UploadResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
+import { selectHistorySourceUrl } from '@/utils/historyReference'
 
 const props = defineProps<{
   loading: boolean
@@ -397,10 +398,10 @@ async function confirmReferenceSelection() {
       added += 1
     }
     for (const item of selectedHistoryItems.value) {
-      const sourceUrl = referenceUseOriginal.value ? item.url : (item.thumbUrl || item.url)
-      const attachment = await sessionApi.uploadImageReference(
-        sourceUrl,
+      const attachment = await sessionApi.reuseAttachment(
+        selectHistorySourceUrl(item, referenceUseOriginal.value),
         `history-${item.messageId}.${item.format}`,
+        `image/${item.format === 'jpg' ? 'jpeg' : item.format}`,
       )
       pendingAttachments.value.push(attachment)
       added += 1
