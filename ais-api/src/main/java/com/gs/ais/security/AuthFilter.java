@@ -135,6 +135,8 @@ public class AuthFilter extends OncePerRequestFilter {
         if ("/api/auth/captcha".equals(path) && HttpMethod.GET.matches(method)) return true;
         if ("/api/auth/password-key".equals(path) && HttpMethod.GET.matches(method)) return true;
         if ("/api/auth/login".equals(path) && HttpMethod.POST.matches(method)) return true;
+        if ("/api/auth/certificate/challenge".equals(path) && HttpMethod.POST.matches(method)) return true;
+        if ("/api/auth/certificate/login".equals(path) && HttpMethod.POST.matches(method)) return true;
         if ("/api/auth/status".equals(path) && HttpMethod.GET.matches(method)) return true;
         if ("/api/auth/me".equals(path) && HttpMethod.GET.matches(method)) return true;
         return "/api/auth/logout".equals(path) && HttpMethod.POST.matches(method);

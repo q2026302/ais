@@ -14,6 +14,7 @@ import com.gs.ais.security.AuthContext;
 import com.gs.ais.security.CaptchaService;
 import com.gs.ais.security.LoginProtectionService;
 import com.gs.ais.security.RsaPasswordCryptoService;
+import com.gs.ais.service.CertificateAuthenticationService;
 import com.gs.ais.service.LoginSecurityEventService;
 import com.gs.ais.service.OperationLogService;
 import com.gs.ais.service.SecuritySettingsService;
@@ -25,6 +26,7 @@ import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -48,6 +50,7 @@ public class AuthController {
     private final RsaPasswordCryptoService rsaPasswordCryptoService;
     private final UserManagementService userManagementService;
     private final OperationLogService operationLogService;
+    private final CertificateAuthenticationService certificateAuthenticationService;
 
     public AuthController(AccessTokenService accessTokenService,
                           SecurityProperties securityProperties,
@@ -58,7 +61,8 @@ public class AuthController {
                           AppUserRepository appUserRepository,
                           RsaPasswordCryptoService rsaPasswordCryptoService,
                           UserManagementService userManagementService,
-                          OperationLogService operationLogService) {
+                          OperationLogService operationLogService,
+                          CertificateAuthenticationService certificateAuthenticationService) {
         this.accessTokenService = accessTokenService;
         this.securityProperties = securityProperties;
         this.captchaService = captchaService;
@@ -69,6 +73,7 @@ public class AuthController {
         this.rsaPasswordCryptoService = rsaPasswordCryptoService;
         this.userManagementService = userManagementService;
         this.operationLogService = operationLogService;
+        this.certificateAuthenticationService = certificateAuthenticationService;
     }
 
     @GetMapping("/captcha")
@@ -132,6 +137,63 @@ public class AuthController {
             }
             throw ex;
         }
+    }
+
+    @PostMapping("/certificate/challenge")
+    public CertificateAuthenticationService.ChallengeResponse certificateChallenge(
+            @Valid @RequestBody CertificateChallengeRequest request) {
+        return certificateAuthenticationService.createChallenge(request.fingerprint());
+    }
+
+    @PostMapping("/certificate/login")
+    public ResponseEntity<Map<String, Object>> certificateLogin(
+            @Valid @RequestBody CertificateLoginRequest request,
+            HttpServletRequest httpRequest) {
+        String ip = ClientIpUtils.resolve(httpRequest);
+        loginProtectionService.assertNotLocked(ip);
+        try {
+            AuthPrincipal principal = certificateAuthenticationService.authenticate(
+                    request.fingerprint(), request.nonce(), request.signature());
+            loginProtectionService.recordSuccess(ip);
+            String token = accessTokenService.issueToken(principal);
+            operationLogService.record(principal, "CERTIFICATE_LOGIN", "USER_KEY", request.fingerprint(),
+                    "证书登录成功", httpRequest);
+            return ResponseEntity.ok(tokenResponse(principal, token));
+        } catch (AuthException ex) {
+            if (ex.getStatus() == 401) {
+                loginProtectionService.recordFailure(ip);
+            } else if (ex.getStatus() == 403) {
+                loginSecurityEventService.recordBlockedAccount(null, ip);
+            }
+            operationLogService.record(null, "CERTIFICATE_LOGIN", "USER_KEY", request.fingerprint(),
+                    "证书登录失败: " + ex.getMessage(), httpRequest);
+            throw ex;
+        }
+    }
+
+    @PostMapping("/keys/generate")
+    public CertificateAuthenticationService.GeneratedKey generateKey(
+            @RequestBody(required = false) GenerateKeyRequest request,
+            HttpServletRequest httpRequest) {
+        CertificateAuthenticationService.GeneratedKey key = certificateAuthenticationService.generate(
+                AuthContext.get(), request == null ? null : request.name());
+        operationLogService.record(AuthContext.get(), "CERTIFICATE_GENERATE", "USER_KEY", key.keyId(),
+                "生成证书: " + key.fingerprint(), httpRequest);
+        return key;
+    }
+
+    @GetMapping("/keys")
+    public java.util.List<CertificateAuthenticationService.KeySummary> keys() {
+        return certificateAuthenticationService.list(AuthContext.get());
+    }
+
+    @PostMapping("/keys/{keyId}/revoke")
+    public ResponseEntity<Void> revokeKey(@PathVariable Long keyId,
+                                          HttpServletRequest httpRequest) {
+        certificateAuthenticationService.revoke(AuthContext.get(), keyId);
+        operationLogService.record(AuthContext.get(), "CERTIFICATE_REVOKE", "USER_KEY", keyId,
+                "吊销证书", httpRequest);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/me")
@@ -235,6 +297,15 @@ public class AuthController {
         }
         return null;
     }
+
+    public record CertificateChallengeRequest(@NotBlank String fingerprint) { }
+
+    public record CertificateLoginRequest(
+            @NotBlank String fingerprint,
+            @NotBlank String nonce,
+            @NotBlank String signature) { }
+
+    public record GenerateKeyRequest(String name) { }
 
     public record LoginRequest(
             @NotBlank String username,
