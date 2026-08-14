@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  Camera,
   ChatDotRound,
   Check,
   Close,
+  FolderOpened,
   FullScreen,
   Paperclip,
   Picture,
+  Plus,
   Promotion,
   Scissor,
   Setting,
@@ -50,7 +51,9 @@ const referenceVisible = ref(false)
 const referenceAdding = ref(false)
 const referenceUseOriginal = ref(false)
 const selectedHistoryIds = ref<string[]>([])
-const selectedLocalFiles = ref<{ id: string; file: File; previewUrl: string }[]>([])
+const plusMenuVisible = ref(false)
+const plusMenuRef = ref<HTMLElement | null>(null)
+const localFileInputRef = ref<HTMLInputElement | null>(null)
 const isDragging = ref(false)
 const dragDepth = ref(0)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
@@ -123,20 +126,17 @@ const selectedHistoryItems = computed(() =>
     .map((id) => historyImages.value.find((item) => item.id === id))
     .filter((item): item is HistoryImageItem => item != null),
 )
-const referenceSelectionCount = computed(() => selectedHistoryIds.value.length + selectedLocalFiles.value.length)
+const referenceSelectionCount = computed(() => selectedHistoryIds.value.length)
+const showOriginalCheckbox = computed(() => selectedHistoryIds.value.length > 0)
 const canConfirmReference = computed(() => referenceSelectionCount.value > 0 && !referenceAdding.value && !props.loading)
-const referencePreviewItems = computed(() => [
-  ...selectedLocalFiles.value.map((item) => ({ id: item.id, url: item.previewUrl, kind: 'local' as const })),
-  ...selectedHistoryItems.value.map((item) => ({
+const referencePreviewItems = computed(() =>
+  selectedHistoryItems.value.map((item) => ({
     id: item.id,
     url: item.thumbUrl || item.url,
     kind: 'history' as const,
   })),
-])
-const referencePreviewUrls = computed(() => [
-  ...selectedLocalFiles.value.map((item) => item.previewUrl),
-  ...selectedHistoryItems.value.map((item) => item.url),
-])
+)
+const referencePreviewUrls = computed(() => selectedHistoryItems.value.map((item) => item.url))
 
 watch(
   () => [props.activeSessionId, defaultProviderId.value] as const,
@@ -215,20 +215,6 @@ async function handleFileChange(event: Event) {
   for (const file of files) await uploadFile(file)
 }
 
-function handleReferenceLocalChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files || []).filter((file) => file.type.startsWith('image/'))
-  input.value = ''
-  if (!files.length) return
-  for (const file of files) {
-    selectedLocalFiles.value.push({
-      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    })
-  }
-}
-
 async function handlePaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items) return
@@ -284,6 +270,20 @@ function removeAttachment(id: number) {
 function openReferencePanel() {
   clearReferenceSelection()
   referenceVisible.value = true
+}
+
+function togglePlusMenu() {
+  plusMenuVisible.value = !plusMenuVisible.value
+}
+
+function openHistoryPanel() {
+  plusMenuVisible.value = false
+  openReferencePanel()
+}
+
+function openLocalFilePicker() {
+  plusMenuVisible.value = false
+  localFileInputRef.value?.click()
 }
 
 function openSettingsPanel() {
@@ -408,19 +408,11 @@ function toggleHistorySelection(item: HistoryImageItem) {
   }
 }
 
-function removeLocalSelection(id: string) {
-  const target = selectedLocalFiles.value.find((item) => item.id === id)
-  if (target) URL.revokeObjectURL(target.previewUrl)
-  selectedLocalFiles.value = selectedLocalFiles.value.filter((item) => item.id !== id)
-}
-
 function removeHistorySelection(id: string) {
   selectedHistoryIds.value = selectedHistoryIds.value.filter((item) => item !== id)
 }
 
 function clearReferenceSelection() {
-  for (const item of selectedLocalFiles.value) URL.revokeObjectURL(item.previewUrl)
-  selectedLocalFiles.value = []
   selectedHistoryIds.value = []
   referenceUseOriginal.value = false
 }
@@ -441,14 +433,6 @@ async function confirmReferenceSelection() {
   uploading.value = true
   let added = 0
   try {
-    for (const local of selectedLocalFiles.value) {
-      if (mode.value === 'draw' && !local.file.type.startsWith('image/')) {
-        ElMessage.warning('绘画模式仅支持添加图片参考图')
-        continue
-      }
-      pendingAttachments.value.push(await sessionApi.uploadFile(local.file))
-      added += 1
-    }
     for (const item of selectedHistoryItems.value) {
       const attachment = await sessionApi.reuseAttachment(
         selectHistorySourceUrl(item, referenceUseOriginal.value),
@@ -474,9 +458,22 @@ function clearDraft() {
   pendingAttachments.value = []
 }
 
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+})
+
 onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
   clearReferenceSelection()
 })
+
+function onDocumentPointerDown(event: PointerEvent) {
+  if (!plusMenuVisible.value) return
+  const target = event.target as Node | null
+  if (target && plusMenuRef.value && !plusMenuRef.value.contains(target)) {
+    plusMenuVisible.value = false
+  }
+}
 
 defineExpose({ clearDraft })
 </script>
@@ -565,17 +562,53 @@ defineExpose({ clearDraft })
           <el-icon><Paperclip /></el-icon>
         </label>
 
-        <button
-          class="tool-btn"
-          type="button"
+        <div ref="plusMenuRef" class="plus-menu-wrap">
+          <button
+            class="tool-btn"
+            type="button"
+            :disabled="loading || uploading"
+            :title="referenceImageCount ? `添加参考图 · ${referenceImageCount}` : '添加参考图'"
+            :aria-label="referenceImageCount ? `添加参考图（已添加 ${referenceImageCount} 张）` : '添加参考图'"
+            :aria-expanded="plusMenuVisible"
+            @click="togglePlusMenu"
+          >
+            <el-icon><Plus /></el-icon>
+            <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
+          </button>
+
+          <transition name="plus-menu-fade">
+            <div v-if="plusMenuVisible" class="plus-menu" role="menu" aria-label="添加参考图">
+              <button
+                type="button"
+                class="plus-menu-item"
+                role="menuitem"
+                @click="openHistoryPanel"
+              >
+                <el-icon><Picture /></el-icon>
+                <span>历史图片</span>
+              </button>
+              <button
+                type="button"
+                class="plus-menu-item"
+                role="menuitem"
+                @click="openLocalFilePicker"
+              >
+                <el-icon><FolderOpened /></el-icon>
+                <span>本地文件</span>
+              </button>
+            </div>
+          </transition>
+        </div>
+
+        <input
+          ref="localFileInputRef"
+          type="file"
+          class="plus-local-input"
+          accept="image/*"
+          multiple
           :disabled="loading || uploading"
-          :title="referenceImageCount ? `参考图 · ${referenceImageCount}` : '参考图'"
-          :aria-label="referenceImageCount ? `参考图（已添加 ${referenceImageCount} 张）` : '添加参考图'"
-          @click="openReferencePanel"
+          @change="handleFileChange"
         >
-          <el-icon><Picture /></el-icon>
-          <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
-        </button>
 
         <button
           class="tool-btn desktop-only"
@@ -732,48 +765,26 @@ defineExpose({ clearDraft })
     >
       <div class="drawer-title">
         <div>
-          <strong>添加参考图</strong>
-          <span>相机 / 相册 / 历史作品多选后确认添加</span>
+          <strong>选择历史图片</strong>
+          <span>多选历史作品作为参考图，确认后添加</span>
         </div>
       </div>
       <div class="reference-panel">
         <div class="reference-body">
-          <aside class="reference-side-rail" aria-label="图片来源">
-            <label
-              class="reference-side-action"
-              :class="{ disabled: loading || uploading || referenceAdding }"
-              title="拍照"
+          <div class="history-panel-toolbar">
+            <el-tooltip
+              v-if="showOriginalCheckbox"
+              content="仅对历史作品生效；本地图片始终为原图"
+              placement="top"
+              :show-after="200"
             >
-              <input
-                id="desktop-ref-camera-input"
-                type="file"
-                class="sr-file-input"
-                accept="image/*"
-                capture="environment"
-                :disabled="loading || uploading || referenceAdding"
-                @change="handleReferenceLocalChange"
-              >
-              <el-icon><Camera /></el-icon>
-              <span>相机</span>
-            </label>
-            <label
-              class="reference-side-action"
-              :class="{ disabled: loading || uploading || referenceAdding }"
-              title="从相册选择"
-            >
-              <input
-                id="desktop-ref-album-input"
-                type="file"
-                class="sr-file-input"
-                accept="image/*"
-                multiple
-                :disabled="loading || uploading || referenceAdding"
-                @change="handleReferenceLocalChange"
-              >
-              <el-icon><Picture /></el-icon>
-              <span>相册</span>
-            </label>
-          </aside>
+              <label class="reference-original">
+                <input v-model="referenceUseOriginal" type="checkbox">
+                <span>原图</span>
+              </label>
+            </el-tooltip>
+            <span v-else class="history-panel-hint">选择历史图片作为参考图</span>
+          </div>
           <div class="reference-main">
             <template v-if="historyImages.length">
               <div class="history-reference-grid">
@@ -794,14 +805,10 @@ defineExpose({ clearDraft })
                 </button>
               </div>
             </template>
-            <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先用左侧相机或相册添加。</p>
+            <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先通过「+」菜单上传本地图片。</p>
           </div>
         </div>
         <div class="reference-footer">
-          <label class="reference-original">
-            <input v-model="referenceUseOriginal" type="checkbox">
-            <span>原图</span>
-          </label>
           <div class="reference-preview-strip" aria-label="已选参考图">
             <template v-if="referencePreviewItems.length">
               <div
@@ -815,7 +822,7 @@ defineExpose({ clearDraft })
                   type="button"
                   class="reference-preview-remove"
                   aria-label="移除已选图片"
-                  @click.stop="item.kind === 'local' ? removeLocalSelection(item.id) : removeHistorySelection(item.id)"
+                  @click.stop="removeHistorySelection(item.id)"
                 >
                   <el-icon><Close /></el-icon>
                 </button>
@@ -981,6 +988,54 @@ defineExpose({ clearDraft })
   border-radius: 99px;
   background: #5b8ff9;
 }
+.plus-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+.plus-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  z-index: 3200;
+  display: grid;
+  min-width: 152px;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid #e7ebf3;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 44px rgba(30, 42, 78, .18), 0 2px 8px rgba(30, 42, 78, .08);
+}
+.plus-menu-item {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  color: #3a4661;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+}
+.plus-menu-item:hover { color: #4e62d2; background: #f0f2ff; }
+.plus-menu-item .el-icon { font-size: 17px; color: #6b7bd6; }
+.plus-menu-item span { white-space: nowrap; }
+.plus-local-input {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.plus-menu-fade-enter-active,
+.plus-menu-fade-leave-active { transition: opacity .16s ease, transform .16s ease; }
+.plus-menu-fade-enter-from,
+.plus-menu-fade-leave-to { opacity: 0; transform: translateY(6px); }
 .input-hint {
   flex: 1;
   margin: 0 8px;
@@ -1108,46 +1163,31 @@ defineExpose({ clearDraft })
 
 .reference-panel { display: grid; gap: 12px; padding-top: 8px; }
 .reference-body {
-  display: grid;
-  grid-template-columns: minmax(72px, 1fr) minmax(0, 5fr);
+  display: flex;
+  flex-direction: column;
   min-height: min(46vh, 380px);
   overflow: hidden;
   border: 1px solid #e7ebf3;
   border-radius: 14px;
   background: #fff;
 }
-.reference-side-rail {
+.history-panel-toolbar {
   display: flex;
-  flex-direction: column;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: flex-start;
-  gap: 18px;
-  padding: 18px 10px;
-  background: #2f3545;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf0f5;
 }
-.reference-side-action {
-  position: relative;
-  display: flex;
-  width: 100%;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 10px 4px;
-  color: #f4f6fb;
+.history-panel-hint {
+  color: #9aa3b5;
   font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  border-radius: 12px;
 }
-.reference-side-action.disabled {
-  opacity: .45;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-.reference-side-action .el-icon { font-size: 22px; }
 .reference-main {
   min-width: 0;
+  flex: 1;
   padding: 12px;
   background: #fff;
   overflow: hidden;
@@ -1164,8 +1204,7 @@ defineExpose({ clearDraft })
   text-align: center;
 }
 .reference-footer {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: 10px;
   min-height: 56px;
@@ -1188,6 +1227,7 @@ defineExpose({ clearDraft })
 }
 .reference-preview-strip {
   display: flex;
+  flex: 1;
   min-width: 0;
   align-items: center;
   gap: 8px;
@@ -1274,7 +1314,7 @@ defineExpose({ clearDraft })
 }
 .history-reference-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   max-height: min(42vh, 360px);
   overflow-y: auto;
@@ -1342,17 +1382,12 @@ defineExpose({ clearDraft })
   .chat-input { margin: 0 12px 12px; }
   .input-hint { display: none; }
   .desktop-only { display: none; }
-  .history-reference-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
   .composer-toolbar { flex-wrap: wrap; }
   .send-button, .cancel-btn { min-width: 64px; }
   .history-reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .reference-footer {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto auto;
-  }
-  .reference-preview-btn { justify-self: start; }
-  .reference-add-btn { justify-self: end; }
+  .reference-footer { flex-wrap: wrap; }
+  .reference-preview-strip { flex: 1 1 100%; order: -1; }
 }
 </style>

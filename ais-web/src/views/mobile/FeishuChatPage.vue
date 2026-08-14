@@ -8,10 +8,13 @@ import {
   ChatDotRound,
   Check,
   Close,
+  Collection,
   CopyDocument,
+  Crop,
   Delete,
   Download,
   EditPen,
+  FullScreen,
   MagicStick,
   Paperclip,
   Picture,
@@ -29,6 +32,7 @@ import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
+import { selectHistorySourceUrl } from '@/utils/historyReference'
 import { formatTimeHm, parseApiDate } from '@/utils/dateTime'
 import { getMessageEditableText } from '@/utils/messageText'
 import { useLongPress } from '@/composables/useLongPress'
@@ -64,7 +68,8 @@ const referenceVisible = ref(false)
 const referenceAdding = ref(false)
 const referenceUseOriginal = ref(false)
 const selectedHistoryIds = ref<string[]>([])
-const selectedLocalFiles = ref<{ id: string; file: File; previewUrl: string }[]>([])
+const referenceFullscreen = ref(false)
+const referenceSourceTab = ref<'history'>('history')
 const modelVisible = ref(false)
 const drawSettingsVisible = ref(false)
 const imageViewerVisible = ref(false)
@@ -223,16 +228,16 @@ const selectedHistoryItems = computed(() =>
     .map((id) => historyImages.value.find((item) => item.id === id))
     .filter((item): item is HistoryImageItem => item != null),
 )
-const referenceSelectionCount = computed(() => selectedHistoryIds.value.length + selectedLocalFiles.value.length)
+const referenceSelectionCount = computed(() => selectedHistoryIds.value.length)
+const showOriginalCheckbox = computed(() => selectedHistoryIds.value.length > 0)
 const canConfirmReference = computed(() => referenceSelectionCount.value > 0 && !referenceAdding.value && !store.loading)
-const referencePreviewItems = computed(() => [
-  ...selectedLocalFiles.value.map((item) => ({ id: item.id, url: item.previewUrl, kind: 'local' as const })),
-  ...selectedHistoryItems.value.map((item) => ({
+const referencePreviewItems = computed(() =>
+  selectedHistoryItems.value.map((item) => ({
     id: item.id,
     url: historyDisplayUrl(item),
     kind: 'history' as const,
   })),
-])
+)
 
 function defaultProviderId(providers: ModelProvider[]) {
   return providers.find((item) => item.active)?.id ?? null
@@ -675,20 +680,17 @@ function handleFileUpload(event: Event) {
 
 /**
  * Handle camera capture / album pick from the reference panel 📷 🖼.
- * Adds selected images to selectedLocalFiles (not uploaded yet).
+ * Images upload immediately in the background and the panel returns to the
+ * composer without going through the history multi-select flow.
  */
 function handleImagePick(event: Event) {
   const input = event.target as HTMLInputElement
-  const files = Array.from(input.files || [])
+  const files = Array.from(input.files || []).filter((file) => file.type.startsWith('image/'))
   resetFileInput(input)
-  for (const file of files) {
-    if (!file.type.startsWith('image/')) continue
-    selectedLocalFiles.value.push({
-      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    })
-  }
+  if (!files.length) return
+  referenceVisible.value = false
+  resetReferencePanel()
+  for (const file of files) void uploadFile(file)
 }
 
 async function handlePaste(event: ClipboardEvent) {
@@ -718,10 +720,16 @@ function toggleHistorySelection(item: HistoryImageItem) {
   }
 }
 
-function removeLocalSelection(id: string) {
-  const target = selectedLocalFiles.value.find((item) => item.id === id)
-  if (target) URL.revokeObjectURL(target.previewUrl)
-  selectedLocalFiles.value = selectedLocalFiles.value.filter((item) => item.id !== id)
+function showHistoryGrid() {
+  referenceSourceTab.value = 'history'
+}
+
+function toggleReferenceFullscreen() {
+  referenceFullscreen.value = !referenceFullscreen.value
+}
+
+function historyTileUrl(item: HistoryImageItem) {
+  return referenceFullscreen.value ? item.url : historyDisplayUrl(item)
 }
 
 function removeHistorySelection(id: string) {
@@ -729,8 +737,6 @@ function removeHistorySelection(id: string) {
 }
 
 function clearReferenceSelection() {
-  for (const item of selectedLocalFiles.value) URL.revokeObjectURL(item.previewUrl)
-  selectedLocalFiles.value = []
   selectedHistoryIds.value = []
   referenceUseOriginal.value = false
 }
@@ -738,16 +744,12 @@ function clearReferenceSelection() {
 function resetReferencePanel() {
   clearReferenceSelection()
   referenceAdding.value = false
+  referenceFullscreen.value = false
+  referenceSourceTab.value = 'history'
 }
 
 function openReferencePreview() {
-  const urls = referencePreviewItems.value.map((item) => {
-    if (item.kind === 'history') {
-      const history = historyImages.value.find((entry) => entry.id === item.id)
-      return history?.url || item.url
-    }
-    return item.url
-  }).filter(Boolean)
+  const urls = selectedHistoryItems.value.map((item) => item.url).filter(Boolean)
   openImageViewer(urls, 0)
 }
 
@@ -757,18 +759,9 @@ async function confirmReferenceSelection() {
   uploadCount.value++
   let added = 0
   try {
-    for (const local of selectedLocalFiles.value) {
-      if (mode.value === 'draw' && !local.file.type.startsWith('image/')) {
-        ElMessage.warning('绘画模式仅支持添加图片参考图')
-        continue
-      }
-      pendingAttachments.value.push(await sessionApi.uploadFile(local.file))
-      added += 1
-    }
     for (const item of selectedHistoryItems.value) {
-      const sourceUrl = referenceUseOriginal.value ? item.url : (item.thumbUrl || item.url)
       const attachment = await sessionApi.reuseAttachment(
-        sourceUrl,
+        selectHistorySourceUrl(item, referenceUseOriginal.value),
       )
       pendingAttachments.value.push(attachment)
       added += 1
@@ -1019,7 +1012,7 @@ function openDrawSettings() {
   drawSettingsVisible.value = true
 }
 
-/** 🖼 reference button: panel with camera/album + multi-select history. */
+/** 🖼 reference button: panel with camera/album direct-add + multi-select history grid. */
 function openReferenceShortcut() {
   resetReferencePanel()
   referenceVisible.value = true
@@ -1493,13 +1486,14 @@ const debugInfo = computed(() => {
       direction="btt"
       size="auto"
       class="h5-drawer reference-drawer"
+      :class="{ 'reference-fullscreen': referenceFullscreen }"
       :with-header="false"
       @closed="resetReferencePanel"
     >
       <div class="drawer-title compact">
         <div>
           <strong>添加参考图</strong>
-          <span>相机 / 相册 / 历史作品多选后确认添加</span>
+          <span>相机 / 相册直接添加，历史图片多选后确认</span>
         </div>
       </div>
       <div class="reference-panel">
@@ -1539,8 +1533,36 @@ const debugInfo = computed(() => {
                 @change="handleImagePick"
               >
             </div>
+            <button
+              type="button"
+              class="reference-side-action"
+              :class="{ active: referenceSourceTab === 'history' }"
+              :aria-pressed="referenceSourceTab === 'history'"
+              title="历史图片"
+              aria-label="历史图片"
+              @click="showHistoryGrid"
+            >
+              <Collection aria-hidden="true" />
+              <span>历史图</span>
+            </button>
           </aside>
           <div class="reference-main">
+            <div class="reference-main-header">
+              <span class="reference-main-title">历史图片</span>
+              <button
+                type="button"
+                class="fullscreen-toggle"
+                :title="referenceFullscreen ? '退出全屏' : '展开全屏'"
+                :aria-label="referenceFullscreen ? '退出全屏' : '展开全屏'"
+                @click="toggleReferenceFullscreen"
+              >
+                <FullScreen v-if="!referenceFullscreen" aria-hidden="true" />
+                <template v-else>
+                  <Crop aria-hidden="true" />
+                  <span>退出</span>
+                </template>
+              </button>
+            </div>
             <template v-if="historyImages.length">
               <div class="history-reference-grid">
                 <button
@@ -1553,7 +1575,7 @@ const debugInfo = computed(() => {
                   :aria-pressed="isHistorySelected(item.id)"
                   @click="toggleHistorySelection(item)"
                 >
-                  <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
+                  <el-image :src="historyTileUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
                   <span class="history-check" :class="{ checked: isHistorySelected(item.id) }" aria-hidden="true">
                     <Check v-if="isHistorySelected(item.id)" />
                   </span>
@@ -1564,10 +1586,17 @@ const debugInfo = computed(() => {
           </div>
         </div>
         <div class="reference-footer">
-          <label class="reference-original">
-            <input v-model="referenceUseOriginal" type="checkbox">
-            <span>原图</span>
-          </label>
+          <el-tooltip
+            v-if="showOriginalCheckbox"
+            content="仅对历史作品生效；本地图片始终为原图"
+            placement="top"
+            :show-after="200"
+          >
+            <label class="reference-original">
+              <input v-model="referenceUseOriginal" type="checkbox">
+              <span>原图</span>
+            </label>
+          </el-tooltip>
           <div class="reference-preview-strip" aria-label="已选参考图">
             <template v-if="referencePreviewItems.length">
               <div
@@ -1581,7 +1610,7 @@ const debugInfo = computed(() => {
                   type="button"
                   class="reference-preview-remove"
                   aria-label="移除已选图片"
-                  @click.stop="item.kind === 'local' ? removeLocalSelection(item.id) : removeHistorySelection(item.id)"
+                  @click.stop="removeHistorySelection(item.id)"
                 >
                   <Close />
                 </button>
@@ -2181,8 +2210,7 @@ const debugInfo = computed(() => {
   padding-top: 4px;
 }
 .reference-body {
-  display: grid;
-  grid-template-columns: minmax(64px, 1fr) minmax(0, 5fr);
+  display: flex;
   min-height: min(46vh, 360px);
   overflow: hidden;
   border: 1px solid #e7ebf3;
@@ -2191,6 +2219,7 @@ const debugInfo = computed(() => {
 }
 .reference-side-rail {
   display: flex;
+  flex: 0 0 64px;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
@@ -2208,25 +2237,50 @@ const debugInfo = computed(() => {
   margin: 0;
   padding: 8px 4px;
   color: #f4f6fb;
+  font: inherit;
   font-size: 11px;
   font-weight: 700;
+  text-align: center;
   cursor: pointer;
+  border: 0;
   border-radius: 12px;
+  background: transparent;
 }
 .reference-side-action.disabled {
   opacity: .45;
   cursor: not-allowed;
   pointer-events: none;
 }
+.reference-side-action.active {
+  color: #fff;
+  background: rgba(255, 255, 255, .14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22);
+}
 .reference-side-action :deep(svg) {
   width: 22px;
   height: 22px;
 }
 .reference-main {
+  display: flex;
   min-width: 0;
+  flex: 1;
+  flex-direction: column;
   padding: 10px;
   background: #fff;
   overflow: hidden;
+}
+.reference-main-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.reference-main-title {
+  color: #5d6a84;
+  font-size: 12px;
+  font-weight: 700;
 }
 .reference-empty-hint {
   display: grid;
@@ -2240,8 +2294,7 @@ const debugInfo = computed(() => {
   text-align: center;
 }
 .reference-footer {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: 8px;
   min-height: 56px;
@@ -2249,6 +2302,7 @@ const debugInfo = computed(() => {
 }
 .reference-original {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   margin: 0;
@@ -2265,6 +2319,7 @@ const debugInfo = computed(() => {
 }
 .reference-preview-strip {
   display: flex;
+  flex: 1;
   min-width: 0;
   align-items: center;
   gap: 8px;
@@ -2362,13 +2417,17 @@ const debugInfo = computed(() => {
 }
 
 .fullscreen-toggle {
-  display: grid;
+  display: inline-flex;
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  place-items: center;
+  min-width: 26px;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
   color: #8892a8;
+  font-size: 11px;
+  font-weight: 700;
   cursor: pointer;
   border: 0;
   border-radius: 9px;
@@ -2377,7 +2436,7 @@ const debugInfo = computed(() => {
 }
 .fullscreen-toggle:active { background: #e3e8f2; }
 .fullscreen-toggle:disabled { opacity: .4; cursor: not-allowed; }
-.fullscreen-toggle svg { width: 17px; height: 17px; }
+.fullscreen-toggle svg { width: 15px; height: 15px; }
 
 .fullscreen-input-overlay {
   position: fixed;
@@ -2442,6 +2501,37 @@ const debugInfo = computed(() => {
 
 :deep(.h5-drawer.el-drawer) { max-width: 760px; margin: 0 auto; border-radius: 24px 24px 0 0; background: #fff; box-shadow: 0 -18px 50px rgba(30, 42, 78, .2); }
 :deep(.h5-drawer .el-drawer__body) { padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); overflow-y: auto; }
+/* Fullscreen history picker: expand the reference drawer to the whole viewport. */
+:deep(.reference-drawer.reference-fullscreen.el-drawer) {
+  height: 100% !important;
+  max-width: none !important;
+  max-height: 100vh;
+  border-radius: 0;
+}
+:deep(.reference-drawer.reference-fullscreen .el-drawer__body) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+.reference-drawer.reference-fullscreen .reference-panel {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.reference-drawer.reference-fullscreen .reference-body {
+  min-height: 0;
+}
+.reference-drawer.reference-fullscreen .reference-main {
+  flex: 1;
+  min-height: 0;
+}
+.reference-drawer.reference-fullscreen .history-reference-grid {
+  flex: 1;
+  max-height: none;
+}
 /* Model picker: fixed panel height + internal list scroll so many models stay selectable on short screens. */
 :deep(.model-drawer.el-drawer) {
   height: 68% !important;
@@ -2766,9 +2856,7 @@ const debugInfo = computed(() => {
   .composer-main textarea { font-size: 16px; }
   .tool-btn.mode-btn span { font-size: 11px; }
   .history-reference-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .reference-footer { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; }
-  .reference-preview-btn { justify-self: start; }
-  .reference-add-btn { justify-self: end; }
+  .reference-footer { flex-wrap: wrap; }
   .draw-options label, .draw-settings-fields label { grid-template-columns: 74px minmax(0, 1fr); }
 }
 
