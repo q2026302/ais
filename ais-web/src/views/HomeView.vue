@@ -21,6 +21,8 @@ const sending = ref(false)
 const regenerateDialogVisible = ref(false)
 const regenerateAction = ref<'regenerate' | 'resend'>('regenerate')
 const regenerateTargetId = ref<number | null>(null)
+const editingMessageId = ref<number | null>(null)
+const editingAction = ref<'edit' | 'resend' | null>(null)
 
 const drawDialogVisible = ref(false)
 const drawInitialPrompt = ref('')
@@ -61,6 +63,11 @@ const regenerateTarget = computed<Message | null>(() => {
   return store.messages.find((message) => message.id === regenerateTargetId.value) || null
 })
 
+const editingMessage = computed<Message | null>(() => {
+  if (editingMessageId.value == null) return null
+  return store.messages.find((message) => message.id === editingMessageId.value) || null
+})
+
 function resolveProviderId(sessionValue: number | null | undefined, userDefault: number | null, providers: ModelProvider[]) {
   if (sessionValue != null) return sessionValue
   if (userDefault != null && providers.some((item) => item.id === userDefault)) return userDefault
@@ -77,6 +84,13 @@ watch(() => store.activeSessionId, (sessionId) => {
   const session = store.sessions.find((item) => item.id === sessionId)
   if (!session) return
   syncProviderSelectionFromSession(session)
+})
+
+// Switching sessions leaves the previous session's local editing state behind;
+// clear it (and the composer draft) so returning to the old session doesn't
+// re-enter edit mode with a stale draft.
+watch(() => store.activeSessionId, () => {
+  cancelComposerEditing()
 })
 
 onMounted(async () => {
@@ -412,21 +426,56 @@ function scrollToBottom() {
   })
 }
 
-async function handleEditMessage(messageId: number) {
-  store.startEditing(messageId)
+function startComposerEditing(message: Message, action: 'edit' | 'resend') {
+  editingMessageId.value = message.id
+  editingAction.value = action
 }
 
-async function handleSaveEdit(messageId: number, content: string) {
+function handleEditMessage(messageId: number) {
+  const message = store.messages.find((item) => item.id === messageId)
+  if (message) startComposerEditing(message, 'edit')
+}
+
+function handleEditCancel() {
+  editingMessageId.value = null
+  editingAction.value = null
+}
+
+function cancelComposerEditing() {
+  editingMessageId.value = null
+  editingAction.value = null
+  chatInputRef.value?.clearDraft()
+}
+
+async function handleComposerEditSave(payload: {
+  messageId: number
+  content: string
+  chatProviderId: number | null
+  action: 'edit' | 'resend'
+}) {
+  const message = store.messages.find((item) => item.id === payload.messageId)
+  if (!message) return
+  const isDraw = message.messageType === 'DRAW_REQUEST'
+  const resolvedChatProviderId = isDraw ? null : payload.chatProviderId
+  const resolvedImageProviderId = isDraw ? imageProviderId.value : null
+
   try {
-    await store.editMessage(messageId, content)
-    await store.resendUserMessage(messageId, chatProviderId.value, imageProviderId.value)
+    // Unified edit/resend: saving the (possibly adjusted) prompt then
+    // re-triggering the response. For DRAW_REQUEST the saved content is the
+    // pure prompt, which the backend mirrors into drawPrompt.
+    await store.editMessage(payload.messageId, payload.content)
+    await store.resendUserMessage(payload.messageId, resolvedChatProviderId, resolvedImageProviderId)
+    // Only leave edit mode once both calls succeeded; on failure the composer
+    // stays in edit mode with its content intact so the user can retry.
+    editingMessageId.value = null
+    editingAction.value = null
     await nextTick()
     scrollToBottom()
   } catch (e: any) {
     if (e?.name === 'CanceledError') {
       ElMessage.info('再次发送已终止')
     } else {
-      ElMessage.error(e.message || '保存并重新生成失败')
+      ElMessage.error(e.message || '保存并重新生成失败，可重新点击发送重试')
     }
   }
 }
@@ -440,9 +489,8 @@ function handleRegenerate(messageId: number) {
 
 function handleResend(messageId: number) {
   if (store.loading) return
-  regenerateTargetId.value = messageId
-  regenerateAction.value = 'resend'
-  regenerateDialogVisible.value = true
+  const message = store.messages.find((item) => item.id === messageId)
+  if (message) startComposerEditing(message, 'resend')
 }
 
 async function handleRegenerateConfirm(payload: {
@@ -605,7 +653,6 @@ async function forceRefresh() {
           v-for="msg in store.messages"
           :key="msg.id"
           :message="msg"
-          :editing-message-id="store.editingMessageId"
           :chat-provider="selectedChatProvider"
           :providers="allProviders"
           @edit="handleEditMessage"
@@ -614,7 +661,6 @@ async function forceRefresh() {
           @delete="handleDeleteMessage"
           @refresh="handleRefreshMessage"
           @copy="handleCopy"
-          @save-edit="handleSaveEdit"
         />
       </div>
       <ImageGallery v-else :messages="store.messages" />
@@ -651,9 +697,13 @@ async function forceRefresh() {
         :active-session-id="store.activeSessionId"
         :active-chat-provider-id="chatProviderId"
         :history-messages="store.messages"
+        :editing-message="editingMessage"
+        :editing-action="editingAction"
         @send="handleSend"
         @draw="handleDraw"
         @cancel="store.cancelActiveRequest"
+        @edit-save="handleComposerEditSave"
+        @edit-cancel="handleEditCancel"
       />
 
       <DrawDialog

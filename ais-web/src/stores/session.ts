@@ -80,7 +80,6 @@ export const useSessionStore = defineStore('session', () => {
 
   const chatProviders = ref<ModelProvider[]>([])
   const imageProviders = ref<ModelProvider[]>([])
-  const editingMessageId = ref<number | null>(null)
 
   // Local-only pin / unread state (persisted in localStorage)
   // pinnedSessions order: newest pin first (index 0)
@@ -1001,10 +1000,18 @@ export const useSessionStore = defineStore('session', () => {
     const updated = await sessionApi.editMessage(sessionId, messageId, { content: newContent })
 
     // Patch the live list in-place — no need to re-fetch the whole session.
+    const patch: Partial<Message> = {
+      content: updated.content,
+      edited: updated.edited,
+      updatedAt: updated.updatedAt,
+    }
+    // DRAW_REQUEST edits mirror the new prompt into drawPrompt on the backend;
+    // keep the local message in sync so the list/gallery keep showing the new prompt.
+    if (updated.drawPrompt != null) patch.drawPrompt = updated.drawPrompt
+
     const idx = messages.value.findIndex((m) => m.id === messageId)
     if (idx >= 0) {
-      const existing = messages.value[idx]!
-      messages.value[idx] = { ...existing, content: updated.content, edited: updated.edited, updatedAt: updated.updatedAt }
+      messages.value[idx] = { ...messages.value[idx]!, ...patch }
     }
 
     // Keep cache in sync so the next incremental fetch doesn't overwrite the edit.
@@ -1012,13 +1019,10 @@ export const useSessionStore = defineStore('session', () => {
     if (cacheEntry) {
       const cacheIdx = cacheEntry.messages.findIndex((m) => m.id === messageId)
       if (cacheIdx >= 0) {
-        const existing = cacheEntry.messages[cacheIdx]!
-        cacheEntry.messages[cacheIdx] = { ...existing, content: updated.content, edited: updated.edited, updatedAt: updated.updatedAt }
+        cacheEntry.messages[cacheIdx] = { ...cacheEntry.messages[cacheIdx]!, ...patch }
         cacheEntry.maxUpdatedAt = getMaxUpdatedAt(cacheEntry.messages)
       }
     }
-
-    editingMessageId.value = null
   }
 
   async function regenerateMessage(
@@ -1196,14 +1200,6 @@ export const useSessionStore = defineStore('session', () => {
     await selectSession(activeSessionId.value)
   }
 
-  function startEditing(messageId: number) {
-    editingMessageId.value = messageId
-  }
-
-  function cancelEditing() {
-    editingMessageId.value = null
-  }
-
   return {
     sessions,
     sortedSessions,
@@ -1217,7 +1213,6 @@ export const useSessionStore = defineStore('session', () => {
     operationStartedAt,
     chatProviders,
     imageProviders,
-    editingMessageId,
     pollingIntervals,
     polledMessageStatuses,
     pinnedSessions,
@@ -1238,8 +1233,6 @@ export const useSessionStore = defineStore('session', () => {
     deleteMessage,
     uploadFiles,
     updateSessionProviders,
-    startEditing,
-    cancelEditing,
     cancelActiveRequest,
     forceRefreshSession,
     startPolling,

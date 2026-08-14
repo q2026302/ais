@@ -30,6 +30,7 @@ import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { formatTimeHm, parseApiDate } from '@/utils/dateTime'
+import { getMessageEditableText } from '@/utils/messageText'
 import { useLongPress } from '@/composables/useLongPress'
 import { useImageActions } from '@/composables/useImageActions'
 import type { MobileKeyboardApi } from './FeishuMobileLayout.vue'
@@ -71,9 +72,8 @@ const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
 const messageActionVisible = ref(false)
 const messageActionTarget = ref<Message | null>(null)
-const editVisible = ref(false)
-const editTargetId = ref<number | null>(null)
-const editText = ref('')
+const editingMessageId = ref<number | null>(null)
+const editingAction = ref<'edit' | 'resend' | null>(null)
 const selectedChatProviderId = ref<number | null>(null)
 const defaultChatProviderId = ref<number | null>(null)
 const defaultImageProviderId = ref<number | null>(null)
@@ -213,8 +213,10 @@ const selectedChatProvider = computed<ModelProvider | null>(() => {
   return store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
 })
 const referenceImageCount = computed(() => pendingAttachments.value.filter((item) => item.contentType?.startsWith('image/')).length)
-const editingMessage = computed(() => store.messages.find((item) => item.id === editTargetId.value) || null)
+const editingMessage = computed(() => store.messages.find((item) => item.id === editingMessageId.value) || null)
+const isEditing = computed(() => editingMessage.value != null)
 const canSubmit = computed(() => !store.loading && !uploading.value && (Boolean(inputText.value.trim()) || pendingAttachments.value.length > 0))
+const canSubmitEdit = computed(() => isEditing.value && !store.loading && !uploading.value && Boolean(inputText.value.trim()))
 const activeSessionTitle = computed(() => activeSession.value?.title || 'AI 创作')
 const selectedHistoryItems = computed(() =>
   selectedHistoryIds.value
@@ -542,6 +544,10 @@ async function handleSystemCommand(prompt: string, attachments: UploadResponse[]
 }
 
 async function handleSubmit() {
+  if (isEditing.value) {
+    await handleEditSend()
+    return
+  }
   if (!canSubmit.value) {
     if (mode.value === 'draw') ElMessage.info('请先输入绘画描述')
     return
@@ -584,6 +590,8 @@ async function handleSubmit() {
 }
 
 function handleInputKeydown(event: KeyboardEvent) {
+  // Edit mode: Enter inserts a newline (mobile). Sending is via the button only.
+  if (isEditing.value) return
   if (event.isComposing || (!event.ctrlKey && !event.metaKey) || event.key !== 'Enter') return
   event.preventDefault()
   void handleSubmit()
@@ -854,23 +862,56 @@ function messageText(message: Message) {
     : message.content
 }
 
-function openEdit(message: Message) {
-  editTargetId.value = message.id
-  editText.value = messageText(message)
-  editVisible.value = true
+function startComposerEditing(message: Message, action: 'edit' | 'resend') {
+  editingMessageId.value = message.id
+  editingAction.value = action
+  inputText.value = getMessageEditableText(message)
+  void nextTick(() => {
+    inputRef.value?.focus()
+    autoResizeTextarea()
+  })
 }
 
-async function saveEdit() {
-  if (!editingMessage.value || !editText.value.trim()) {
+function openEdit(message: Message) {
+  startComposerEditing(message, 'edit')
+}
+
+function cancelEdit() {
+  editingMessageId.value = null
+  editingAction.value = null
+  inputText.value = ''
+}
+
+function resetComposerDraft() {
+  editingMessageId.value = null
+  editingAction.value = null
+  inputText.value = ''
+  pendingAttachments.value = []
+}
+
+async function handleEditSend() {
+  const message = editingMessage.value
+  const content = inputText.value.trim()
+  if (!message || !content) {
     ElMessage.warning('内容不能为空')
     return
   }
+  const isDraw = message.messageType === 'DRAW_REQUEST'
+  const chatProviderId = isDraw ? null : selectedChatProviderId.value
+  const imageProviderId = isDraw ? selectedImageProviderId.value : null
+
   try {
-    await store.editMessage(editingMessage.value.id, editText.value.trim())
-    editVisible.value = false
-    ElMessage.success('消息已更新')
+    // Unified edit/resend: save the (possibly adjusted) prompt then re-trigger.
+    await store.editMessage(message.id, content)
+    await store.resendUserMessage(message.id, chatProviderId, imageProviderId)
+    // Only leave edit mode once both calls succeeded; on failure the composer
+    // stays in edit mode with its content intact so the user can retry.
+    editingMessageId.value = null
+    editingAction.value = null
+    inputText.value = ''
+    await scrollToBottom()
   } catch (error: any) {
-    ElMessage.error(error.message || '保存消息失败')
+    if (error?.name !== 'CanceledError') ElMessage.error(error.message || '重新发送失败，可重新点击发送重试')
   }
 }
 
@@ -952,12 +993,14 @@ async function deleteMessage(message: Message) {
 
 async function resendMessage(message: Message) {
   if (store.loading) return
+  if (message.role === 'USER') {
+    // Unified Feishu-style flow: resend reuses the original content in the
+    // composer (editable, same model selector as normal send).
+    startComposerEditing(message, 'resend')
+    return
+  }
   try {
-    if (message.role === 'USER') {
-      await store.resendUserMessage(message.id, selectedChatProviderId.value, selectedImageProviderId.value)
-    } else {
-      await store.regenerateMessage(message.id, selectedChatProviderId.value, selectedImageProviderId.value)
-    }
+    await store.regenerateMessage(message.id, selectedChatProviderId.value, selectedImageProviderId.value)
     await scrollToBottom()
   } catch (error: any) {
     if (error?.name !== 'CanceledError') ElMessage.error(error.message || '重新生成失败')
@@ -1001,6 +1044,10 @@ function onComposerBlur() {
 
 watch(() => store.messages.length, () => void scrollToBottom())
 watch(() => store.activeSessionId, syncProviderSelection)
+// Switching sessions leaves the previous session's local editing state behind;
+// clear it (and the composer draft) so returning to the old session doesn't
+// re-enter edit mode with a stale draft.
+watch(() => store.activeSessionId, resetComposerDraft)
 watch(inputText, () => void nextTick(() => autoResizeTextarea()))
 watch(mode, () => {
   if (mode.value === 'chat' && selectedChatProviderId.value == null) {
@@ -1326,65 +1373,76 @@ const debugInfo = computed(() => {
         ></textarea>
       </div>
       <div class="composer-toolbar" role="toolbar" aria-label="创作工具">
-        <button
-          class="tool-btn mode-btn"
-          type="button"
-          :title="mode === 'draw' ? '当前：绘画，点击切换到对话' : '当前：对话，点击切换到绘画'"
-          :aria-label="mode === 'draw' ? '当前绘画模式，点击切换到对话' : '当前对话模式，点击切换到绘画'"
-          @click="toggleMode"
-        >
-          <Picture v-if="mode === 'draw'" aria-hidden="true" />
-          <ChatDotRound v-else aria-hidden="true" />
-          <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
-        </button>
-        <div
-          class="tool-btn-wrapper"
-          :class="{ disabled: store.loading || uploading }"
-          aria-label="上传文件"
-          title="上传文件"
-        >
-          <span class="tool-btn">
-            <Paperclip aria-hidden="true" />
-          </span>
-          <input
-            type="file"
-            class="sr-file-input"
-            :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
-            multiple
-            :disabled="store.loading || uploading"
-            @change="handleFileUpload"
+        <template v-if="!isEditing">
+          <button
+            class="tool-btn mode-btn"
+            type="button"
+            :title="mode === 'draw' ? '当前：绘画，点击切换到对话' : '当前：对话，点击切换到绘画'"
+            :aria-label="mode === 'draw' ? '当前绘画模式，点击切换到对话' : '当前对话模式，点击切换到绘画'"
+            @click="toggleMode"
           >
-        </div>
+            <Picture v-if="mode === 'draw'" aria-hidden="true" />
+            <ChatDotRound v-else aria-hidden="true" />
+            <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
+          </button>
+          <div
+            class="tool-btn-wrapper"
+            :class="{ disabled: store.loading || uploading }"
+            aria-label="上传文件"
+            title="上传文件"
+          >
+            <span class="tool-btn">
+              <Paperclip aria-hidden="true" />
+            </span>
+            <input
+              type="file"
+              class="sr-file-input"
+              :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
+              multiple
+              :disabled="store.loading || uploading"
+              @change="handleFileUpload"
+            >
+          </div>
+          <button
+            class="tool-btn"
+            type="button"
+            :disabled="store.loading || uploading"
+            :aria-label="referenceImageCount ? `参考图（已添加 ${referenceImageCount} 张）` : '添加参考图'"
+            :title="referenceImageCount ? `参考图 · ${referenceImageCount}` : '参考图'"
+            @click="openReferenceShortcut"
+          >
+            <Picture aria-hidden="true" />
+            <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
+          </button>
+          <button
+            class="tool-btn"
+            type="button"
+            :aria-label="mode === 'draw' ? '绘画设置' : '选择对话模型'"
+            :title="mode === 'draw' ? `设置 · ${drawSize} · ${drawQuality}` : `模型 · ${selectedChatProviderLabel}`"
+            @click="openSettingsPanel"
+          >
+            <Setting aria-hidden="true" />
+          </button>
+        </template>
         <button
-          class="tool-btn"
+          v-if="isEditing"
+          class="tool-btn edit-cancel-btn"
           type="button"
-          :disabled="store.loading || uploading"
-          :aria-label="referenceImageCount ? `参考图（已添加 ${referenceImageCount} 张）` : '添加参考图'"
-          :title="referenceImageCount ? `参考图 · ${referenceImageCount}` : '参考图'"
-          @click="openReferenceShortcut"
+          aria-label="取消编辑"
+          @click="cancelEdit"
         >
-          <Picture aria-hidden="true" />
-          <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
-        </button>
-        <button
-          class="tool-btn"
-          type="button"
-          :aria-label="mode === 'draw' ? '绘画设置' : '选择对话模型'"
-          :title="mode === 'draw' ? `设置 · ${drawSize} · ${drawQuality}` : `模型 · ${selectedChatProviderLabel}`"
-          @click="openSettingsPanel"
-        >
-          <Setting aria-hidden="true" />
+          取消
         </button>
         <button
           class="send-button"
-          :class="{ disabled: !canSubmit }"
+          :class="{ disabled: isEditing ? !canSubmitEdit : !canSubmit }"
           type="button"
-          :disabled="!canSubmit"
-          :aria-label="mode === 'draw' ? '生成图片' : '发送消息'"
+          :disabled="isEditing ? !canSubmitEdit : !canSubmit"
+          :aria-label="isEditing ? '保存并重新发送' : (mode === 'draw' ? '生成图片' : '发送消息')"
           @click="handleSubmit"
         >
           <Promotion v-if="mode === 'chat'" aria-hidden="true" />
-          <span>{{ mode === 'draw' ? '生成' : '发送' }}</span>
+          <span>{{ isEditing ? '发送' : (mode === 'draw' ? '生成' : '发送') }}</span>
         </button>
       </div>
     </footer>
@@ -1399,6 +1457,7 @@ const debugInfo = computed(() => {
         v-model="inputText"
         class="fullscreen-textarea"
         :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'"
+        @keydown="handleInputKeydown"
         @input="autoResizeTextarea"
         @focus="onComposerFocus"
         @blur="onComposerBlur"
@@ -1559,12 +1618,6 @@ const debugInfo = computed(() => {
         <button class="model-row" :class="{ active: selectedProviderId === null }" type="button" @click="selectModel(null)"><span><strong>系统默认模型</strong><small>使用后台配置的默认模型</small></span><span v-if="selectedProviderId === null" class="model-check" aria-hidden="true"><Check /></span></button>
         <button v-for="provider in currentProviders" :key="provider.id" class="model-row" :class="{ active: provider.id === selectedProviderId }" type="button" @click="selectModel(provider.id)"><span><strong>{{ provider.name || provider.providerId }}</strong><small>#{{ provider.id }} · {{ provider.modelName }}</small></span><span v-if="provider.id === selectedProviderId" class="model-check" aria-hidden="true"><Check /></span></button>
       </div>
-    </el-drawer>
-
-    <el-drawer v-model="editVisible" direction="btt" size="auto" class="h5-drawer edit-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>编辑消息</strong><span>保存后将更新当前消息内容</span></div></div>
-      <textarea v-model="editText" class="edit-textarea" rows="5" placeholder="请输入消息内容…"></textarea>
-      <div class="edit-footer"><button type="button" @click="editVisible = false">取消</button><button type="button" class="primary" @click="saveEdit">保存</button></div>
     </el-drawer>
 
     <el-drawer v-model="imageActionVisible" direction="btt" size="auto" class="h5-drawer action-drawer" :with-header="false">
@@ -2025,6 +2078,11 @@ const debugInfo = computed(() => {
   font-size: 12px;
   line-height: 1;
 }
+.edit-cancel-btn {
+  color: #7a8498;
+  background: #f0f2f7;
+}
+.edit-cancel-btn:active { color: #55627c; background: #e6eaf2; }
 .tool-badge {
   position: absolute;
   top: 2px;
@@ -2562,11 +2620,6 @@ const debugInfo = computed(() => {
 .draw-options label { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; color: #65718a; font-size: 12px; }
 .draw-options label > span { font-weight: 700; }
 .draw-options :deep(.el-select) { width: 100%; }
-.edit-textarea { display: block; width: 100%; min-height: 130px; margin-top: 14px; padding: 11px 12px; color: #36415e; font: inherit; font-size: 13px; line-height: 1.6; resize: vertical; border: 1px solid #dfe4ed; border-radius: 12px; outline: none; background: #f8f9fc; box-sizing: border-box; }
-.edit-textarea:focus { border-color: #8795e4; box-shadow: 0 0 0 3px rgba(111, 126, 230, .1); }
-.edit-footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; }
-.edit-footer button { min-width: 72px; min-height: 38px; padding: 0 12px; color: #65718c; font-size: 12px; font-weight: 700; cursor: pointer; border: 0; border-radius: 10px; background: #eef1f6; }
-.edit-footer button.primary { color: #fff; background: linear-gradient(140deg, #536bea, #7657d4); box-shadow: 0 4px 10px rgba(83, 96, 229, .2); }
 
 .action-list { display: grid; gap: 7px; padding-top: 11px; -webkit-user-select: none; user-select: none; }
 .action-list button {
@@ -2698,7 +2751,7 @@ const debugInfo = computed(() => {
     user-select: none;
     -webkit-touch-callout: none;
   }
-  .composer-main textarea, .edit-textarea { font-size: 16px; }
+  .composer-main textarea { font-size: 16px; }
 }
 
 @media (max-width: 390px) {

@@ -506,8 +506,6 @@ public class ImageGenerationService {
     private GenerationResult resendUserMessage(Session session, Message userMessage,
                                                Long chatProviderId,
                                                Long imageProviderId) {
-        softDeleteAssistantReplies(session.getId(), userMessage.getId());
-
         if (userMessage.getMessageType() == MessageType.DRAW_REQUEST) {
             return resendDrawRequest(session, userMessage, imageProviderId);
         }
@@ -568,19 +566,6 @@ public class ImageGenerationService {
             assistantMessage.setErrorMessage(error);
             messageRepository.save(assistantMessage);
             throw new RuntimeException(error, e);
-        }
-    }
-
-    private void softDeleteAssistantReplies(Long sessionId, Long userMessageId) {
-        List<Message> replies = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId)
-                .stream()
-                .filter(message -> message.getRole() == MessageRole.ASSISTANT
-                        && userMessageId.equals(message.getParentMessageId())
-                        && !message.isDeleted())
-                .toList();
-        for (Message reply : replies) {
-            reply.setDeleted(true);
-            messageRepository.save(reply);
         }
     }
 
@@ -766,6 +751,9 @@ public class ImageGenerationService {
         }
 
         message.setContent(newContent);
+        if (message.getMessageType() == MessageType.DRAW_REQUEST && message.getDrawPrompt() != null) {
+            message.setDrawPrompt(newContent);
+        }
         message.setEdited(true);
         return messageRepository.save(message);
     }

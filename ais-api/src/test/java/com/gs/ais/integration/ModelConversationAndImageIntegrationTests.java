@@ -31,6 +31,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 
@@ -65,7 +66,7 @@ class ModelConversationAndImageIntegrationTests {
     private static final String BASE_URL = "https://mock-model.test/v1";
     private static final String API_KEY = "test-api-key";
     private static final String ONE_PIXEL_PNG_BASE64 =
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
     private static final byte[] ONE_PIXEL_PNG_BYTES = java.util.Base64.getDecoder().decode(ONE_PIXEL_PNG_BASE64);
 
     @Autowired
@@ -456,13 +457,17 @@ class ModelConversationAndImageIntegrationTests {
 
         flushAndClearPersistenceContext();
         List<Message> displayMessages = imageGenerationService.getMessages(session.getId());
-        assertEquals(4, displayMessages.size());
+        assertEquals(5, displayMessages.size());
         assertEquals("第一问", displayMessages.get(0).getContent());
-        assertEquals("第一问的新回答", displayMessages.get(1).getContent());
+        // The original assistant reply is retained, and the new reply is appended after it.
+        assertEquals("第一答", displayMessages.get(1).getContent());
         assertEquals(firstUserMessage.getId(), displayMessages.get(1).getParentMessageId());
-        assertEquals("第二问", displayMessages.get(2).getContent());
-        assertEquals("第二答", displayMessages.get(3).getContent());
-        assertTrue(displayMessages.stream().noneMatch(message -> "第一答".equals(message.getContent())));
+        assertEquals("第一问的新回答", displayMessages.get(2).getContent());
+        assertEquals(firstUserMessage.getId(), displayMessages.get(2).getParentMessageId());
+        assertEquals("第二问", displayMessages.get(3).getContent());
+        assertEquals("第二答", displayMessages.get(4).getContent());
+        assertTrue(displayMessages.stream().anyMatch(message -> "第一答".equals(message.getContent())),
+                "the historical reply must be preserved after resending");
     }
 
     @Test
@@ -497,14 +502,19 @@ class ModelConversationAndImageIntegrationTests {
         assertEquals(defaultProvider.getId(), persistedSession.getChatProviderId());
 
         List<Message> messages = imageGenerationService.getMessages(session.getId());
-        assertEquals(2, messages.size());
+        assertEquals(3, messages.size());
         assertEquals("使用临时模型再次发送", messages.get(0).getContent());
-        assertEquals("临时模型回答", messages.get(1).getContent());
+        // The original assistant reply is retained, and the new reply is appended after it.
+        assertEquals("默认模型回答", messages.get(1).getContent());
         assertEquals(userMessage.getId(), messages.get(1).getParentMessageId());
-        assertTrue(messages.stream().noneMatch(message -> "默认模型回答".equals(message.getContent())));
+        assertEquals("临时模型回答", messages.get(2).getContent());
+        assertEquals(userMessage.getId(), messages.get(2).getParentMessageId());
+        assertTrue(messages.stream().anyMatch(message -> "默认模型回答".equals(message.getContent())),
+                "the original assistant reply must be preserved after resending");
     }
 
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void regeneratingImageCanTemporarilyOverrideImageModel() {
         ModelProvider defaultProvider = saveProvider(ProviderType.IMAGE, "gpt-image-default-model");
         ModelProvider temporaryProvider = saveProvider(ProviderType.IMAGE, "gpt-image-temporary-model");
@@ -526,22 +536,27 @@ class ModelConversationAndImageIntegrationTests {
         request.setImageProviderId(defaultProvider.getId());
         request.setSize("1024x1024");
         ImageGenerationService.DrawResult drawResult = imageGenerationService.draw(session.getId(), request);
+        awaitDrawCompletion(drawResult.assistantMessageId());
 
         Message assistantMessage = messageRepository.findById(drawResult.assistantMessageId()).orElseThrow();
         ImageGenerationService.GenerationResult regenerateResult = imageGenerationService.regenerateMessage(
                 session.getId(), assistantMessage.getId(), null, temporaryProvider.getId());
 
-        assertNotNull(regenerateResult.imageUrl());
-        flushAndClearPersistenceContext();
+        assertEquals(MessageStatus.PENDING, regenerateResult.status());
+        assertNull(regenerateResult.imageUrl());
+        awaitDrawCompletion(assistantMessage.getId());
+
         Session persistedSession = sessionRepository.findById(session.getId()).orElseThrow();
         Message regeneratedMessage = messageRepository.findById(assistantMessage.getId()).orElseThrow();
         assertEquals(defaultProvider.getId(), persistedSession.getImageProviderId());
         assertEquals(temporaryProvider.getId(), regeneratedMessage.getDrawProviderId());
         assertEquals(MessageStatus.SUCCESS, regeneratedMessage.getStatus());
+        assertNotNull(regeneratedMessage.getImageUrl());
         assertSavedImageExists(regeneratedMessage.getImageUrl());
     }
 
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void drawWithoutReferenceUsesGenerationsEndpointAndSavesGeneratedImage() {
         ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "gpt-image-test");
         imageProvider.setConfigJson("{\"background\":\"transparent\"}");
@@ -572,13 +587,12 @@ class ModelConversationAndImageIntegrationTests {
         ImageGenerationService.DrawResult result = imageGenerationService.draw(session.getId(), request);
 
         assertEquals("一只水彩风格的猫", result.prompt());
-        assertEquals(MessageStatus.SUCCESS, result.status());
+        assertEquals(MessageStatus.PENDING, result.status());
         assertNull(result.errorMessage());
         assertNotNull(result.assistantMessageId());
-        assertTrue(result.imageUrl().startsWith("/api/images/"));
-        assertSavedImageExists(result.imageUrl());
 
-        flushAndClearPersistenceContext();
+        awaitDrawCompletion(result.assistantMessageId());
+
         List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getId());
         assertEquals(2, messages.size());
         assertEquals(MessageRole.USER, messages.get(0).getRole());
@@ -595,11 +609,13 @@ class ModelConversationAndImageIntegrationTests {
         assertEquals(MessageType.DRAW_RESPONSE, messages.get(1).getMessageType());
         assertEquals(MessageStatus.SUCCESS, messages.get(1).getStatus());
         assertEquals(result.assistantMessageId(), messages.get(1).getId());
-        assertEquals(result.imageUrl(), messages.get(1).getImageUrl());
+        assertTrue(messages.get(1).getImageUrl().startsWith("/api/images/"));
+        assertSavedImageExists(messages.get(1).getImageUrl());
         assertEquals(messages.get(0).getId(), messages.get(1).getParentMessageId());
     }
 
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void drawWithReferenceUsesEditsEndpointAndDownloadsReturnedImageUrl() throws IOException {
         ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "gpt-image-test");
         Session session = saveSession(null, imageProvider.getId());
@@ -640,13 +656,12 @@ class ModelConversationAndImageIntegrationTests {
 
         ImageGenerationService.DrawResult result = imageGenerationService.draw(session.getId(), request);
 
-        assertEquals(MessageStatus.SUCCESS, result.status());
+        assertEquals(MessageStatus.PENDING, result.status());
         assertNull(result.errorMessage());
         assertNotNull(result.assistantMessageId());
-        assertTrue(result.imageUrl().startsWith("/api/images/"));
-        assertSavedImageExists(result.imageUrl());
 
-        flushAndClearPersistenceContext();
+        awaitDrawCompletion(result.assistantMessageId());
+
         Attachment linkedReference = attachmentRepository.findById(reference.getId()).orElseThrow();
         assertNotNull(linkedReference.getMessage());
         assertEquals(MessageRole.USER, linkedReference.getMessage().getRole());
@@ -659,11 +674,12 @@ class ModelConversationAndImageIntegrationTests {
         assertEquals("1536x1024", messages.get(0).getDrawSize());
         assertEquals("high", messages.get(0).getDrawQuality());
         assertEquals("webp", messages.get(0).getDrawFormat());
-        assertFalse(messages.get(0).getAttachments().isEmpty());
+        assertFalse(attachmentRepository.findByMessageId(messages.get(0).getId()).isEmpty());
         assertEquals(MessageType.DRAW_RESPONSE, messages.get(1).getMessageType());
         assertEquals(MessageStatus.SUCCESS, messages.get(1).getStatus());
         assertEquals(result.assistantMessageId(), messages.get(1).getId());
-        assertEquals(result.imageUrl(), messages.get(1).getImageUrl());
+        assertTrue(messages.get(1).getImageUrl().startsWith("/api/images/"));
+        assertSavedImageExists(messages.get(1).getImageUrl());
     }
 
     @Test
@@ -879,6 +895,7 @@ class ModelConversationAndImageIntegrationTests {
 
 
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void failedDrawPersistsRequestAndFailedAssistantResponseInConversation() {
         ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "gpt-image-test");
         Session session = saveSession(null, imageProvider.getId());
@@ -896,13 +913,12 @@ class ModelConversationAndImageIntegrationTests {
 
         ImageGenerationService.DrawResult result = imageGenerationService.draw(session.getId(), request);
 
-        assertEquals(MessageStatus.FAILED, result.status());
+        assertEquals(MessageStatus.PENDING, result.status());
         assertNull(result.imageUrl());
         assertNotNull(result.assistantMessageId());
-        assertTrue(result.errorMessage().contains("temporary upstream failure"));
-        assertTrue(result.errorMessage().contains("HTTP 502"));
 
-        flushAndClearPersistenceContext();
+        awaitDrawCompletion(result.assistantMessageId());
+
         List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getId());
         assertEquals(2, messages.size());
         assertEquals(MessageType.DRAW_REQUEST, messages.get(0).getMessageType());
@@ -918,6 +934,28 @@ class ModelConversationAndImageIntegrationTests {
     private void flushAndClearPersistenceContext() {
         entityManager.flush();
         entityManager.clear();
+    }
+
+    /**
+     * Image generation is processed asynchronously by {@code ImageGenerationQueueService},
+     * so draw/regenerate callers receive a PENDING result immediately. Poll the persisted
+     * assistant message until the background worker finishes (SUCCESS or FAILED).
+     */
+    private void awaitDrawCompletion(Long assistantMessageId) {
+        long deadline = System.currentTimeMillis() + 10_000L;
+        while (System.currentTimeMillis() < deadline) {
+            Message message = messageRepository.findById(assistantMessageId).orElse(null);
+            if (message != null && message.getStatus() != MessageStatus.PENDING) {
+                return;
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting for draw completion", e);
+            }
+        }
+        throw new AssertionError("Draw message " + assistantMessageId + " did not finish within 10s");
     }
 
     private ModelProvider saveProvider(ProviderType type, String modelName) {

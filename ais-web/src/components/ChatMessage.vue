@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import type { Message, ModelProvider } from '@/types'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Edit, Refresh, Delete, Download } from '@element-plus/icons-vue'
@@ -10,7 +10,6 @@ import { downloadImage as downloadImageAsset } from '@/utils/downloadImage'
 
 const props = defineProps<{
   message: Message
-  editingMessageId: number | null
   chatProvider?: ModelProvider | null
   /** Optional list to resolve message.chatProviderId / drawProviderId */
   providers?: ModelProvider[]
@@ -22,11 +21,9 @@ const emit = defineEmits<{
   regenerate: [messageId: number]
   delete: [messageId: number]
   copy: [content: string]
-  saveEdit: [messageId: number, content: string]
   refresh: [messageId: number]
 }>()
 
-const editContent = ref('')
 const thumbFailed = ref(false)
 const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.id, 'medium'))
 function onThumbError() { thumbFailed.value = true }
@@ -75,12 +72,6 @@ const messageTypeClass = computed(() => {
   return 'msg-type-chat'
 })
 
-watch(() => props.editingMessageId, (val) => {
-  if (val === props.message.id) {
-    editContent.value = props.message.content
-  }
-})
-
 function copyContent() {
   if (props.message.content) {
     navigator.clipboard.writeText(props.message.content)
@@ -98,16 +89,6 @@ async function copyPrompt() {
   } catch {
     ElMessage.error('复制提示词失败，请手动选择复制')
   }
-}
-
-function handleSaveEdit() {
-  if (editContent.value.trim()) {
-    emit('saveEdit', props.message.id, editContent.value.trim())
-  }
-}
-
-function handleCancelEdit() {
-  emit('saveEdit', props.message.id, props.message.content)
 }
 
 function isImageUrl(url: string | null): boolean {
@@ -190,21 +171,6 @@ function formatDateTime(dateStr: string): string {
         <div class="message-date">{{ formatDateTime(message.createdAt) }}</div>
       </div>
       <div class="bubble">
-      <!-- Inline edit mode for user messages -->
-      <div v-if="editingMessageId === message.id" class="edit-mode">
-        <el-input
-          v-model="editContent"
-          type="textarea"
-          :rows="3"
-          placeholder="编辑消息..."
-        />
-        <div class="edit-actions">
-          <el-button size="small" @click="handleCancelEdit">取消</el-button>
-          <el-button size="small" type="primary" @click="handleSaveEdit">保存并重新生成</el-button>
-        </div>
-      </div>
-
-      <template v-else>
         <!-- Attachment display (user messages) -->
         <div v-if="message.attachments && message.attachments.length > 0" class="attachments">
           <div
@@ -300,10 +266,9 @@ function formatDateTime(dateStr: string): string {
             }}/{{ formatTokens(message.tokenUsage.totalTokens) }}
           </span>
         </div>
-      </template>
 
       <!-- Action buttons (hover reveal) -->
-      <div v-if="editingMessageId !== message.id" class="actions">
+      <div class="actions">
         <el-button text size="small" @click="copyContent" :icon="CopyDocument" title="复制" />
         <el-button
           v-if="message.role === 'USER'"
@@ -386,6 +351,5 @@ function formatDateTime(dateStr: string): string {
 .draw-error { margin-top: 9px; padding: 11px 12px; color: #bd4d56; font-size: 13px; border: 1px solid #ffd9dc; border-radius: 10px; background: #fff4f4; }.draw-error-title { margin-bottom: 4px; font-weight: 700; }.draw-error-detail { max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; opacity: .9; }
 .status-badge { padding: 2px 7px; font-size: 10px; border-radius: 999px; }.status-badge.pending { color: #5064d9; background: #edf0ff; }.status-badge.failed { color: #d65760; background: #fff0f1; }
 .actions { position: absolute; top: -31px; right: 0; display: flex; gap: 2px; padding: 3px 4px; opacity: 0; border: 1px solid #e8ebf6; border-radius: 9px; background: rgba(255,255,255,.96); box-shadow: 0 5px 15px rgba(37,48,100,.12); transition: opacity .15s, transform .15s; transform: translateY(3px); }.message:hover .actions { opacity: 1; transform: translateY(0); }
-.edit-mode { display: flex; flex-direction: column; gap: 8px; }.edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 600px) { .message { max-width: 96%; margin-bottom: 17px; } .avatar { width: 31px; height: 31px; font-size: 15px; } .bubble { padding: 11px 13px; } .image-container { max-width: 100%; } }
 </style>

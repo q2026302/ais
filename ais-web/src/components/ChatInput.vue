@@ -18,6 +18,7 @@ import type { Message, ModelProvider, UploadResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { selectHistorySourceUrl } from '@/utils/historyReference'
+import { getMessageEditableText } from '@/utils/messageText'
 
 const props = defineProps<{
   loading: boolean
@@ -26,12 +27,16 @@ const props = defineProps<{
   activeSessionId: number | null
   activeChatProviderId: number | null
   historyMessages?: Message[]
+  editingMessage?: Message | null
+  editingAction?: 'edit' | 'resend' | null
 }>()
 
 const emit = defineEmits<{
   send: [payload: { prompt: string; attachmentIds: number[]; attachments: UploadResponse[]; chatProviderId: number | null }]
   draw: [payload: { prompt: string; attachmentIds: number[]; attachments: UploadResponse[]; chatProviderId: number | null }]
   cancel: []
+  editSave: [payload: { messageId: number; content: string; chatProviderId: number | null; action: 'edit' | 'resend' }]
+  editCancel: []
 }>()
 
 const inputText = ref('')
@@ -53,6 +58,8 @@ const fullscreenInputRef = ref<HTMLTextAreaElement | null>(null)
 const composerRootRef = ref<HTMLElement | null>(null)
 
 const canSend = computed(() => inputText.value.trim().length > 0 || pendingAttachments.value.length > 0)
+const isEditing = computed(() => props.editingMessage != null && props.editingAction != null)
+const canEditSend = computed(() => isEditing.value && inputText.value.trim().length > 0)
 const referenceImageCount = computed(
   () => pendingAttachments.value.filter((item) => item.contentType?.startsWith('image/')).length,
 )
@@ -153,6 +160,22 @@ watch(
 watch(inputText, () => {
   void nextTick(() => autoResizeTextarea())
 })
+
+// When a message enters the composer for edit / resend, load its editable text
+// (pure prompt for DRAW_REQUEST). When editing exits, clear the draft.
+watch(
+  () => props.editingMessage?.id,
+  (id, prevId) => {
+    if (id != null && props.editingMessage) {
+      fullscreenInput.value = false
+      inputText.value = getMessageEditableText(props.editingMessage)
+      void nextTick(() => inputRef.value?.focus())
+    } else if (prevId != null) {
+      inputText.value = ''
+    }
+    void nextTick(() => autoResizeTextarea())
+  },
+)
 
 function isImage(contentType: string): boolean {
   return contentType.startsWith('image/')
@@ -316,6 +339,10 @@ async function handleScreenshot() {
 }
 
 function handleSend() {
+  if (isEditing.value) {
+    handleEditSend()
+    return
+  }
   if (!canSend.value || props.loading) return
   const chatProviderId = selectedProviderId.value
   const payload = {
@@ -335,8 +362,33 @@ function handleSend() {
   fullscreenInput.value = false
 }
 
+function handleEditSend() {
+  const content = inputText.value.trim()
+  if (!content || !props.editingMessage) return
+  emit('editSave', {
+    messageId: props.editingMessage.id,
+    content,
+    chatProviderId: selectedProviderId.value,
+    action: props.editingAction ?? 'edit',
+  })
+}
+
+function handleEditCancel() {
+  emit('editCancel')
+}
+
 function handleInputKeydown(event: KeyboardEvent) {
   if (event.isComposing) return
+  if (isEditing.value) {
+    // Edit mode: Enter (or Shift+Enter) sends; only Ctrl/Cmd/Meta + Enter
+    // inserts a newline (the browser default), so we must not preventDefault
+    // for those combinations.
+    if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault()
+      handleEditSend()
+    }
+    return
+  }
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     handleSend()
@@ -483,79 +535,91 @@ defineExpose({ clearDraft })
     </div>
 
     <div class="composer-toolbar" role="toolbar" aria-label="创作工具">
-      <button
-        class="tool-btn mode-btn"
-        type="button"
-        :title="mode === 'draw' ? '当前：绘画，点击切换到对话' : '当前：对话，点击切换到绘画'"
-        @click="toggleMode"
-      >
-        <el-icon v-if="mode === 'draw'"><Picture /></el-icon>
-        <el-icon v-else><ChatDotRound /></el-icon>
-        <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
-      </button>
-
-      <label
-        class="tool-btn tool-file-label"
-        :class="{ disabled: loading || uploading }"
-        title="上传文件"
-        aria-label="上传文件"
-      >
-        <input
-          id="desktop-file-input"
-          type="file"
-          class="sr-file-input"
-          :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
-          multiple
-          :disabled="loading || uploading"
-          @change="handleFileChange"
+      <template v-if="!isEditing">
+        <button
+          class="tool-btn mode-btn"
+          type="button"
+          :title="mode === 'draw' ? '当前：绘画，点击切换到对话' : '当前：对话，点击切换到绘画'"
+          @click="toggleMode"
         >
-        <el-icon><Paperclip /></el-icon>
-      </label>
+          <el-icon v-if="mode === 'draw'"><Picture /></el-icon>
+          <el-icon v-else><ChatDotRound /></el-icon>
+          <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
+        </button>
+
+        <label
+          class="tool-btn tool-file-label"
+          :class="{ disabled: loading || uploading }"
+          title="上传文件"
+          aria-label="上传文件"
+        >
+          <input
+            id="desktop-file-input"
+            type="file"
+            class="sr-file-input"
+            :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
+            multiple
+            :disabled="loading || uploading"
+            @change="handleFileChange"
+          >
+          <el-icon><Paperclip /></el-icon>
+        </label>
+
+        <button
+          class="tool-btn"
+          type="button"
+          :disabled="loading || uploading"
+          :title="referenceImageCount ? `参考图 · ${referenceImageCount}` : '参考图'"
+          :aria-label="referenceImageCount ? `参考图（已添加 ${referenceImageCount} 张）` : '添加参考图'"
+          @click="openReferencePanel"
+        >
+          <el-icon><Picture /></el-icon>
+          <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
+        </button>
+
+        <button
+          class="tool-btn desktop-only"
+          type="button"
+          :disabled="loading || uploading"
+          title="截图（读取剪贴板或提示系统截图后粘贴）"
+          aria-label="截图"
+          @click="handleScreenshot"
+        >
+          <el-icon><Scissor /></el-icon>
+        </button>
+
+        <button
+          class="tool-btn"
+          type="button"
+          :title="mode === 'draw' ? '绘画设置' : `对话模型 · ${selectedProviderLabel}`"
+          :aria-label="mode === 'draw' ? '绘画设置' : '选择对话模型'"
+          @click="openSettingsPanel"
+        >
+          <el-icon><Setting /></el-icon>
+        </button>
+
+        <button
+          class="tool-btn"
+          type="button"
+          title="全屏编辑"
+          aria-label="全屏编辑"
+          @click="toggleFullscreenInput"
+        >
+          <el-icon><FullScreen /></el-icon>
+        </button>
+      </template>
 
       <button
-        class="tool-btn"
+        v-if="isEditing"
+        class="tool-btn edit-cancel-btn"
         type="button"
-        :disabled="loading || uploading"
-        :title="referenceImageCount ? `参考图 · ${referenceImageCount}` : '参考图'"
-        :aria-label="referenceImageCount ? `参考图（已添加 ${referenceImageCount} 张）` : '添加参考图'"
-        @click="openReferencePanel"
+        title="取消编辑"
+        @click="handleEditCancel"
       >
-        <el-icon><Picture /></el-icon>
-        <em v-if="referenceImageCount" class="tool-badge">{{ referenceImageCount }}</em>
+        取消
       </button>
 
-      <button
-        class="tool-btn desktop-only"
-        type="button"
-        :disabled="loading || uploading"
-        title="截图（读取剪贴板或提示系统截图后粘贴）"
-        aria-label="截图"
-        @click="handleScreenshot"
-      >
-        <el-icon><Scissor /></el-icon>
-      </button>
-
-      <button
-        class="tool-btn"
-        type="button"
-        :title="mode === 'draw' ? '绘画设置' : `对话模型 · ${selectedProviderLabel}`"
-        :aria-label="mode === 'draw' ? '绘画设置' : '选择对话模型'"
-        @click="openSettingsPanel"
-      >
-        <el-icon><Setting /></el-icon>
-      </button>
-
-      <button
-        class="tool-btn"
-        type="button"
-        title="全屏编辑"
-        aria-label="全屏编辑"
-        @click="toggleFullscreenInput"
-      >
-        <el-icon><FullScreen /></el-icon>
-      </button>
-
-      <span class="input-hint">Enter 发送, Shift+Enter 换行 · 支持拖拽/粘贴</span>
+      <span class="input-hint">{{ isEditing ? 'Ctrl + Enter 换行' : 'Enter 发送, Shift+Enter 换行 · 支持拖拽/粘贴' }}</span>
 
       <el-button
         v-if="loading && cancelable"
@@ -571,13 +635,13 @@ defineExpose({ clearDraft })
         v-else
         class="send-button"
         type="button"
-        :class="{ disabled: !canSend || loading }"
-        :disabled="!canSend || loading"
-        :title="mode === 'draw' ? '打开绘画面板' : '发送消息（Enter）'"
+        :class="{ disabled: isEditing ? !canEditSend || loading : !canSend || loading }"
+        :disabled="isEditing ? !canEditSend || loading : !canSend || loading"
+        :title="isEditing ? '保存并重新发送（Enter）' : (mode === 'draw' ? '打开绘画面板' : '发送消息（Enter）')"
         @click="handleSend"
       >
         <el-icon v-if="mode === 'chat'"><Promotion /></el-icon>
-        <span>{{ mode === 'draw' ? '生成' : '发送' }}</span>
+        <span>{{ isEditing ? '发送' : (mode === 'draw' ? '生成' : '发送') }}</span>
       </button>
     </div>
 
@@ -951,6 +1015,12 @@ defineExpose({ clearDraft })
   box-shadow: none;
 }
 .cancel-btn { flex-shrink: 0; min-width: 70px; border-radius: 9px; }
+.edit-cancel-btn {
+  flex: 0 0 auto;
+  color: #7a8498;
+  background: #f0f2f7;
+}
+.edit-cancel-btn:hover { color: #55627c; background: #e6eaf2; }
 
 .fullscreen-input-overlay {
   position: fixed;
