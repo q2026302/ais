@@ -11,7 +11,6 @@ import {
   Picture,
   Plus,
   Promotion,
-  Scissor,
   Setting,
   View,
 } from '@element-plus/icons-vue'
@@ -50,6 +49,7 @@ const settingsVisible = ref(false)
 const referenceVisible = ref(false)
 const referenceAdding = ref(false)
 const referenceUseOriginal = ref(false)
+const previewVisible = ref(false)
 const selectedHistoryIds = ref<string[]>([])
 const plusMenuVisible = ref(false)
 const plusMenuRef = ref<HTMLElement | null>(null)
@@ -182,12 +182,13 @@ function isImage(contentType: string): boolean {
 }
 
 function autoResizeTextarea() {
-  const el = fullscreenInput.value ? fullscreenInputRef.value : inputRef.value
+  // Fullscreen textarea fills the available height via flex, no auto-resize.
+  if (fullscreenInput.value) return
+  const el = inputRef.value
   if (!el) return
   el.style.height = 'auto'
   const lineHeight = parseInt(getComputedStyle(el).lineHeight, 10) || 22
-  const maxRows = fullscreenInput.value ? 20 : 6
-  const maxHeight = lineHeight * maxRows + 12
+  const maxHeight = lineHeight * 6 + 12
   el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`
   el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
 }
@@ -313,31 +314,6 @@ function toggleFullscreenInput() {
   })
 }
 
-async function handleScreenshot() {
-  if (props.loading || uploading.value) return
-  try {
-    if (navigator.clipboard && 'read' in navigator.clipboard) {
-      const items = await navigator.clipboard.read()
-      const imageFiles: File[] = []
-      for (const item of items) {
-        const imageType = item.types.find((type) => type.startsWith('image/'))
-        if (!imageType) continue
-        const blob = await item.getType(imageType)
-        const ext = imageType.split('/')[1] || 'png'
-        imageFiles.push(new File([blob], `screenshot-${Date.now()}.${ext}`, { type: imageType }))
-      }
-      if (imageFiles.length) {
-        for (const file of imageFiles) await uploadFile(file)
-        ElMessage.success(imageFiles.length === 1 ? '已从剪贴板添加截图' : `已从剪贴板添加 ${imageFiles.length} 张截图`)
-        return
-      }
-    }
-  } catch {
-    // Fall through to guidance when clipboard permission is denied.
-  }
-  ElMessage.info('请使用系统截图（Print Screen / Win+Shift+S），然后按 Ctrl+V 粘贴到输入框')
-}
-
 function handleSend() {
   if (isEditing.value) {
     handleEditSend()
@@ -424,7 +400,12 @@ function resetReferencePanel() {
 
 function openReferencePreview() {
   if (!referencePreviewUrls.value.length) return
-  window.open(referencePreviewUrls.value[0], '_blank', 'noopener')
+  previewVisible.value = true
+}
+
+function closeReferencePanel() {
+  referenceVisible.value = false
+  resetReferencePanel()
 }
 
 async function confirmReferenceSelection() {
@@ -544,24 +525,6 @@ defineExpose({ clearDraft })
           <span>{{ mode === 'draw' ? '绘画' : '对话' }}</span>
         </button>
 
-        <label
-          class="tool-btn tool-file-label"
-          :class="{ disabled: loading || uploading }"
-          title="上传文件"
-          aria-label="上传文件"
-        >
-          <input
-            id="desktop-file-input"
-            type="file"
-            class="sr-file-input"
-            :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
-            multiple
-            :disabled="loading || uploading"
-            @change="handleFileChange"
-          >
-          <el-icon><Paperclip /></el-icon>
-        </label>
-
         <div ref="plusMenuRef" class="plus-menu-wrap">
           <button
             class="tool-btn"
@@ -604,22 +567,11 @@ defineExpose({ clearDraft })
           ref="localFileInputRef"
           type="file"
           class="plus-local-input"
-          accept="image/*"
+          :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
           multiple
           :disabled="loading || uploading"
           @change="handleFileChange"
         >
-
-        <button
-          class="tool-btn desktop-only"
-          type="button"
-          :disabled="loading || uploading"
-          title="截图（读取剪贴板或提示系统截图后粘贴）"
-          aria-label="截图"
-          @click="handleScreenshot"
-        >
-          <el-icon><Scissor /></el-icon>
-        </button>
 
         <button
           class="tool-btn"
@@ -692,18 +644,26 @@ defineExpose({ clearDraft })
         :placeholder="mode === 'draw' ? '描述你想生成的画面...' : '输入消息或 /help 查看命令'"
         @paste="handlePaste"
         @keydown="handleInputKeydown"
-        @input="autoResizeTextarea"
       />
       <div class="fullscreen-input-footer">
+        <span class="fullscreen-input-hint">{{ isEditing ? 'Ctrl + Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
+        <button
+          v-if="isEditing"
+          type="button"
+          class="fullscreen-input-cancel"
+          @click="handleEditCancel"
+        >
+          取消
+        </button>
         <button
           class="send-button"
           type="button"
-          :class="{ disabled: !canSend || loading }"
-          :disabled="!canSend || loading"
+          :class="{ disabled: isEditing ? !canEditSend || loading : !canSend || loading }"
+          :disabled="isEditing ? !canEditSend || loading : !canSend || loading"
           @click="handleSend"
         >
           <el-icon><Promotion /></el-icon>
-          <span>{{ mode === 'draw' ? '生成' : '发送' }}</span>
+          <span>{{ isEditing ? '发送' : (mode === 'draw' ? '生成' : '发送') }}</span>
         </button>
       </div>
     </div>
@@ -768,23 +728,18 @@ defineExpose({ clearDraft })
           <strong>选择历史图片</strong>
           <span>多选历史作品作为参考图，确认后添加</span>
         </div>
+        <button
+          type="button"
+          class="drawer-title-close"
+          aria-label="关闭"
+          title="关闭"
+          @click="closeReferencePanel"
+        >
+          <el-icon><Close /></el-icon>
+        </button>
       </div>
       <div class="reference-panel">
         <div class="reference-body">
-          <div class="history-panel-toolbar">
-            <el-tooltip
-              v-if="showOriginalCheckbox"
-              content="仅对历史作品生效；本地图片始终为原图"
-              placement="top"
-              :show-after="200"
-            >
-              <label class="reference-original">
-                <input v-model="referenceUseOriginal" type="checkbox">
-                <span>原图</span>
-              </label>
-            </el-tooltip>
-            <span v-else class="history-panel-hint">选择历史图片作为参考图</span>
-          </div>
           <div class="reference-main">
             <template v-if="historyImages.length">
               <div class="history-reference-grid">
@@ -809,6 +764,17 @@ defineExpose({ clearDraft })
           </div>
         </div>
         <div class="reference-footer">
+          <el-tooltip
+            v-if="showOriginalCheckbox"
+            content="仅对历史作品生效；本地图片始终为原图"
+            placement="top"
+            :show-after="200"
+          >
+            <label class="reference-original">
+              <input v-model="referenceUseOriginal" type="checkbox">
+              <span>原图</span>
+            </label>
+          </el-tooltip>
           <div class="reference-preview-strip" aria-label="已选参考图">
             <template v-if="referencePreviewItems.length">
               <div
@@ -849,9 +815,25 @@ defineExpose({ clearDraft })
           >
             {{ referenceAdding ? '添加中…' : '添加' }}
           </button>
+          <button
+            type="button"
+            class="reference-cancel-btn"
+            @click="closeReferencePanel"
+          >
+            取消
+          </button>
         </div>
       </div>
     </el-drawer>
+
+    <el-image-viewer
+      v-if="previewVisible"
+      :url-list="referencePreviewUrls"
+      :initial-index="0"
+      teleported
+      :hide-on-click-modal="true"
+      @close="previewVisible = false"
+    />
   </div>
 </template>
 
@@ -953,20 +935,6 @@ defineExpose({ clearDraft })
 .tool-btn:hover { color: var(--app-primary, #536bf5); background: #f0f2ff; }
 .tool-btn:disabled,
 .tool-btn.disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
-.tool-btn.tool-file-label { margin: 0; }
-.sr-file-input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  margin: 0;
-  overflow: hidden;
-  opacity: 0;
-  z-index: 3000;
-  cursor: pointer;
-  border: 0;
-}
 .tool-btn.mode-btn {
   color: #4e62d2;
   background: #eef1ff;
@@ -1090,28 +1058,28 @@ defineExpose({ clearDraft })
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  min-height: 56px;
-  padding: 10px 18px;
+  min-height: 48px;
+  padding: 6px 14px;
   border-bottom: 1px solid #e5e9f2;
   background: rgba(255, 255, 255, .96);
 }
-.fullscreen-input-title { color: #2e3b58; font-size: 16px; font-weight: 700; }
+.fullscreen-input-title { color: #2e3b58; font-size: 14px; font-weight: 700; }
 .fullscreen-input-exit {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   color: #5a6a8a;
   cursor: pointer;
   border: 0;
-  border-radius: 11px;
+  border-radius: 9px;
   background: #edf0f6;
 }
 .fullscreen-textarea {
   flex: 1;
   width: 100%;
   margin: 0;
-  padding: 22px 24px;
+  padding: 18px 20px;
   color: #2e3b58;
   font: inherit;
   font-size: 16px;
@@ -1125,11 +1093,27 @@ defineExpose({ clearDraft })
 .fullscreen-input-footer {
   display: flex;
   flex: 0 0 auto;
+  align-items: center;
   justify-content: flex-end;
-  padding: 12px 18px;
+  gap: 10px;
+  padding: 10px 14px;
   border-top: 1px solid #e5e9f2;
   background: rgba(255, 255, 255, .96);
 }
+.fullscreen-input-hint { margin-right: auto; color: #a3abbb; font-size: 12px; }
+.fullscreen-input-cancel {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 14px;
+  color: #5a6790;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 0;
+  border-radius: 9px;
+  background: #eef1f7;
+}
+.fullscreen-input-cancel:hover { color: #55627c; background: #e6eaf2; }
 
 .drawer-title {
   display: flex;
@@ -1142,6 +1126,19 @@ defineExpose({ clearDraft })
 .drawer-title > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .drawer-title strong { color: #303d58; font-size: 16px; }
 .drawer-title span { color: #929bad; font-size: 12px; }
+.drawer-title-close {
+  display: grid;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: #6b7690;
+  cursor: pointer;
+  border: 0;
+  border-radius: 9px;
+  background: #f1f3f8;
+}
+.drawer-title-close:hover { color: #55627c; background: #e6eaf2; }
 .model-list { display: grid; gap: 8px; padding: 12px 0 4px; max-height: min(52vh, 420px); overflow-y: auto; }
 .model-row {
   display: flex;
@@ -1171,20 +1168,6 @@ defineExpose({ clearDraft })
   border-radius: 14px;
   background: #fff;
 }
-.history-panel-toolbar {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 10px;
-  min-height: 40px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #edf0f5;
-}
-.history-panel-hint {
-  color: #9aa3b5;
-  font-size: 12px;
-}
 .reference-main {
   min-width: 0;
   flex: 1;
@@ -1211,6 +1194,7 @@ defineExpose({ clearDraft })
 }
 .reference-original {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   margin: 0;
@@ -1281,7 +1265,8 @@ defineExpose({ clearDraft })
   background: rgba(55, 64, 88, .88);
 }
 .reference-preview-btn,
-.reference-add-btn {
+.reference-add-btn,
+.reference-cancel-btn {
   display: inline-flex;
   min-height: 36px;
   align-items: center;
@@ -1312,6 +1297,12 @@ defineExpose({ clearDraft })
   background: linear-gradient(140deg, #536bea, #7657d4);
   box-shadow: 0 4px 10px rgba(83, 96, 229, .2);
 }
+.reference-cancel-btn {
+  flex: 0 0 auto;
+  color: #5a6790;
+  background: #eef1f7;
+}
+.reference-cancel-btn:hover { color: #55627c; background: #e6eaf2; }
 .history-reference-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -52,6 +52,9 @@ const entryPrefix = computed(() => route.meta.mobileEntry ?? 'mobile')
 
 const messagesRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
+const fullscreenInputRef = ref<HTMLTextAreaElement | null>(null)
+const cameraInputRef = ref<HTMLInputElement | null>(null)
+const albumInputRef = ref<HTMLInputElement | null>(null)
 
 /** Keyboard state owned by FeishuMobileLayout (single visualViewport subscription). */
 const mobileKeyboard = inject<MobileKeyboardApi>('mobileKeyboard')
@@ -628,6 +631,8 @@ async function forceRefresh() {
 }
 
 function autoResizeTextarea() {
+  // Fullscreen textarea fills the viewport height via flex, no auto-resize.
+  if (fullscreenInput.value) return
   const el = inputRef.value
   if (!el) return
   el.style.height = 'auto'
@@ -640,7 +645,14 @@ function autoResizeTextarea() {
 
 function toggleFullscreenInput() {
   fullscreenInput.value = !fullscreenInput.value
-  if (!fullscreenInput.value) void nextTick(() => autoResizeTextarea())
+  void nextTick(() => {
+    if (fullscreenInput.value) {
+      fullscreenInputRef.value?.focus()
+    } else {
+      autoResizeTextarea()
+      inputRef.value?.focus()
+    }
+  })
 }
 
 async function uploadFile(file: File) {
@@ -691,6 +703,20 @@ function handleImagePick(event: Event) {
   referenceVisible.value = false
   resetReferencePanel()
   for (const file of files) void uploadFile(file)
+}
+
+/**
+ * 相机/相册按钮：在用户手势（@click）内同步调用 input.click()，确保 PWA
+ * （小米 Android WebAPK）能唤起系统相机 / 相册选择器。不能 await / 异步后再 click。
+ */
+function triggerCamera() {
+  if (store.loading || uploading.value || referenceAdding.value) return
+  cameraInputRef.value?.click()
+}
+
+function triggerAlbum() {
+  if (store.loading || uploading.value || referenceAdding.value) return
+  albumInputRef.value?.click()
 }
 
 async function handlePaste(event: ClipboardEvent) {
@@ -1023,8 +1049,9 @@ function onComposerFocus() {
   // PWA standalone: force the composer into view after keyboard opens,
   // since some Android overlay keyboards do not trigger a layout resize.
   void nextTick(() => {
-    if (isPwaEntry() && inputRef.value) {
-      inputRef.value.scrollIntoView({ block: 'center', behavior: 'instant' })
+    const el = fullscreenInput.value ? fullscreenInputRef.value : inputRef.value
+    if (isPwaEntry() && el) {
+      el.scrollIntoView({ block: 'center', behavior: 'instant' })
     }
   })
 }
@@ -1364,6 +1391,15 @@ const debugInfo = computed(() => {
           @focus="onComposerFocus"
           @blur="onComposerBlur"
         ></textarea>
+        <button
+          class="composer-expand-btn"
+          type="button"
+          aria-label="全屏编辑"
+          title="全屏编辑"
+          @click="toggleFullscreenInput"
+        >
+          <FullScreen aria-hidden="true" />
+        </button>
       </div>
       <div class="composer-toolbar" role="toolbar" aria-label="创作工具">
         <template v-if="!isEditing">
@@ -1446,12 +1482,11 @@ const debugInfo = computed(() => {
         <button type="button" class="fullscreen-input-exit" aria-label="退出全屏" @click="toggleFullscreenInput"><Close /></button>
       </div>
       <textarea
-        ref="inputRef"
+        ref="fullscreenInputRef"
         v-model="inputText"
         class="fullscreen-textarea"
         :placeholder="mode === 'draw' ? '描述你想生成的画面…' : '输入消息，或输入 /help 查看命令…'"
         @keydown="handleInputKeydown"
-        @input="autoResizeTextarea"
         @focus="onComposerFocus"
         @blur="onComposerBlur"
       ></textarea>
@@ -1499,40 +1534,28 @@ const debugInfo = computed(() => {
       <div class="reference-panel">
         <div class="reference-body">
           <aside class="reference-side-rail" aria-label="图片来源">
-            <div
+            <button
+              type="button"
               class="reference-side-action"
               :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="拍照"
               aria-label="拍照"
+              @click="triggerCamera"
             >
               <Camera aria-hidden="true" />
               <span>相机</span>
-              <input
-                type="file"
-                class="sr-file-input"
-                accept="image/*"
-                capture="environment"
-                :disabled="store.loading || uploading || referenceAdding"
-                @change="handleImagePick"
-              >
-            </div>
-            <div
+            </button>
+            <button
+              type="button"
               class="reference-side-action"
               :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="从相册选择"
               aria-label="从相册选择"
+              @click="triggerAlbum"
             >
               <Picture aria-hidden="true" />
               <span>相册</span>
-              <input
-                type="file"
-                class="sr-file-input"
-                accept="image/*"
-                multiple
-                :disabled="store.loading || uploading || referenceAdding"
-                @change="handleImagePick"
-              >
-            </div>
+            </button>
             <button
               type="button"
               class="reference-side-action"
@@ -1640,6 +1663,27 @@ const debugInfo = computed(() => {
         </div>
       </div>
     </el-drawer>
+
+    <!-- Hidden camera / album inputs. Explicit input.click() (not an overlaid
+         sr-file-input) is what reliably opens the system picker inside a PWA. -->
+    <input
+      ref="cameraInputRef"
+      type="file"
+      class="hidden-file-input"
+      accept="image/*"
+      capture="environment"
+      :disabled="store.loading || uploading || referenceAdding"
+      @change="handleImagePick"
+    >
+    <input
+      ref="albumInputRef"
+      type="file"
+      class="hidden-file-input"
+      accept="image/*"
+      multiple
+      :disabled="store.loading || uploading || referenceAdding"
+      @change="handleImagePick"
+    >
 
     <el-drawer v-model="modelVisible" direction="btt" size="68%" class="h5-drawer model-drawer" :with-header="false">
       <div class="drawer-title compact"><div><strong>选择{{ mode === 'draw' ? '绘画' : '对话' }}模型</strong><span>模型选择会保存到当前会话</span></div></div>
@@ -2094,6 +2138,17 @@ const debugInfo = computed(() => {
   border: 0;
   touch-action: manipulation;
 }
+/* Camera / album inputs are triggered explicitly via input.click(); keep them
+   off-screen (not display:none) so the browser still fires a real picker. */
+.hidden-file-input {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
 .tool-btn :deep(svg) {
   width: 20px;
   height: 20px;
@@ -2186,6 +2241,21 @@ const debugInfo = computed(() => {
   background: transparent;
 }
 .composer-main textarea::placeholder { color: #a1a9b8; }
+.composer-expand-btn {
+  display: grid;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  color: #8a94a8;
+  cursor: pointer;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+}
+.composer-expand-btn:active { color: #5366da; background: #e9edf5; }
+.composer-expand-btn :deep(svg) { width: 18px; height: 18px; }
 .upload-button, .send-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; padding: 0; cursor: pointer; border: 0; border-radius: 10px; }
 .upload-button { color: #69758e; background: #e9edf4; width: 30px; height: 30px; }
 .upload-button:disabled { opacity: .5; }
