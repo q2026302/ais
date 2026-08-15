@@ -1047,7 +1047,7 @@ defineExpose({ clearDraft })
 
 .fullscreen-input-overlay {
   position: fixed;
-  z-index: 2200;
+  z-index: 4000;
   inset: 0;
   display: flex;
   flex-direction: column;

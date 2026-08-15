@@ -706,16 +706,24 @@ function handleImagePick(event: Event) {
 }
 
 /**
- * 相机/相册按钮：在用户手势（@click）内同步调用 input.click()，确保 PWA
- * （小米 Android WebAPK）能唤起系统相机 / 相册选择器。不能 await / 异步后再 click。
+ * 相机/相册按钮：改为 <label> 包裹 overlaid <input type="file">（opacity:0 +
+ * position:absolute; inset:0 覆盖整个按钮），用户点击按钮即原生命中 input，
+ * 不依赖 JS click()。
+ *
+ * 兜底：部分 WebView 不转发 label→input 的原生点击（此时点击落在 label/图标/文字
+ * 上，event.target 不是 input），在用户手势（@click）内同步调用 input.click()，
+ * 确保 PWA（小米 Android WebAPK）也能唤起系统相机 / 相册。不能 await / 异步后再 click。
+ * 若点击已由 input 原生命中（event.target === input），则跳过 click() 避免二次唤起。
  */
-function triggerCamera() {
+function triggerCamera(event?: MouseEvent) {
   if (store.loading || uploading.value || referenceAdding.value) return
+  if (event && event.target === cameraInputRef.value) return
   cameraInputRef.value?.click()
 }
 
-function triggerAlbum() {
+function triggerAlbum(event?: MouseEvent) {
   if (store.loading || uploading.value || referenceAdding.value) return
+  if (event && event.target === albumInputRef.value) return
   albumInputRef.value?.click()
 }
 
@@ -1534,8 +1542,7 @@ const debugInfo = computed(() => {
       <div class="reference-panel">
         <div class="reference-body">
           <aside class="reference-side-rail" aria-label="图片来源">
-            <button
-              type="button"
+            <label
               class="reference-side-action"
               :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="拍照"
@@ -1544,9 +1551,17 @@ const debugInfo = computed(() => {
             >
               <Camera aria-hidden="true" />
               <span>相机</span>
-            </button>
-            <button
-              type="button"
+              <input
+                ref="cameraInputRef"
+                type="file"
+                class="reference-side-file-input"
+                accept="image/*"
+                capture="environment"
+                :disabled="store.loading || uploading || referenceAdding"
+                @change="handleImagePick"
+              >
+            </label>
+            <label
               class="reference-side-action"
               :class="{ disabled: store.loading || uploading || referenceAdding }"
               title="从相册选择"
@@ -1555,7 +1570,16 @@ const debugInfo = computed(() => {
             >
               <Picture aria-hidden="true" />
               <span>相册</span>
-            </button>
+              <input
+                ref="albumInputRef"
+                type="file"
+                class="reference-side-file-input"
+                accept="image/*"
+                multiple
+                :disabled="store.loading || uploading || referenceAdding"
+                @change="handleImagePick"
+              >
+            </label>
             <button
               type="button"
               class="reference-side-action"
@@ -1663,27 +1687,6 @@ const debugInfo = computed(() => {
         </div>
       </div>
     </el-drawer>
-
-    <!-- Hidden camera / album inputs. Explicit input.click() (not an overlaid
-         sr-file-input) is what reliably opens the system picker inside a PWA. -->
-    <input
-      ref="cameraInputRef"
-      type="file"
-      class="hidden-file-input"
-      accept="image/*"
-      capture="environment"
-      :disabled="store.loading || uploading || referenceAdding"
-      @change="handleImagePick"
-    >
-    <input
-      ref="albumInputRef"
-      type="file"
-      class="hidden-file-input"
-      accept="image/*"
-      multiple
-      :disabled="store.loading || uploading || referenceAdding"
-      @change="handleImagePick"
-    >
 
     <el-drawer v-model="modelVisible" direction="btt" size="68%" class="h5-drawer model-drawer" :with-header="false">
       <div class="drawer-title compact"><div><strong>选择{{ mode === 'draw' ? '绘画' : '对话' }}模型</strong><span>模型选择会保存到当前会话</span></div></div>
@@ -2138,16 +2141,20 @@ const debugInfo = computed(() => {
   border: 0;
   touch-action: manipulation;
 }
-/* Camera / album inputs are triggered explicitly via input.click(); keep them
-   off-screen (not display:none) so the browser still fires a real picker. */
-.hidden-file-input {
-  position: fixed;
-  top: -9999px;
-  left: -9999px;
-  width: 1px;
-  height: 1px;
+/* Overlaid camera / album input: transparent but covers the whole button
+   (opacity:0 + absolute inset:0), so a native tap hits the input directly —
+   no JS click() required, and it stays inside the visible viewport for PWA. */
+.reference-side-file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
   opacity: 0;
-  pointer-events: none;
+  cursor: pointer;
+  border: 0;
+  touch-action: manipulation;
 }
 .tool-btn :deep(svg) {
   width: 20px;
