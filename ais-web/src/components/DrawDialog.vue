@@ -11,6 +11,9 @@ const props = defineProps<{
   visible: boolean
   initialPrompt: string
   initialReferences: UploadResponse[]
+  initialSize?: string
+  initialQuality?: string
+  initialFormat?: string
   historyMessages: Message[]
   smartParseInitialPrompt?: boolean
   imageProviders: ModelProvider[]
@@ -157,10 +160,14 @@ watch(() => props.visible, (visible) => {
   historyImportingId.value = null
   historySelectedIds.value = []
   size.value = normalizeOption(parsed.size, sizeOptions.value)
+    || normalizeOption(props.initialSize, sizeOptions.value)
     || (usesRatioOptions.value ? '1:1' : '1024x1024')
   quality.value = normalizeQualityOption(parsed.quality, qualityOptions.value)
+    || normalizeQualityOption(props.initialQuality, qualityOptions.value)
     || (usesRatioOptions.value ? '1K' : isGptImageModel.value ? 'auto' : 'standard')
-  format.value = normalizeOption(parsed.format, formatOptions.value) || 'png'
+  format.value = normalizeOption(parsed.format, formatOptions.value)
+    || normalizeOption(props.initialFormat, formatOptions.value)
+    || 'png'
 }, { immediate: true })
 
 watch(selectedProviderId, () => {

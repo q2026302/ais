@@ -27,6 +27,9 @@ const editingAction = ref<'edit' | 'resend' | null>(null)
 const drawDialogVisible = ref(false)
 const drawInitialPrompt = ref('')
 const drawInitialReferences = ref<UploadResponse[]>([])
+const drawInitialSize = ref('1024x1024')
+const drawInitialQuality = ref('auto')
+const drawInitialFormat = ref('png')
 const drawSmartParseInitialPrompt = ref(false)
 const showScrollToBottom = ref(false)
 const viewMode = ref<'conversation' | 'gallery'>('conversation')
@@ -356,12 +359,18 @@ function handleDraw(payload: {
   attachmentIds: number[]
   attachments: UploadResponse[]
   chatProviderId: number | null
+  size?: string
+  quality?: string
+  format?: string
 }) {
   const references = payload.attachments.filter(isImageAttachment)
   const userPrompt = payload.prompt.trim()
   drawInitialReferences.value = references
   drawSmartParseInitialPrompt.value = !userPrompt
   drawInitialPrompt.value = userPrompt || getLastAssistantPrompt()
+  drawInitialSize.value = payload.size || '1024x1024'
+  drawInitialQuality.value = payload.quality || 'auto'
+  drawInitialFormat.value = payload.format || 'png'
   drawDialogVisible.value = true
 }
 
@@ -694,8 +703,10 @@ async function forceRefresh() {
         :loading="sending || store.loading"
         :cancelable="store.canCancel"
         :provider-options="store.chatProviders"
+        :image-providers="store.imageProviders"
         :active-session-id="store.activeSessionId"
         :active-chat-provider-id="chatProviderId"
+        :active-image-provider-id="imageProviderId"
         :history-messages="store.messages"
         :editing-message="editingMessage"
         :editing-action="editingAction"
@@ -704,12 +715,16 @@ async function forceRefresh() {
         @cancel="store.cancelActiveRequest"
         @edit-save="handleComposerEditSave"
         @edit-cancel="handleEditCancel"
+        @image-provider-change="handleImageProviderChange"
       />
 
       <DrawDialog
         v-model:visible="drawDialogVisible"
         :initial-prompt="drawInitialPrompt"
         :initial-references="drawInitialReferences"
+        :initial-size="drawInitialSize"
+        :initial-quality="drawInitialQuality"
+        :initial-format="drawInitialFormat"
         :history-messages="store.messages"
         :smart-parse-initial-prompt="drawSmartParseInitialPrompt"
         :image-providers="store.imageProviders"

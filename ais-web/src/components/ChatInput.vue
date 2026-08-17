@@ -24,8 +24,10 @@ const props = defineProps<{
   loading: boolean
   cancelable?: boolean
   providerOptions: ModelProvider[]
+  imageProviders: ModelProvider[]
   activeSessionId: number | null
   activeChatProviderId: number | null
+  activeImageProviderId: number | null
   historyMessages?: Message[]
   editingMessage?: Message | null
   editingAction?: 'edit' | 'resend' | null
@@ -33,10 +35,11 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [payload: { prompt: string; attachmentIds: number[]; attachments: UploadResponse[]; chatProviderId: number | null }]
-  draw: [payload: { prompt: string; attachmentIds: number[]; attachments: UploadResponse[]; chatProviderId: number | null }]
+  draw: [payload: { prompt: string; attachmentIds: number[]; attachments: UploadResponse[]; chatProviderId: number | null; size: string; quality: string; format: string }]
   cancel: []
   editSave: [payload: { messageId: number; content: string; chatProviderId: number | null; action: 'edit' | 'resend' }]
   editCancel: []
+  imageProviderChange: [id: number | null]
 }>()
 
 const inputText = ref('')
@@ -46,6 +49,11 @@ const uploading = ref(false)
 const mode = ref<'chat' | 'draw'>('chat')
 const fullscreenInput = ref(false)
 const settingsVisible = ref(false)
+const drawSettingsVisible = ref(false)
+const drawModelVisible = ref(false)
+const drawSize = ref('1024x1024')
+const drawQuality = ref('auto')
+const drawFormat = ref('png')
 const referenceVisible = ref(false)
 const referenceAdding = ref(false)
 const referenceUseOriginal = ref(false)
@@ -77,6 +85,41 @@ const defaultProviderId = computed(() => {
 })
 const selectedProviderLabel = computed(() => {
   const provider = props.providerOptions.find((item) => item.id === selectedProviderId.value)
+  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认'
+})
+
+// Draw settings: mirror the mobile draw-settings drawer. The option sets depend
+// on the resolved image provider's adapter (Gemini / Grsai Nano Banana / GPT).
+const selectedImageProvider = computed<ModelProvider | null>(() => {
+  if (props.activeImageProviderId == null) return null
+  return props.imageProviders.find((provider) => provider.id === props.activeImageProviderId) || null
+})
+const imageAdapter = computed(() => {
+  const configured = selectedImageProvider.value?.adapterType?.toUpperCase()
+  if (configured && configured !== 'AUTO') return configured
+  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
+  const providerId = selectedImageProvider.value?.providerId?.toLowerCase() || ''
+  if (providerId === 'grsai') return 'GRS_AI'
+  return model.includes('gemini') ? 'GEMINI_IMAGE' : 'OPENAI_IMAGE'
+})
+const usesRatioOptions = computed(() => imageAdapter.value === 'GEMINI_IMAGE'
+  || (imageAdapter.value === 'GRS_AI' && (selectedImageProvider.value?.modelName || '').toLowerCase().includes('nano-banana')))
+const isGptImageModel = computed(() => {
+  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
+  return (imageAdapter.value === 'OPENAI_IMAGE' || imageAdapter.value === 'GRS_AI')
+    && (model.includes('gpt-image') || model.includes('gpt image'))
+})
+const drawSizeOptions = computed(() => usesRatioOptions.value
+  ? ['1:1', '16:9', '9:16', '4:3', '3:4']
+  : isGptImageModel.value
+    ? ['1024x1024', '1536x1024', '1024x1536', 'auto']
+    : ['1024x1024', '512x512', '768x768', '1024x1792', '1792x1024'])
+const drawQualityOptions = computed(() => usesRatioOptions.value
+  ? ['1K', '2K', '4K']
+  : isGptImageModel.value ? ['auto', 'low', 'medium', 'high'] : ['standard', 'hd'])
+const drawFormatOptions = computed(() => usesRatioOptions.value ? ['png'] : ['png', 'jpeg', 'webp'])
+const drawProviderLabel = computed(() => {
+  const provider = selectedImageProvider.value
   return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认'
 })
 
@@ -153,9 +196,16 @@ watch(
   () => {
     settingsVisible.value = false
     referenceVisible.value = false
+    drawSettingsVisible.value = false
+    drawModelVisible.value = false
     resetReferencePanel()
+    backfillDrawSettingsFromHistory()
   },
 )
+
+// Keep draw params valid when the resolved image provider (and thus its option
+// set) changes, e.g. after switching the model in the header or the drawer.
+watch([() => props.activeImageProviderId, () => props.imageProviders.length], syncDrawOptions)
 
 watch(inputText, () => {
   void nextTick(() => autoResizeTextarea())
@@ -289,16 +339,48 @@ function openLocalFilePicker() {
 
 function openSettingsPanel() {
   if (mode.value === 'draw') {
-    // Keep DrawDialog as the desktop painting settings surface.
-    emit('draw', {
-      prompt: inputText.value.trim(),
-      attachmentIds: pendingAttachments.value.map((a) => a.id),
-      attachments: [...pendingAttachments.value],
-      chatProviderId: selectedProviderId.value,
-    })
+    // Painting mode: open only the parameter drawer (size/quality/format),
+    // never the DrawDialog / send flow.
+    openDrawSettings()
     return
   }
   settingsVisible.value = true
+}
+
+function openDrawSettings() {
+  syncDrawOptions()
+  drawSettingsVisible.value = true
+}
+
+function openDrawModelPicker() {
+  drawSettingsVisible.value = false
+  drawModelVisible.value = true
+}
+
+function selectImageProvider(id: number | null) {
+  emit('imageProviderChange', id)
+  drawModelVisible.value = false
+  syncDrawOptions()
+}
+
+function syncDrawOptions() {
+  if (!drawSizeOptions.value.includes(drawSize.value)) drawSize.value = usesRatioOptions.value ? '1:1' : '1024x1024'
+  if (!drawQualityOptions.value.includes(drawQuality.value)) drawQuality.value = usesRatioOptions.value ? '1K' : isGptImageModel.value ? 'auto' : 'standard'
+  if (!drawFormatOptions.value.includes(drawFormat.value)) drawFormat.value = 'png'
+}
+
+function backfillDrawSettingsFromHistory() {
+  const messages = props.historyMessages || []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.messageType === 'DRAW_REQUEST') {
+      if (message.drawSize) drawSize.value = message.drawSize
+      if (message.drawQuality) drawQuality.value = message.drawQuality
+      if (message.drawFormat) drawFormat.value = message.drawFormat
+      break
+    }
+  }
+  syncDrawOptions()
 }
 
 function toggleMode() {
@@ -328,7 +410,12 @@ function handleSend() {
     chatProviderId,
   }
   if (mode.value === 'draw') {
-    emit('draw', payload)
+    emit('draw', {
+      ...payload,
+      size: drawSize.value,
+      quality: drawQuality.value,
+      format: drawFormat.value,
+    })
     return
   }
   emit('send', payload)
@@ -630,43 +717,136 @@ defineExpose({ clearDraft })
       </button>
     </div>
 
-    <div v-if="fullscreenInput" class="fullscreen-input-overlay">
-      <div class="fullscreen-input-header">
-        <span class="fullscreen-input-title">{{ mode === 'draw' ? '输入绘画描述' : '输入消息' }}</span>
-        <button type="button" class="fullscreen-input-exit" aria-label="退出全屏" @click="toggleFullscreenInput">
-          <el-icon><Close /></el-icon>
+    <Teleport to="body">
+      <div v-if="fullscreenInput" class="fullscreen-input-overlay">
+        <div class="fullscreen-input-header">
+          <span class="fullscreen-input-title">{{ mode === 'draw' ? '输入绘画描述' : '输入消息' }}</span>
+          <button type="button" class="fullscreen-input-exit" aria-label="退出全屏" @click="toggleFullscreenInput">
+            <el-icon><Close /></el-icon>
+          </button>
+        </div>
+        <textarea
+          ref="fullscreenInputRef"
+          v-model="inputText"
+          class="fullscreen-textarea"
+          :placeholder="mode === 'draw' ? '描述你想生成的画面...' : '输入消息或 /help 查看命令'"
+          @paste="handlePaste"
+          @keydown="handleInputKeydown"
+        />
+        <div class="fullscreen-input-footer">
+          <span class="fullscreen-input-hint">{{ isEditing ? 'Ctrl + Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
+          <button
+            v-if="isEditing"
+            type="button"
+            class="fullscreen-input-cancel"
+            @click="handleEditCancel"
+          >
+            取消
+          </button>
+          <button
+            class="send-button"
+            type="button"
+            :class="{ disabled: isEditing ? !canEditSend || loading : !canSend || loading }"
+            :disabled="isEditing ? !canEditSend || loading : !canSend || loading"
+            @click="handleSend"
+          >
+            <el-icon><Promotion /></el-icon>
+            <span>{{ isEditing ? '发送' : (mode === 'draw' ? '生成' : '发送') }}</span>
+          </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <el-drawer
+      v-model="drawSettingsVisible"
+      direction="btt"
+      size="auto"
+      class="desktop-composer-drawer draw-settings-composer-drawer"
+      modal-class="desktop-composer-overlay"
+      :append-to-body="true"
+      :with-header="false"
+      :z-index="2102"
+    >
+      <div class="drawer-title">
+        <div>
+          <strong>绘画设置</strong>
+          <span>调整尺寸、质量与格式 · 当前模型 {{ drawProviderLabel }}</span>
+        </div>
+        <button
+          type="button"
+          class="drawer-title-close draw-model-switch"
+          aria-label="换模型"
+          title="换模型"
+          @click="openDrawModelPicker"
+        >
+          换模型
         </button>
       </div>
-      <textarea
-        ref="fullscreenInputRef"
-        v-model="inputText"
-        class="fullscreen-textarea"
-        :placeholder="mode === 'draw' ? '描述你想生成的画面...' : '输入消息或 /help 查看命令'"
-        @paste="handlePaste"
-        @keydown="handleInputKeydown"
-      />
-      <div class="fullscreen-input-footer">
-        <span class="fullscreen-input-hint">{{ isEditing ? 'Ctrl + Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
+      <div class="draw-settings-fields">
+        <label>
+          <span>尺寸 / 比例</span>
+          <el-select v-model="drawSize" aria-label="绘画尺寸或比例">
+            <el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" />
+          </el-select>
+        </label>
+        <label>
+          <span>质量</span>
+          <el-select v-model="drawQuality" aria-label="绘画质量">
+            <el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" />
+          </el-select>
+        </label>
+        <label>
+          <span>格式</span>
+          <el-select v-model="drawFormat" aria-label="图片格式">
+            <el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" />
+          </el-select>
+        </label>
+      </div>
+    </el-drawer>
+
+    <el-drawer
+      v-model="drawModelVisible"
+      direction="btt"
+      size="auto"
+      class="desktop-composer-drawer model-composer-drawer"
+      modal-class="desktop-composer-overlay"
+      :append-to-body="true"
+      :with-header="false"
+      :z-index="2102"
+    >
+      <div class="drawer-title">
+        <div>
+          <strong>选择绘画模型</strong>
+          <span>模型选择会保存到当前会话</span>
+        </div>
+      </div>
+      <div class="model-list">
         <button
-          v-if="isEditing"
           type="button"
-          class="fullscreen-input-cancel"
-          @click="handleEditCancel"
+          class="model-row"
+          :class="{ active: activeImageProviderId == null }"
+          @click="selectImageProvider(null)"
         >
-          取消
+          <span>
+            <strong>系统默认模型</strong>
+            <small>使用后台或会话默认配置</small>
+          </span>
         </button>
         <button
-          class="send-button"
+          v-for="provider in imageProviders"
+          :key="provider.id"
           type="button"
-          :class="{ disabled: isEditing ? !canEditSend || loading : !canSend || loading }"
-          :disabled="isEditing ? !canEditSend || loading : !canSend || loading"
-          @click="handleSend"
+          class="model-row"
+          :class="{ active: provider.id === activeImageProviderId }"
+          @click="selectImageProvider(provider.id)"
         >
-          <el-icon><Promotion /></el-icon>
-          <span>{{ isEditing ? '发送' : (mode === 'draw' ? '生成' : '发送') }}</span>
+          <span>
+            <strong>{{ provider.name || provider.providerId }}</strong>
+            <small>#{{ provider.id }} · {{ provider.modelName }}</small>
+          </span>
         </button>
       </div>
-    </div>
+    </el-drawer>
 
     <el-drawer
       v-model="settingsVisible"
@@ -1139,6 +1319,36 @@ defineExpose({ clearDraft })
   background: #f1f3f8;
 }
 .drawer-title-close:hover { color: #55627c; background: #e6eaf2; }
+.draw-model-switch {
+  width: auto;
+  min-width: 64px;
+  padding: 0 12px;
+  color: #4e62d2;
+  font-size: 13px;
+  font-weight: 700;
+  background: #eef1ff;
+}
+.draw-model-switch:hover { color: #3f51c4; background: #e3e8ff; }
+.draw-settings-fields {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+}
+.draw-settings-fields label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.draw-settings-fields label > span {
+  flex: 0 0 auto;
+  color: #4a5674;
+  font-size: 13px;
+  font-weight: 700;
+}
+.draw-settings-fields :deep(.el-select) {
+  width: 200px;
+}
 .model-list { display: grid; gap: 8px; padding: 12px 0 4px; max-height: min(52vh, 420px); overflow-y: auto; }
 .model-row {
   display: flex;
