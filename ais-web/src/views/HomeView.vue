@@ -37,6 +37,7 @@ const savedScrollTop = ref(0)
 const initialized = ref(false)
 const sidebarOpen = ref(false)
 const refreshing = ref(false)
+const composerFullscreen = ref(false)
 
 const chatProviderId = ref<number | null>(null)
 const imageProviderId = ref<number | null>(null)
@@ -590,7 +591,7 @@ async function forceRefresh() {
   <!-- Avoid fullscreen Element Plus mask while waiting for the model — it feels like a white screen. -->
   <div class="home-view" :class="{ 'is-busy': store.loading || sending }">
     <SessionSidebar :mobile-open="sidebarOpen" @close="sidebarOpen = false" />
-    <div class="chat-area">
+    <div class="chat-area" :class="{ 'composer-fullscreen': composerFullscreen }">
       <!-- Chat header with view and model controls -->
       <div class="chat-header">
         <el-button
@@ -716,6 +717,7 @@ async function forceRefresh() {
         @edit-save="handleComposerEditSave"
         @edit-cancel="handleEditCancel"
         @image-provider-change="handleImageProviderChange"
+        @fullscreen-change="composerFullscreen = $event"
       />
 
       <DrawDialog
@@ -796,6 +798,13 @@ async function forceRefresh() {
   overflow-y: auto;
   padding: 28px clamp(20px, 4vw, 56px) 18px;
   scroll-behavior: smooth;
+}
+
+/* Collapse the message list while the composer is expanded so ChatInput can
+   fill the pane below the header (Feishu-style fullscreen editor). */
+.chat-area.composer-fullscreen .messages,
+.chat-area.composer-fullscreen .scroll-bottom-button {
+  display: none;
 }
 
 .welcome {

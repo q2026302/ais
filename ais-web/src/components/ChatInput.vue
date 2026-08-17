@@ -40,6 +40,7 @@ const emit = defineEmits<{
   editSave: [payload: { messageId: number; content: string; chatProviderId: number | null; action: 'edit' | 'resend' }]
   editCancel: []
   imageProviderChange: [id: number | null]
+  fullscreenChange: [value: boolean]
 }>()
 
 const inputText = ref('')
@@ -198,6 +199,7 @@ watch(
     referenceVisible.value = false
     drawSettingsVisible.value = false
     drawModelVisible.value = false
+    fullscreenInput.value = false
     resetReferencePanel()
     backfillDrawSettingsFromHistory()
   },
@@ -210,6 +212,10 @@ watch([() => props.activeImageProviderId, () => props.imageProviders.length], sy
 watch(inputText, () => {
   void nextTick(() => autoResizeTextarea())
 })
+
+// Let HomeView collapse the message list while the composer is expanded so the
+// textarea can claim the whole pane below the chat header (Feishu-style).
+watch(fullscreenInput, (value) => emit('fullscreenChange', value))
 
 // When a message enters the composer for edit / resend, load its editable text
 // (pure prompt for DRAW_REQUEST). When editing exits, clear the draft.
@@ -550,7 +556,7 @@ defineExpose({ clearDraft })
   <div
     ref="composerRootRef"
     class="chat-input"
-    :class="{ dragging: isDragging }"
+    :class="{ dragging: isDragging, 'is-fullscreen': fullscreenInput }"
     @dragenter="onDragEnter"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
@@ -561,7 +567,7 @@ defineExpose({ clearDraft })
       <span>拖放文件到此处上传</span>
     </div>
 
-    <div v-if="pendingAttachments.length > 0" class="attachment-bar">
+    <div v-if="!fullscreenInput && pendingAttachments.length > 0" class="attachment-bar">
       <div
         v-for="att in pendingAttachments"
         :key="att.id"
@@ -586,7 +592,7 @@ defineExpose({ clearDraft })
       </div>
     </div>
 
-    <div class="composer-main">
+    <div v-if="!fullscreenInput" class="composer-main">
       <textarea
         ref="inputRef"
         v-model="inputText"
@@ -599,7 +605,7 @@ defineExpose({ clearDraft })
       />
     </div>
 
-    <div class="composer-toolbar" role="toolbar" aria-label="创作工具">
+    <div v-if="!fullscreenInput" class="composer-toolbar" role="toolbar" aria-label="创作工具">
       <template v-if="!isEditing">
         <button
           class="tool-btn mode-btn"
@@ -717,45 +723,43 @@ defineExpose({ clearDraft })
       </button>
     </div>
 
-    <Teleport to="body">
-      <div v-if="fullscreenInput" class="fullscreen-input-overlay">
-        <div class="fullscreen-input-header">
-          <span class="fullscreen-input-title">{{ mode === 'draw' ? '输入绘画描述' : '输入消息' }}</span>
-          <button type="button" class="fullscreen-input-exit" aria-label="退出全屏" @click="toggleFullscreenInput">
-            <el-icon><Close /></el-icon>
-          </button>
-        </div>
-        <textarea
-          ref="fullscreenInputRef"
-          v-model="inputText"
-          class="fullscreen-textarea"
-          :placeholder="mode === 'draw' ? '描述你想生成的画面...' : '输入消息或 /help 查看命令'"
-          @paste="handlePaste"
-          @keydown="handleInputKeydown"
-        />
-        <div class="fullscreen-input-footer">
-          <span class="fullscreen-input-hint">{{ isEditing ? 'Ctrl + Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
-          <button
-            v-if="isEditing"
-            type="button"
-            class="fullscreen-input-cancel"
-            @click="handleEditCancel"
-          >
-            取消
-          </button>
-          <button
-            class="send-button"
-            type="button"
-            :class="{ disabled: isEditing ? !canEditSend || loading : !canSend || loading }"
-            :disabled="isEditing ? !canEditSend || loading : !canSend || loading"
-            @click="handleSend"
-          >
-            <el-icon><Promotion /></el-icon>
-            <span>{{ isEditing ? '发送' : (mode === 'draw' ? '生成' : '发送') }}</span>
-          </button>
-        </div>
+    <div v-if="fullscreenInput" class="fullscreen-input-overlay">
+      <div class="fullscreen-input-header">
+        <span class="fullscreen-input-title">{{ mode === 'draw' ? '输入绘画描述' : '输入消息' }}</span>
+        <button type="button" class="fullscreen-input-exit" aria-label="退出全屏" @click="toggleFullscreenInput">
+          <el-icon><Close /></el-icon>
+        </button>
       </div>
-    </Teleport>
+      <textarea
+        ref="fullscreenInputRef"
+        v-model="inputText"
+        class="fullscreen-textarea"
+        :placeholder="mode === 'draw' ? '描述你想生成的画面...' : '输入消息或 /help 查看命令'"
+        @paste="handlePaste"
+        @keydown="handleInputKeydown"
+      />
+      <div class="fullscreen-input-footer">
+        <span class="fullscreen-input-hint">{{ isEditing ? 'Ctrl + Enter 换行' : 'Enter 发送 · Shift+Enter 换行' }}</span>
+        <button
+          v-if="isEditing"
+          type="button"
+          class="fullscreen-input-cancel"
+          @click="handleEditCancel"
+        >
+          取消
+        </button>
+        <button
+          class="send-button"
+          type="button"
+          :class="{ disabled: isEditing ? !canEditSend || loading : !canSend || loading }"
+          :disabled="isEditing ? !canEditSend || loading : !canSend || loading"
+          @click="handleSend"
+        >
+          <el-icon><Promotion /></el-icon>
+          <span>{{ isEditing ? '发送' : (mode === 'draw' ? '生成' : '发送') }}</span>
+        </button>
+      </div>
+    </div>
 
     <el-drawer
       v-model="drawSettingsVisible"
@@ -1032,6 +1036,21 @@ defineExpose({ clearDraft })
   border-color: #8ea0f5;
   box-shadow: 0 0 0 3px rgba(83, 103, 232, .12), 0 12px 32px rgba(46, 59, 117, .1);
 }
+/* Feishu-style fullscreen editor: expand inside the chat pane (below the header)
+   instead of covering the whole viewport, so the left session list stays visible. */
+.chat-input.is-fullscreen {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #f7f9fd;
+  box-shadow: none;
+  backdrop-filter: none;
+}
 .drag-overlay {
   position: absolute;
   z-index: 5;
@@ -1226,9 +1245,8 @@ defineExpose({ clearDraft })
 .edit-cancel-btn:hover { color: #55627c; background: #e6eaf2; }
 
 .fullscreen-input-overlay {
-  position: fixed;
-  z-index: 4000;
-  inset: 0;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #f7f9fd;
@@ -1568,6 +1586,16 @@ defineExpose({ clearDraft })
   margin: 0 auto;
   border-radius: 20px 20px 0 0;
   z-index: 3001 !important;
+}
+/* The painting-settings sheet is anchored to the viewport bottom. Cap its
+   height so the OS taskbar never hides the controls, and let the body scroll
+   when the viewport is short. */
+:global(.draw-settings-composer-drawer.el-drawer) {
+  max-height: min(560px, calc(100vh - 80px));
+}
+:global(.draw-settings-composer-drawer .el-drawer__body) {
+  overflow-y: auto;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
 }
 :global(.desktop-composer-drawer .el-drawer__body) {
   padding: 18px 18px calc(18px + env(safe-area-inset-bottom, 0px));

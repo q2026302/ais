@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { Close, Delete, Plus } from '@element-plus/icons-vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { Close, Delete, Expand, Fold, Plus } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useSessionStore } from '@/stores/session'
 import { formatRelativeSessionTime } from '@/utils/dateTime'
@@ -12,6 +12,50 @@ const emit = defineEmits<{ close: [] }>()
 
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
+
+// Desktop resizable / collapsible sidebar. The width lives in a CSS variable so
+// the mobile fixed-drawer rules (which set their own width) can still win.
+const SIDEBAR_MIN_WIDTH = 200
+const SIDEBAR_MAX_WIDTH = 400
+const SIDEBAR_DEFAULT_WIDTH = 272
+const sidebarWidth = ref(SIDEBAR_DEFAULT_WIDTH)
+const collapsed = ref(false)
+const resizing = ref(false)
+
+const sidebarStyle = computed(() => ({ '--sidebar-width': `${sidebarWidth.value}px` }))
+
+let resizeStartX = 0
+let resizeStartWidth = SIDEBAR_DEFAULT_WIDTH
+
+function startResize(event: PointerEvent) {
+  event.preventDefault()
+  resizing.value = true
+  resizeStartX = event.clientX
+  resizeStartWidth = sidebarWidth.value
+  document.body.classList.add('sidebar-resizing')
+  document.addEventListener('pointermove', onResizeMove)
+  document.addEventListener('pointerup', stopResize, { once: true })
+}
+
+function onResizeMove(event: PointerEvent) {
+  const delta = event.clientX - resizeStartX
+  sidebarWidth.value = Math.min(
+    SIDEBAR_MAX_WIDTH,
+    Math.max(SIDEBAR_MIN_WIDTH, resizeStartWidth + delta),
+  )
+}
+
+function stopResize() {
+  resizing.value = false
+  document.body.classList.remove('sidebar-resizing')
+  document.removeEventListener('pointermove', onResizeMove)
+}
+
+onBeforeUnmount(() => {
+  document.body.classList.remove('sidebar-resizing')
+  document.removeEventListener('pointermove', onResizeMove)
+  document.removeEventListener('pointerup', stopResize)
+})
 
 async function handleNew() {
   const session = await store.createSession()
@@ -46,53 +90,83 @@ function formatTime(dateStr: string): string {
 </script>
 
 <template>
-  <div class="sidebar" :class="{ 'is-mobile-open': props.mobileOpen }">
+  <div
+    class="sidebar"
+    :class="{ 'is-mobile-open': props.mobileOpen, 'is-collapsed': collapsed, 'is-resizing': resizing }"
+    :style="sidebarStyle"
+  >
     <div v-if="props.mobileOpen" class="sidebar-backdrop" aria-hidden="true" @click="emit('close')"></div>
-    <div class="sidebar-header">
-      <div class="sidebar-heading">
-        <span class="sidebar-title">历史会话</span>
-        <small>{{ sessions.length }} 个会话</small>
-      </div>
-      <el-button
-        v-if="props.mobileOpen"
-        text
-        :icon="Close"
-        aria-label="关闭会话列表"
-        title="关闭会话列表"
-        class="mobile-close"
-        @click="emit('close')"
-      />
-      <el-button type="primary" size="small" @click="handleNew" :icon="Plus">
-        新建
-      </el-button>
-    </div>
-    <div class="session-list">
-      <div
-        v-for="s in sessions"
-        :key="s.id"
-        class="session-item"
-        :class="{ active: s.id === activeId }"
-        @click="handleSelect(s.id)"
-      >
-        <div class="session-title">{{ s.title || '新会话' }}</div>
-        <div class="session-meta">
-          <span class="session-time">{{ formatTime(s.updatedAt) }}</span>
+
+    <button
+      v-if="collapsed"
+      type="button"
+      class="sidebar-expand"
+      aria-label="展开会话列表"
+      title="展开会话列表"
+      @click="collapsed = false"
+    >
+      <el-icon><Expand /></el-icon>
+    </button>
+
+    <template v-else>
+      <div class="sidebar-header">
+        <div class="sidebar-heading">
+          <span class="sidebar-title">历史会话</span>
+          <small>{{ sessions.length }} 个会话</small>
+        </div>
+        <div class="sidebar-actions">
+          <el-button
+            v-if="props.mobileOpen"
+            text
+            :icon="Close"
+            aria-label="关闭会话列表"
+            title="关闭会话列表"
+            class="mobile-close"
+            @click="emit('close')"
+          />
           <el-button
             text
-            size="small"
-            type="danger"
-            class="delete-btn"
-            :icon="Delete"
-            :aria-label="`删除会话 ${s.title || '新会话'}`"
-            title="删除会话"
-            @click.stop="handleDelete(s.id)"
+            :icon="Fold"
+            aria-label="折叠会话列表"
+            title="折叠会话列表"
+            class="collapse-btn"
+            @click="collapsed = true"
           />
+          <el-button type="primary" size="small" @click="handleNew" :icon="Plus">
+            新建
+          </el-button>
         </div>
       </div>
-      <div v-if="sessions.length === 0" class="empty-hint">
-        暂无会话，点击「新建」开始
+      <div class="session-list">
+        <div
+          v-for="s in sessions"
+          :key="s.id"
+          class="session-item"
+          :class="{ active: s.id === activeId }"
+          @click="handleSelect(s.id)"
+        >
+          <div class="session-title">{{ s.title || '新会话' }}</div>
+          <div class="session-meta">
+            <span class="session-time">{{ formatTime(s.updatedAt) }}</span>
+            <el-button
+              text
+              size="small"
+              type="danger"
+              class="delete-btn"
+              :icon="Delete"
+              :aria-label="`删除会话 ${s.title || '新会话'}`"
+              title="删除会话"
+              @click.stop="handleDelete(s.id)"
+            />
+          </div>
+        </div>
+        <div v-if="sessions.length === 0" class="empty-hint">
+          暂无会话，点击「新建」开始
+        </div>
       </div>
-    </div>
+    </template>
+
+    <div v-if="!collapsed" class="resize-handle" aria-hidden="true" @pointerdown="startResize"></div>
   </div>
 </template>
 
@@ -103,7 +177,7 @@ function formatTime(dateStr: string): string {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  width: 272px;
+  width: var(--sidebar-width, 272px);
   overflow: hidden;
   border-right: 1px solid #e5e8f4;
   background: linear-gradient(180deg, #f9faff 0%, #f3f5fc 100%);
@@ -112,18 +186,60 @@ function formatTime(dateStr: string): string {
 .sidebar-backdrop { display: none; }
 .sidebar-header, .session-list { position: relative; z-index: 1; }
 
+.sidebar.is-collapsed {
+  width: 40px;
+  align-items: center;
+  padding-top: 14px;
+}
+.sidebar-expand {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  color: #6b7690;
+  cursor: pointer;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+.sidebar-expand:hover { color: #4e62d2; background: #eef1ff; }
+
+.resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background .16s ease;
+}
+.resize-handle:hover,
+.sidebar.is-resizing .resize-handle { background: #b9c2ec; }
+
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 16px 14px;
+  gap: 8px;
+  padding: 18px 14px 14px 16px;
   border-bottom: 1px solid rgba(227, 230, 243, .8);
 }
 .sidebar-heading { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .sidebar-title { color: #3a4665; font-size: 13px; font-weight: 800; letter-spacing: .02em; }
 .sidebar-heading small { color: #a0a8ba; font-size: 10px; }
+.sidebar-actions { display: flex; align-items: center; gap: 4px; }
 .sidebar-header :deep(.el-button) { height: 30px; padding: 0 10px; border-radius: 9px; }
+.collapse-btn { color: #7a84a0; }
+.collapse-btn:hover { color: #4e62d2; background: #eef1ff; }
 .mobile-close { display: none; }
+
+:global(body.sidebar-resizing) {
+  cursor: col-resize;
+  user-select: none;
+}
 
 .session-list { flex: 1; overflow-y: auto; padding: 10px 9px 16px; }
 .session-item {
@@ -150,10 +266,12 @@ function formatTime(dateStr: string): string {
 
 @media (max-width: 760px) { .sidebar { width: 208px; } .sidebar-backdrop { display: none; }
 .sidebar-header, .session-list { position: relative; z-index: 1; }
+.resize-handle { display: none; }
 
 .sidebar-header { padding-left: 12px; padding-right: 12px; } }
 @media (max-width: 600px) {
   .sidebar { display: none; }
+  .collapse-btn { display: none; }
   .sidebar.is-mobile-open {
     position: fixed;
     inset: 0 auto 0 0;

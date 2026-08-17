@@ -89,9 +89,12 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
-    // Embedded production resources must remain relative to the servlet context;
-    // the dev server should use an absolute root so / and /ais/ both work.
-    base: mode === 'production' ? './' : '/',
+    // Production assets use an absolute context path so any deep SPA route
+    // (e.g. /ais/mobile/sessions) resolves them to /ais/assets/... instead of
+    // /ais/mobile/assets/... — which the backend SPA fallback would answer as
+    // text/html and white-screen the page. The dev server uses an absolute root
+    // so both / and /ais/ work.
+    base: mode === 'production' ? `${contextPath}/` : '/',
     plugins: [
       vue(),
       vueDevTools(),
