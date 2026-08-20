@@ -55,6 +55,9 @@ jobs:
             sleep 5
           done
 
+      - name: Run Tests
+        run: ./gradlew test --console=plain
+
       - name: Build JAR
         run: ./gradlew bootJar
 
