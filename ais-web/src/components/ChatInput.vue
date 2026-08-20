@@ -1542,7 +1542,9 @@ defineExpose({ clearDraft })
 .history-reference-tile {
   position: relative;
   min-width: 0;
-  aspect-ratio: 1;
+  /* Definite height instead of aspect-ratio (same overlap fix as the mobile
+     history grid): avoid aspect-ratio-derived row sizing in embedded WebViews. */
+  height: 94px;
   padding: 0;
   overflow: hidden;
   cursor: pointer;

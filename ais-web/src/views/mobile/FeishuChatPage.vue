@@ -2742,7 +2742,11 @@ const debugInfo = computed(() => {
 .history-reference-tile {
   position: relative;
   min-width: 0;
-  aspect-ratio: 1;
+  /* Definite height instead of aspect-ratio: some Android PWA / WebView engines
+     (e.g. Xiaomi WebAPK) fail to resolve the aspect-ratio-derived grid row,
+     collapsing rows and stacking every tile into an overlapping deck. A fixed
+     height keeps rows stable and each tile independently tappable. */
+  height: 94px;
   padding: 0;
   overflow: hidden;
   cursor: pointer;
