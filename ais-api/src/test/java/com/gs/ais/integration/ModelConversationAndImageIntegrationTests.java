@@ -1,6 +1,7 @@
 package com.gs.ais.integration;
 
 import com.gs.ais.client.LlmClient;
+import com.gs.ais.config.StoragePaths;
 import com.gs.ais.dto.request.DrawRequest;
 import com.gs.ais.dto.response.TestConnectionResponse;
 import com.gs.ais.model.ModelProviderDefaults;
@@ -38,7 +39,6 @@ import org.springframework.web.client.RestTemplate;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -95,6 +95,9 @@ class ModelConversationAndImageIntegrationTests {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private StoragePaths storagePaths;
 
     private MockRestServiceServer server;
 
@@ -1118,7 +1121,7 @@ class ModelConversationAndImageIntegrationTests {
     }
 
     private Attachment saveReferenceImage() throws IOException {
-        Path dir = Paths.get("uploads", "attachments");
+        Path dir = storagePaths.attachmentDir();
         Files.createDirectories(dir);
         String filename = "it-reference-" + UUID.randomUUID() + ".png";
         Files.write(dir.resolve(filename), ONE_PIXEL_PNG_BYTES);
@@ -1134,7 +1137,7 @@ class ModelConversationAndImageIntegrationTests {
 
     private void assertSavedImageExists(String imageUrl) {
         String filename = imageUrl.replace("/api/images/", "");
-        Path path = Paths.get("uploads").resolve(filename);
+        Path path = storagePaths.uploadDir().resolve(filename);
         assertTrue(Files.exists(path), () -> "Generated image file should exist: " + path);
     }
 }
