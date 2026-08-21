@@ -893,6 +893,139 @@ class ModelConversationAndImageIntegrationTests {
         assertArrayEquals(ONE_PIXEL_PNG_BYTES, result);
     }
 
+    @Test
+    void xaiTextToImageUsesJsonGenerationsWithVendorParameters() {
+        ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "grok-imagine-image-2.0");
+        imageProvider.setBaseUrl("https://api.x.ai");
+        imageProvider = modelProviderRepository.saveAndFlush(imageProvider);
+
+        server.expect(requestTo("https://api.x.ai/v1/images/generations"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer " + API_KEY))
+                .andExpect(content().string(containsString("\"model\":\"grok-imagine-image-2.0\"")))
+                .andExpect(content().string(containsString("\"aspect_ratio\":\"1:1\"")))
+                .andExpect(content().string(containsString("\"resolution\":\"1k\"")))
+                .andExpect(content().string(containsString("\"response_format\":\"b64_json\"")))
+                .andExpect(content().string(not(containsString("\"size\""))))
+                .andExpect(content().string(not(containsString("\"output_format\""))))
+                .andRespond(withSuccess("""
+                        {"data":[{"b64_json":"%s"}]}
+                        """.formatted(ONE_PIXEL_PNG_BASE64), MediaType.APPLICATION_JSON));
+
+        byte[] result = llmClient.generateImage(
+                "画一只水彩风格的猫",
+                imageProvider,
+                new LlmClient.ImageGenerationOptions("1024x1024", "high", "png"),
+                List.of());
+
+        assertArrayEquals(ONE_PIXEL_PNG_BYTES, result);
+    }
+
+    @Test
+    void xaiImageEditUsesJsonContentTypeAndInlineDataUrlReference() {
+        // AUTO: the grok-imagine model name alone must route to xAI's JSON edit protocol.
+        ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "grok-imagine-image-2.0");
+        imageProvider = modelProviderRepository.saveAndFlush(imageProvider);
+
+        server.expect(requestTo(BASE_URL + "/images/edits"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer " + API_KEY))
+                .andExpect(content().string(containsString("\"model\":\"grok-imagine-image-2.0\"")))
+                .andExpect(content().string(containsString("\"image\":{\"url\":\"data:image/png;base64,")))
+                .andExpect(content().string(containsString("\"type\":\"image_url\"")))
+                .andExpect(content().string(containsString("data:image/png;base64," + ONE_PIXEL_PNG_BASE64)))
+                .andExpect(content().string(not(containsString("name=\"image\""))))
+                .andExpect(content().string(not(containsString("boundary"))))
+                .andRespond(withSuccess("""
+                        {"data":[{"b64_json":"%s"}]}
+                        """.formatted(ONE_PIXEL_PNG_BASE64), MediaType.APPLICATION_JSON));
+
+        byte[] result = llmClient.generateImage(
+                "把参考图改成海报",
+                imageProvider,
+                new LlmClient.ImageGenerationOptions("1536x1024", "high", "png"),
+                List.of(new LlmClient.ReferenceImage(
+                        "reference.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES)));
+
+        assertArrayEquals(ONE_PIXEL_PNG_BYTES, result);
+    }
+
+    @Test
+    void xaiImageEditSubmitsMultipleReferencesAsJsonArray() {
+        ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "grok-imagine-image-2.0");
+        imageProvider.setAdapterType("XAI_IMAGE");
+        imageProvider = modelProviderRepository.saveAndFlush(imageProvider);
+
+        server.expect(requestTo(BASE_URL + "/images/edits"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE))
+                .andExpect(content().string(containsString("\"images\":[{\"url\":\"data:image/png;base64,")))
+                .andExpect(content().string(not(containsString("\"image\":{\"url\""))))
+                .andExpect(content().string(containsString("\"type\":\"image_url\"")))
+                .andRespond(withSuccess("""
+                        {"data":[{"b64_json":"%s"}]}
+                        """.formatted(ONE_PIXEL_PNG_BASE64), MediaType.APPLICATION_JSON));
+
+        byte[] result = llmClient.generateImage(
+                "多图编辑",
+                imageProvider,
+                null,
+                List.of(
+                        new LlmClient.ReferenceImage("a.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES),
+                        new LlmClient.ReferenceImage("b.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES)));
+
+        assertArrayEquals(ONE_PIXEL_PNG_BYTES, result);
+    }
+
+    @Test
+    void xaiImageEditRejectsMoreThanThreeReferences() {
+        ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "grok-imagine-image-2.0");
+        imageProvider.setAdapterType("XAI_IMAGE");
+        imageProvider = modelProviderRepository.saveAndFlush(imageProvider);
+        final ModelProvider provider = imageProvider;
+
+        RuntimeException error = assertThrows(RuntimeException.class, () -> llmClient.generateImage(
+                "四张参考图",
+                provider,
+                null,
+                List.of(
+                        new LlmClient.ReferenceImage("a.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES),
+                        new LlmClient.ReferenceImage("b.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES),
+                        new LlmClient.ReferenceImage("c.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES),
+                        new LlmClient.ReferenceImage("d.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES))));
+
+        assertTrue(error.getMessage().contains("最多支持 3 张参考图"));
+    }
+
+    @Test
+    void explicitOpenAiAdapterOverridesXaiAutoDetection() {
+        ModelProvider imageProvider = saveProvider(ProviderType.IMAGE, "grok-imagine-image-2.0");
+        imageProvider.setBaseUrl("https://api.x.ai");
+        imageProvider.setAdapterType("OPENAI_IMAGE");
+        imageProvider = modelProviderRepository.saveAndFlush(imageProvider);
+
+        server.expect(requestTo("https://api.x.ai/v1/images/edits"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().string(containsString("name=\"model\"")))
+                .andExpect(content().string(containsString("grok-imagine-image-2.0")))
+                .andExpect(content().string(containsString("name=\"image\"")))
+                .andExpect(content().string(containsString("reference.png")))
+                .andRespond(withSuccess("""
+                        {"data":[{"b64_json":"%s"}]}
+                        """.formatted(ONE_PIXEL_PNG_BASE64), MediaType.APPLICATION_JSON));
+
+        byte[] result = llmClient.generateImage(
+                "保持 OpenAI 兼容",
+                imageProvider,
+                null,
+                List.of(new LlmClient.ReferenceImage(
+                        "reference.png", MediaType.IMAGE_PNG_VALUE, ONE_PIXEL_PNG_BYTES)));
+
+        assertArrayEquals(ONE_PIXEL_PNG_BYTES, result);
+    }
+
 
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)

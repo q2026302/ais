@@ -247,6 +247,12 @@ public class LlmClient {
         if (isGeminiImageAdapter(imageProvider)) {
             return generateGeminiImage(prompt, imageProvider, options, safeReferences);
         }
+        if (isXaiImageAdapter(imageProvider)) {
+            if (!safeReferences.isEmpty()) {
+                return generateXaiImageEdit(prompt, imageProvider, options, safeReferences);
+            }
+            return generateXaiImageGeneration(prompt, imageProvider, options);
+        }
         if (!safeReferences.isEmpty()) {
             return generateImageEdit(prompt, imageProvider, options, safeReferences);
         }
@@ -656,6 +662,136 @@ public class LlmClient {
         return extractImageBytes(response);
     }
 
+    /**
+     * xAI (Grok Imagine) text-to-image. Matches the OpenAI-compatible JSON
+     * {@code /images/generations} endpoint but maps parameters into xAI's
+     * {@code aspect_ratio}/{@code resolution}/{@code quality} vocabulary instead
+     * of forwarding OpenAI's {@code size}/{@code output_format}.
+     */
+    private byte[] generateXaiImageGeneration(String prompt, ModelProvider imageProvider,
+                                              ImageGenerationOptions options) {
+        String url = ApiRequestUrlUtils.endpoint(imageProvider.getBaseUrl(), "/images/generations");
+
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("model", imageProvider.getModelName());
+        requestBody.put("prompt", prompt);
+        applyJsonConfig(requestBody, imageProvider.getConfigJson(), "image", "model", "prompt", "image", "images");
+        requestBody.putIfAbsent("n", 1);
+        applyXaiImageOptions(requestBody, options);
+        requestBody.putIfAbsent("response_format", "b64_json");
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, jsonHeaders(imageProvider));
+        log.debug("Calling xAI image generation API at {} with model {}", url, imageProvider.getModelName());
+        ResponseEntity<Map> response = templateFor(imageProvider).postForEntity(url, request, Map.class);
+        return extractImageBytes(response);
+    }
+
+    /**
+     * xAI (Grok Imagine) image edit. xAI only accepts {@code application/json}
+     * for {@code /images/edits} (its multipart {@code images.edit()} is explicitly
+     * unsupported), so reference images are submitted inline as data URLs.
+     */
+    private byte[] generateXaiImageEdit(String prompt, ModelProvider imageProvider,
+                                        ImageGenerationOptions options,
+                                        List<ReferenceImage> referenceImages) {
+        String url = ApiRequestUrlUtils.endpoint(imageProvider.getBaseUrl(), "/images/edits");
+
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+        requestBody.put("model", imageProvider.getModelName());
+        requestBody.put("prompt", prompt);
+        applyJsonConfig(requestBody, imageProvider.getConfigJson(), "image", "model", "prompt", "image", "images");
+        applyXaiImageOptions(requestBody, options);
+        applyXaiReferenceImages(requestBody, referenceImages);
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, jsonHeaders(imageProvider));
+        log.debug("Calling xAI image edit API at {} with {} reference image(s)", url, referenceImages.size());
+        ResponseEntity<Map> response = templateFor(imageProvider).postForEntity(url, request, Map.class);
+        return extractImageBytes(response);
+    }
+
+    /**
+     * Maps vendor-neutral draw options into xAI's parameter vocabulary. OpenAI's
+     * {@code size} (e.g. {@code 1024x1024}) is translated to {@code aspect_ratio},
+     * while {@code 1k}/{@code 2k} style qualities map to {@code resolution} and
+     * {@code low}/{@code medium} map to xAI's reduced-quality {@code quality}.
+     */
+    private void applyXaiImageOptions(Map<String, Object> requestBody, ImageGenerationOptions options) {
+        if (options == null) return;
+        String aspectRatio = xaiAspectRatio(options.size());
+        if (hasText(aspectRatio)) requestBody.put("aspect_ratio", aspectRatio);
+        String resolution = xaiResolution(options.quality(), options.size());
+        if (hasText(resolution)) requestBody.put("resolution", resolution);
+        String quality = xaiQuality(options.quality());
+        if (hasText(quality)) requestBody.put("quality", quality);
+    }
+
+    private void applyXaiReferenceImages(Map<String, Object> requestBody, List<ReferenceImage> referenceImages) {
+        if (referenceImages == null || referenceImages.isEmpty()) return;
+        if (referenceImages.size() > 3) {
+            throw new IllegalArgumentException(
+                    "xAI 图编辑最多支持 3 张参考图，当前提交了 " + referenceImages.size() + " 张");
+        }
+        List<Map<String, Object>> images = referenceImages.stream().map(this::xaiImageRef).toList();
+        if (images.size() == 1) {
+            requestBody.put("image", images.getFirst());
+        } else {
+            requestBody.put("images", images);
+        }
+    }
+
+    private Map<String, Object> xaiImageRef(ReferenceImage image) {
+        Map<String, Object> ref = new LinkedHashMap<>();
+        ref.put("url", toDataUrl(image));
+        ref.put("type", "image_url");
+        return ref;
+    }
+
+    private String xaiAspectRatio(String size) {
+        if (!hasText(size)) return null;
+        String normalized = size.trim().toLowerCase(Locale.ROOT).replace('×', 'x').replace('*', 'x');
+        if (normalized.contains(":")) return normalized;
+        return switch (normalized) {
+            case "1024x1024", "512x512", "768x768" -> "1:1";
+            case "1536x1024", "1792x1024" -> "3:2";
+            case "1024x1536", "1024x1792" -> "2:3";
+            case "1920x1080", "1280x720" -> "16:9";
+            case "1080x1920", "720x1280" -> "9:16";
+            default -> null;
+        };
+    }
+
+    private String xaiResolution(String quality, String size) {
+        if (hasText(quality)) {
+            String normalized = quality.trim().toLowerCase(Locale.ROOT);
+            if ("1k".equals(normalized) || "2k".equals(normalized)) return normalized;
+        }
+        if (!hasText(size) || !size.toLowerCase(Locale.ROOT).contains("x")) return null;
+        try {
+            String[] parts = size.toLowerCase(Locale.ROOT).replace('×', 'x').split("x");
+            int maximum = Math.max(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]));
+            if (maximum <= 1024) return "1k";
+            if (maximum <= 2048) return "2k";
+        } catch (RuntimeException ignored) {
+            // Non-numeric dimensions are aspect-ratio style and carry no resolution signal.
+        }
+        return null;
+    }
+
+    private String xaiQuality(String quality) {
+        if (!hasText(quality)) return null;
+        String normalized = quality.trim().toLowerCase(Locale.ROOT);
+        return "low".equals(normalized) || "medium".equals(normalized) ? normalized : null;
+    }
+
+    private HttpHeaders jsonHeaders(ModelProvider provider) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (provider != null && hasText(provider.getApiKey())) {
+            headers.setBearerAuth(provider.getApiKey());
+        }
+        return headers;
+    }
+
     private void applyImageOptions(Map<String, Object> requestBody,
                                    ModelProvider imageProvider,
                                    ImageGenerationOptions options) {
@@ -794,6 +930,44 @@ public class LlmClient {
         String model = provider != null && provider.getModelName() != null
                 ? provider.getModelName().toLowerCase() : "";
         return model.contains("gemini");
+    }
+
+    /**
+     * Detects the xAI (Grok Imagine) image adapter. An explicit {@code XAI_IMAGE}
+     * adapter always wins; an explicit {@code OPENAI_IMAGE} disables detection;
+     * otherwise AUTO falls back to baseUrl/model/provider features so existing
+     * records pointing at {@code api.x.ai} or {@code grok-imagine*} route to the
+     * JSON edit protocol without requiring a manual migration.
+     */
+    private boolean isXaiImageAdapter(ModelProvider provider) {
+        String adapter = provider != null && provider.getAdapterType() != null
+                ? provider.getAdapterType().trim().toUpperCase(Locale.ROOT) : "AUTO";
+        if ("XAI_IMAGE".equals(adapter)) return true;
+        if ("OPENAI_IMAGE".equals(adapter)) return false;
+        return isXaiLikeProvider(provider);
+    }
+
+    private boolean isXaiLikeProvider(ModelProvider provider) {
+        if (provider == null) return false;
+
+        String baseUrl = provider.getBaseUrl();
+        if (baseUrl != null && baseUrl.toLowerCase(Locale.ROOT).contains("api.x.ai")) {
+            return true;
+        }
+
+        String model = provider.getModelName();
+        if (model != null) {
+            String normalized = model.trim().toLowerCase(Locale.ROOT);
+            if (normalized.startsWith("grok-imagine")) return true;
+            if (normalized.startsWith("grok-") && normalized.contains("-image")) return true;
+        }
+
+        String providerId = provider.getProviderId();
+        if (providerId != null) {
+            String normalized = providerId.trim().toLowerCase(Locale.ROOT);
+            if (normalized.contains("x.ai") || normalized.contains("xai")) return true;
+        }
+        return false;
     }
 
     private boolean isGptImageModel(ModelProvider provider) {

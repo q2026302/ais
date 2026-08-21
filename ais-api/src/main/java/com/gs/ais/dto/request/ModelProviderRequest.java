@@ -47,7 +47,7 @@ public class ModelProviderRequest {
     private Integer maxRetries;
     @Schema(description = "图片重试退避基准秒数", defaultValue = "20")
     private Integer retryBackoffSeconds;
-    @Schema(description = "图片适配器：AUTO、OPENAI_IMAGE、GEMINI_IMAGE", defaultValue = "AUTO")
+    @Schema(description = "图片适配器：AUTO、OPENAI_IMAGE、GEMINI_IMAGE、GRS_AI、XAI_IMAGE", defaultValue = "AUTO")
     private String adapterType;
     @Schema(description = "图像模型并发上限，留空/0 则使用全局默认值")
     private Integer imageQueueConcurrency;
