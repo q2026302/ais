@@ -59,6 +59,12 @@ const referenceVisible = ref(false)
 const referenceAdding = ref(false)
 const referenceUseOriginal = ref(false)
 const previewVisible = ref(false)
+// PC 输入区浮层层级收口，自上而下：预览浮层 > el-drawer > 抽屉遮罩。
+// 各抽屉虽通过 :z-index 传值(2100~2102)，但都被全局
+// `.desktop-composer-drawer.el-drawer { z-index: 3001 !important }` 统一收口为 3001。
+// 预览浮层必须稳定高于所有抽屉，故固定为更高的常量；后续新增抽屉只要沿用
+// `.desktop-composer-drawer` 类（或被收口到 ≤ 3001），预览就仍在其上，不会回归。
+const PREVIEW_Z_INDEX = 4000
 const selectedHistoryIds = ref<string[]>([])
 const plusMenuVisible = ref(false)
 const plusMenuRef = ref<HTMLElement | null>(null)
@@ -1014,6 +1020,7 @@ defineExpose({ clearDraft })
       v-if="previewVisible"
       :url-list="referencePreviewUrls"
       :initial-index="0"
+      :z-index="PREVIEW_Z_INDEX"
       teleported
       :hide-on-click-modal="true"
       @close="previewVisible = false"
@@ -1542,9 +1549,9 @@ defineExpose({ clearDraft })
 .history-reference-tile {
   position: relative;
   min-width: 0;
-  /* Definite height instead of aspect-ratio (same overlap fix as the mobile
-     history grid): avoid aspect-ratio-derived row sizing in embedded WebViews. */
-  height: 94px;
+  /* 正方形(1:1)缩略图：图片由 el-image 的 fit="cover" 等比居中裁切，不拉伸不变形。
+     PC 浏览器对 aspect-ratio 支持良好；移动端 FeishuH5View 仍用固定高度方案，互不影响。 */
+  aspect-ratio: 1 / 1;
   padding: 0;
   overflow: hidden;
   cursor: pointer;
