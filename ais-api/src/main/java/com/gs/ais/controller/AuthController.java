@@ -77,16 +77,23 @@ public class AuthController {
     }
 
     @GetMapping("/captcha")
-    public Map<String, Object> captcha() {
+    public Map<String, Object> captcha(HttpServletRequest httpRequest) {
         SecuritySettings settings = securitySettingsService.getOrCreate();
         if (!settings.isCaptchaEnabled()) {
             return Map.of("enabled", false);
         }
-        CaptchaService.CaptchaChallenge challenge = captchaService.createChallenge();
+        CaptchaService.SliderChallenge challenge =
+                captchaService.createChallenge(ClientIpUtils.resolve(httpRequest));
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("enabled", true);
         body.put("captchaId", challenge.captchaId());
-        body.put("imageBase64", challenge.imageBase64());
+        body.put("backgroundImage", challenge.backgroundImage());
+        body.put("pieceImage", challenge.pieceImage());
+        body.put("backgroundWidth", challenge.backgroundWidth());
+        body.put("backgroundHeight", challenge.backgroundHeight());
+        body.put("pieceWidth", challenge.pieceWidth());
+        body.put("pieceHeight", challenge.pieceHeight());
+        body.put("pieceY", challenge.pieceY());
         body.put("expiresInSeconds", challenge.expiresInSeconds());
         return body;
     }
@@ -117,7 +124,13 @@ public class AuthController {
 
         SecuritySettings settings = securitySettingsService.getOrCreate();
         if (settings.isCaptchaEnabled()) {
-            captchaService.validateAndConsume(request.captchaId(), request.captchaCode());
+            try {
+                captchaService.validateAndConsume(request.captchaId(), request.captchaX(), request.track());
+            } catch (AuthException ex) {
+                // Unlike the old character captcha, a failed slider challenge counts toward the IP lock.
+                loginProtectionService.recordFailure(ip, request.username());
+                throw ex;
+            }
         }
 
         try {
@@ -312,7 +325,8 @@ public class AuthController {
             @NotBlank String keyId,
             @NotBlank String encryptedPassword,
             String captchaId,
-            String captchaCode
+            Integer captchaX,
+            java.util.List<CaptchaService.TrackPoint> track
     ) {
         public LoginRequest {
             if (StringUtils.hasText(username)) {

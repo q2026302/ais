@@ -883,7 +883,7 @@ function formatTime(value: string) {
               <div class="default-field"><label>失败次数阈值</label><el-input-number v-model="securitySettings.maxFailures" :min="1" :max="100" /><small>同一 IP 在时间窗口内达到该次数后触发锁定</small></div>
               <div class="default-field"><label>统计窗口（分钟）</label><el-input-number v-model="securitySettings.failureWindowMinutes" :min="1" :max="1440" /><small>超过窗口后失败计数清零重新累计</small></div>
               <div class="default-field"><label>锁定时长（分钟）</label><el-input-number v-model="securitySettings.lockDurationMinutes" :min="1" :max="10080" /><small>锁定期间拒绝该 IP 的登录请求</small></div>
-              <div class="default-field"><label>启用验证码</label><el-switch v-model="securitySettings.captchaEnabled" /><small>开启后登录页需要图形验证码</small></div>
+              <div class="default-field"><label>启用验证码</label><el-switch v-model="securitySettings.captchaEnabled" /><small>开启后登录页需要滑块验证码</small></div>
             </div>
           </el-card>
           <el-card class="defaults-card" shadow="never">

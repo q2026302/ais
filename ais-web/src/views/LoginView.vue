@@ -2,10 +2,11 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, MagicStick, Refresh } from '@element-plus/icons-vue'
-import { authApi } from '@/api/auth'
+import { ArrowRight, MagicStick } from '@element-plus/icons-vue'
+import { authApi, type CaptchaTrackPoint } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { md5Hex } from '@/utils/passwordCrypto'
+import SliderCaptcha from '@/components/SliderCaptcha.vue'
 import {
   scrollElementIntoVisualViewport,
   subscribeVisualViewport,
@@ -18,10 +19,18 @@ const router = useRouter()
 
 const username = ref('')
 const password = ref('')
-const captchaCode = ref('')
 const captchaId = ref('')
-const captchaImage = ref('')
+const captchaBackground = ref('')
+const captchaPiece = ref('')
+const captchaBackgroundWidth = ref(0)
+const captchaBackgroundHeight = ref(0)
+const captchaPieceWidth = ref(0)
+const captchaPieceHeight = ref(0)
+const captchaPieceY = ref(0)
 const captchaEnabled = ref(true)
+const captchaKey = ref(0)
+const captchaX = ref<number | null>(null)
+const captchaTrack = ref<CaptchaTrackPoint[]>([])
 const loading = ref(false)
 const captchaLoading = ref(false)
 const pageRef = ref<HTMLElement | null>(null)
@@ -65,13 +74,24 @@ async function refreshCaptcha() {
     captchaEnabled.value = result.enabled
     if (!result.enabled) {
       captchaId.value = ''
-      captchaImage.value = ''
-      captchaCode.value = ''
+      captchaBackground.value = ''
+      captchaPiece.value = ''
+      captchaX.value = null
+      captchaTrack.value = []
+      captchaKey.value++
       return
     }
     captchaId.value = result.captchaId || ''
-    captchaImage.value = result.imageBase64 || ''
-    captchaCode.value = ''
+    captchaBackground.value = result.backgroundImage || ''
+    captchaPiece.value = result.pieceImage || ''
+    captchaBackgroundWidth.value = result.backgroundWidth || 0
+    captchaBackgroundHeight.value = result.backgroundHeight || 0
+    captchaPieceWidth.value = result.pieceWidth || 0
+    captchaPieceHeight.value = result.pieceHeight || 0
+    captchaPieceY.value = result.pieceY || 0
+    captchaX.value = null
+    captchaTrack.value = []
+    captchaKey.value++
   } catch (error: any) {
     ElMessage.error(error.message || '验证码加载失败')
   } finally {
@@ -79,13 +99,29 @@ async function refreshCaptcha() {
   }
 }
 
+function onSliderVerify(payload: { x: number; track: CaptchaTrackPoint[] }) {
+  captchaX.value = payload.x
+  captchaTrack.value = payload.track
+  if (!username.value.trim() || !password.value) {
+    ElMessage.warning('请先输入用户名和密码')
+    captchaX.value = null
+    captchaTrack.value = []
+    captchaKey.value++ // reset the slider position without consuming the challenge
+    return
+  }
+  void handleLogin()
+}
+
 async function handleLogin() {
   if (!username.value.trim() || !password.value) {
     ElMessage.warning('请输入用户名和密码')
     return
   }
-  if (captchaEnabled.value && !captchaCode.value.trim()) {
-    ElMessage.warning('请输入验证码')
+  if (
+    captchaEnabled.value &&
+    (!captchaId.value || captchaX.value == null || captchaTrack.value.length === 0)
+  ) {
+    ElMessage.warning('请完成滑块验证')
     return
   }
   loading.value = true
@@ -94,7 +130,8 @@ async function handleLogin() {
       username: username.value.trim(),
       passwordDigest: md5Hex(password.value),
       captchaId: captchaEnabled.value ? captchaId.value : undefined,
-      captchaCode: captchaEnabled.value ? captchaCode.value.trim() : undefined,
+      captchaX: captchaEnabled.value ? (captchaX.value ?? undefined) : undefined,
+      captchaTrack: captchaEnabled.value ? captchaTrack.value : undefined,
     })
     ElMessage.success(auth.isAdmin ? '管理员登录成功' : '登录成功')
     await redirectAfterLogin()
@@ -174,36 +211,37 @@ async function redirectAfterLogin() {
           />
         </label>
 
-        <label v-if="captchaEnabled" class="field">
-          <span>验证码</span>
-          <div class="captcha-row">
-            <el-input
-              v-model="captchaCode"
-              placeholder="输入图中的字符"
-              size="large"
-              maxlength="8"
-            />
+        <div v-if="captchaEnabled" class="field captcha-field">
+          <div class="captcha-heading">
+            <span>安全验证</span>
             <button
               type="button"
-              class="captcha-image"
+              class="captcha-refresh"
               :disabled="captchaLoading"
-              title="点击刷新验证码"
-              aria-label="刷新验证码"
-              @click="refreshCaptcha"
-            >
-              <img v-if="captchaImage" :src="captchaImage" alt="验证码图片，点击刷新" />
-              <span v-else>{{ captchaLoading ? '加载中' : '点击获取' }}</span>
-            </button>
-            <el-button
-              :icon="Refresh"
-              circle
-              :loading="captchaLoading"
               aria-label="刷新验证码"
               title="刷新验证码"
               @click="refreshCaptcha"
-            />
+            >
+              {{ captchaLoading ? '加载中…' : '换一张' }}
+            </button>
           </div>
-        </label>
+          <div v-loading="captchaLoading" class="slider-captcha-wrap">
+            <SliderCaptcha
+              v-if="captchaBackground && captchaPiece"
+              :key="captchaKey"
+              :background-image="captchaBackground"
+              :piece-image="captchaPiece"
+              :background-width="captchaBackgroundWidth"
+              :background-height="captchaBackgroundHeight"
+              :piece-width="captchaPieceWidth"
+              :piece-height="captchaPieceHeight"
+              :piece-y="captchaPieceY"
+              :disabled="loading"
+              @verify="onSliderVerify"
+            />
+            <div v-else class="captcha-placeholder">{{ captchaLoading ? '加载中…' : '验证码加载失败，请刷新' }}</div>
+          </div>
+        </div>
 
         <el-button type="primary" size="large" native-type="submit" :loading="loading" class="submit">
           <span>进入工作台</span>
@@ -309,12 +347,14 @@ async function redirectAfterLogin() {
 .card-heading p { margin: 0; color: #8791aa; font-size: 13px; }
 .field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
 .field > span { color: #55617b; font-size: 13px; font-weight: 700; }
-.captcha-row { display: grid; grid-template-columns: minmax(0, 1fr) 122px 40px; gap: 8px; align-items: center; }
-.captcha-image { height: 40px; padding: 0; overflow: hidden; cursor: pointer; border: 1px solid #e0e5f5; border-radius: 10px; background: #f7f8fd; transition: border-color .18s ease, box-shadow .18s ease; }
-.captcha-image:hover { border-color: #aab5fa; box-shadow: 0 4px 12px rgba(82, 103, 246, .12); }
-.captcha-image:disabled { cursor: wait; opacity: .65; }
-.captcha-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.captcha-image span { display: grid; place-items: center; height: 100%; color: #8a94aa; font-size: 11px; }
+.captcha-field { margin-bottom: 16px; }
+.captcha-heading { display: flex; align-items: center; justify-content: space-between; }
+.captcha-heading > span { color: #55617b; font-size: 13px; font-weight: 700; }
+.captcha-refresh { padding: 2px 6px; cursor: pointer; border: 0; border-radius: 6px; background: transparent; color: #6575df; font-size: 12px; }
+.captcha-refresh:hover { background: #f0f3fe; }
+.captcha-refresh:disabled { cursor: wait; opacity: .6; }
+.slider-captcha-wrap { min-height: 96px; }
+.captcha-placeholder { display: grid; place-items: center; height: 96px; color: #9aa3ba; font-size: 12px; border: 1px dashed #e0e5f5; border-radius: 12px; }
 .submit { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 46px; margin-top: 8px; border-radius: 12px; background: linear-gradient(110deg, #536bf5, #795be8); box-shadow: 0 10px 22px rgba(82, 103, 246, .25); }
 
 /* Real border so the field itself is rounded, not only the focus glow */
@@ -375,6 +415,5 @@ async function redirectAfterLogin() {
 @media (max-width: 420px) {
   .login-page { padding-inline: 12px; }
   .login-card { padding-inline: 18px; }
-  .captcha-row { grid-template-columns: minmax(0, 1fr) 105px 36px; gap: 6px; }
 }
 </style>

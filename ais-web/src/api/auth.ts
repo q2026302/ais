@@ -42,8 +42,20 @@ export interface AuthStatusResponse {
 export interface CaptchaResponse {
   enabled: boolean
   captchaId?: string
-  imageBase64?: string
+  backgroundImage?: string
+  pieceImage?: string
+  backgroundWidth?: number
+  backgroundHeight?: number
+  pieceWidth?: number
+  pieceHeight?: number
+  pieceY?: number
   expiresInSeconds?: number
+}
+
+export interface CaptchaTrackPoint {
+  x: number
+  y: number
+  t: number
 }
 
 export interface PasswordKeyResponse {
@@ -57,7 +69,8 @@ export interface LoginPayload {
   username: string
   passwordDigest: string
   captchaId?: string
-  captchaCode?: string
+  captchaX?: number
+  captchaTrack?: CaptchaTrackPoint[]
 }
 
 export const authApi = {
@@ -73,7 +86,8 @@ export const authApi = {
         keyId: key.keyId,
         encryptedPassword,
         captchaId: payload.captchaId,
-        captchaCode: payload.captchaCode,
+        captchaX: payload.captchaX,
+        track: payload.captchaTrack,
       })
       .then((r) => r.data)
   },
