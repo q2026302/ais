@@ -38,7 +38,7 @@ const pieceStyle = computed(() => ({
 }))
 
 const thumbStyle = computed(() => ({ left: `${pieceLeft.value}px` }))
-const fillStyle = computed(() => ({ width: `${pieceLeft.value + 18}px` }))
+const fillStyle = computed(() => ({ width: `${pieceLeft.value + 20}px` }))
 
 function measureScale() {
   const bg = bgRef.value
@@ -163,20 +163,20 @@ defineExpose({ reset })
         alt=""
         draggable="false"
       />
-    </div>
-    <div
-      ref="trackRef"
-      class="slider-track"
-      :class="{ dragging }"
-      @pointerdown="onPointerDown"
-    >
-      <span class="track-fill" :style="fillStyle" />
-      <span class="track-hint">按住滑块拖动，对准缺口后松手</span>
-      <span class="track-thumb" :style="thumbStyle" aria-label="拖动滑块">
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-          <path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </span>
+      <div
+        ref="trackRef"
+        class="slider-track"
+        :class="{ dragging }"
+        @pointerdown="onPointerDown"
+      >
+        <span class="track-fill" :style="fillStyle" />
+        <span class="track-hint">按住滑块，对准缺口后松手</span>
+        <span class="track-thumb" :style="thumbStyle" aria-label="拖动滑块">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
+      </div>
     </div>
   </div>
 </template>
@@ -211,19 +211,25 @@ defineExpose({ reset })
   position: absolute;
   top: 0;
   left: 0;
+  z-index: 2;
   pointer-events: none;
   filter: drop-shadow(0 3px 6px rgba(24, 32, 78, 0.28));
   will-change: left;
 }
 .slider-track {
-  position: relative;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
-  height: 44px;
-  margin-top: 10px;
-  border-radius: 12px;
-  background: #f2f4fc;
-  border: 1px solid #e0e5f5;
+  height: 34px;
+  border-radius: 0 0 11px 11px;
+  background: rgba(255, 255, 255, 0.62);
+  border-top: 1px solid rgba(224, 229, 245, 0.9);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   cursor: grab;
   overflow: hidden;
 }
@@ -232,36 +238,36 @@ defineExpose({ reset })
 }
 .track-fill {
   position: absolute;
-  top: -1px;
-  bottom: -1px;
-  left: -1px;
-  background: linear-gradient(110deg, rgba(83, 107, 245, 0.18), rgba(121, 91, 232, 0.22));
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(110deg, rgba(83, 107, 245, 0.2), rgba(121, 91, 232, 0.24));
   border-right: 1px solid rgba(83, 107, 245, 0.4);
   pointer-events: none;
 }
 .track-hint {
   flex: 1;
   text-align: center;
-  color: #9aa3ba;
+  color: #6b7690;
   font-size: 12px;
   pointer-events: none;
 }
 .track-thumb {
   position: absolute;
-  top: -1px;
-  bottom: -1px;
+  top: 2px;
+  bottom: 2px;
   left: 0;
   display: grid;
   place-items: center;
-  width: 44px;
+  width: 40px;
   color: #fff;
   background: linear-gradient(135deg, #536bf5, #795be8);
-  border-radius: 12px;
-  box-shadow: 0 6px 16px rgba(82, 103, 246, 0.35);
+  border-radius: 9px;
+  box-shadow: 0 4px 12px rgba(82, 103, 246, 0.35);
   cursor: grab;
 }
 .slider-track.dragging .track-thumb {
   cursor: grabbing;
-  box-shadow: 0 8px 20px rgba(82, 103, 246, 0.45);
+  box-shadow: 0 6px 16px rgba(82, 103, 246, 0.45);
 }
 </style>

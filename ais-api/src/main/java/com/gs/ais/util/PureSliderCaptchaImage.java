@@ -15,14 +15,21 @@ import java.security.SecureRandom;
  * The correct X position is never embedded in the returned bytes; it is returned to the caller
  * (CaptchaService) and stored server-side only.
  *
- * <p>Piece geometry: a rounded square with a semicircular tab on top. The piece PNG is
- * {@code pieceWidth x (pieceHeight + tabRadius)}; the top {@code tabRadius} rows hold the tab, so the
- * piece's bounding-box top maps to {@code notchY - tabRadius} in background coordinates.
+ * <p>Piece geometry: a rounded square (core {@code pieceWidth x pieceHeight}) with a semicircular
+ * tab of radius {@link #TAB_RADIUS} protruding from the top edge. The piece PNG canvas is
+ * {@code pieceWidth x (pieceHeight + tabRadius)}; its row 0 is the tab's top, so the piece canvas
+ * top maps to {@code notchY - tabRadius} in background coordinates (returned as {@link Render#pieceY()}).
+ * The notch is carved with the exact same shape at the exact same coordinates, so the piece and the
+ * notch are complementary and align flush when the piece is dropped onto the notch.
+ *
+ * <p>The frontend overlays a compact slider track over the bottom {@value #TRACK_RESERVE_PX}
+ * background pixels, so the piece (core + tab) is kept in the upper region of the background to stay
+ * clear of that track.
  */
 public final class PureSliderCaptchaImage {
 
     public static final int BACKGROUND_WIDTH = 320;
-    public static final int BACKGROUND_HEIGHT = 160;
+    public static final int BACKGROUND_HEIGHT = 112;
 
     public static final int PIECE_WIDTH = 44;
     public static final int PIECE_HEIGHT = 44;
@@ -31,6 +38,9 @@ public final class PureSliderCaptchaImage {
 
     /** Acceptable horizontal error, in background pixels, between the reported and the correct X. */
     public static final int TOLERANCE_PX = 5;
+
+    /** Bottom strip of the background (in background px) reserved for the frontend's overlaid slider track. */
+    public static final int TRACK_RESERVE_PX = 38;
 
     private static final int PIECE_PNG_HEIGHT = PIECE_HEIGHT + TAB_RADIUS;
 
@@ -42,7 +52,10 @@ public final class PureSliderCaptchaImage {
         int[] background = renderBackground(rng);
 
         int notchX = 20 + rng.nextInt(BACKGROUND_WIDTH - PIECE_WIDTH - 40);
-        int notchY = TAB_RADIUS + 10 + rng.nextInt(BACKGROUND_HEIGHT - PIECE_HEIGHT - TAB_RADIUS - 20);
+        // Keep the piece (core + tab) inside the upper region so it stays clear of the bottom track.
+        int minNotchY = TAB_RADIUS + 6;
+        int maxNotchY = BACKGROUND_HEIGHT - PIECE_HEIGHT - TRACK_RESERVE_PX;
+        int notchY = minNotchY + rng.nextInt(Math.max(1, maxNotchY - minNotchY + 1));
 
         int[] piece = renderPiece(background, notchX, notchY, rng);
         carveNotch(background, notchX, notchY);
@@ -120,7 +133,8 @@ public final class PureSliderCaptchaImage {
         int shadowOffsetY = 3;
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                double cov = shapeCoverage(x + 0.5 - shadowOffsetX, y + 0.5 - shadowOffsetY);
+                // Piece-canvas row 0 is the tab's top, i.e. local shape y = -TAB_RADIUS.
+                double cov = shapeCoverage(x + 0.5 - shadowOffsetX, y + 0.5 - TAB_RADIUS - shadowOffsetY);
                 if (cov <= 0) {
                     continue;
                 }
@@ -132,7 +146,7 @@ public final class PureSliderCaptchaImage {
         // Copy the untouched background texture inside the piece shape.
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                double cov = shapeCoverage(x + 0.5, y + 0.5);
+                double cov = shapeCoverage(x + 0.5, y + 0.5 - TAB_RADIUS);
                 if (cov <= 0) {
                     continue;
                 }
@@ -150,7 +164,7 @@ public final class PureSliderCaptchaImage {
         // Crisp light edge so the piece reads as a distinct tile.
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                double cov = shapeCoverage(x + 0.5, y + 0.5);
+                double cov = shapeCoverage(x + 0.5, y + 0.5 - TAB_RADIUS);
                 if (cov > 0 && cov < 1) {
                     int a = (int) Math.round(130 * (1 - cov));
                     piece[y * w + x] = blendOver(piece[y * w + x], 255, 255, 255, a);
@@ -173,20 +187,14 @@ public final class PureSliderCaptchaImage {
                 }
                 int idx = y * BACKGROUND_WIDTH + x;
                 int src = background[idx];
-                int r = ch(src, 16);
-                int g = ch(src, 8);
-                int b = ch(src, 0);
                 if (cov >= 0.95) {
-                    // Interior: a clearly visible "hole".
-                    r = (int) Math.round(r * 0.46);
-                    g = (int) Math.round(g * 0.46);
-                    b = (int) Math.round(b * 0.46);
-                    background[idx] = pack(255, r, g, b);
-                } else {
-                    // Edge band: dark outline.
-                    int amount = (int) Math.round(200 * cov);
-                    background[idx] = blendOver(src, 52, 62, 98, amount);
+                    // Interior: keep the original texture untouched so the dropped piece completes
+                    // the image seamlessly (piece content == background pixels at this exact spot).
+                    continue;
                 }
+                // Edge band: dark outline so the notch target stays clearly visible on the background.
+                int amount = (int) Math.round(220 * cov);
+                background[idx] = blendOver(src, 52, 62, 98, amount);
             }
         }
     }

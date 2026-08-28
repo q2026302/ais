@@ -117,7 +117,7 @@ public class CaptchaService {
         }
 
         int x0 = track.get(0).x();
-        int maxDisplacement = 0;
+        long maxDisplacement = 0;
         int prevX = x0;
         long prevT = firstT;
         for (int i = 0; i < track.size(); i++) {
@@ -126,8 +126,10 @@ public class CaptchaService {
                 return false; // non-monotonic timestamps
             }
             prevT = p.t();
-            maxDisplacement = Math.max(maxDisplacement, Math.abs(p.x() - x0));
-            if (i > 0 && Math.abs(p.x() - prevX) > MAX_STEP_PX) {
+            // Promote to long before subtracting so Integer.MIN_VALUE-style coordinates cannot
+            // overflow the int difference to a small/negative value and mask a teleport.
+            maxDisplacement = Math.max(maxDisplacement, Math.abs((long) p.x() - x0));
+            if (i > 0 && Math.abs((long) p.x() - prevX) > MAX_STEP_PX) {
                 return false; // teleport
             }
             prevX = p.x();

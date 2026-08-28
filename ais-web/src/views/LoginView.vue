@@ -212,19 +212,6 @@ async function redirectAfterLogin() {
         </label>
 
         <div v-if="captchaEnabled" class="field captcha-field">
-          <div class="captcha-heading">
-            <span>安全验证</span>
-            <button
-              type="button"
-              class="captcha-refresh"
-              :disabled="captchaLoading"
-              aria-label="刷新验证码"
-              title="刷新验证码"
-              @click="refreshCaptcha"
-            >
-              {{ captchaLoading ? '加载中…' : '换一张' }}
-            </button>
-          </div>
           <div v-loading="captchaLoading" class="slider-captcha-wrap">
             <SliderCaptcha
               v-if="captchaBackground && captchaPiece"
@@ -240,6 +227,17 @@ async function redirectAfterLogin() {
               @verify="onSliderVerify"
             />
             <div v-else class="captcha-placeholder">{{ captchaLoading ? '加载中…' : '验证码加载失败，请刷新' }}</div>
+            <button
+              v-if="captchaBackground && captchaPiece"
+              type="button"
+              class="captcha-refresh"
+              :disabled="captchaLoading || loading"
+              aria-label="刷新验证码"
+              title="刷新验证码"
+              @click="refreshCaptcha"
+            >
+              {{ captchaLoading ? '…' : '换一张' }}
+            </button>
           </div>
         </div>
 
@@ -348,13 +346,24 @@ async function redirectAfterLogin() {
 .field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
 .field > span { color: #55617b; font-size: 13px; font-weight: 700; }
 .captcha-field { margin-bottom: 16px; }
-.captcha-heading { display: flex; align-items: center; justify-content: space-between; }
-.captcha-heading > span { color: #55617b; font-size: 13px; font-weight: 700; }
-.captcha-refresh { padding: 2px 6px; cursor: pointer; border: 0; border-radius: 6px; background: transparent; color: #6575df; font-size: 12px; }
+.slider-captcha-wrap { position: relative; }
+.captcha-refresh {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  padding: 2px 10px;
+  cursor: pointer;
+  border: 1px solid #e0e5f5;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #6575df;
+  font-size: 12px;
+  line-height: 1.6;
+}
 .captcha-refresh:hover { background: #f0f3fe; }
 .captcha-refresh:disabled { cursor: wait; opacity: .6; }
-.slider-captcha-wrap { min-height: 96px; }
-.captcha-placeholder { display: grid; place-items: center; height: 96px; color: #9aa3ba; font-size: 12px; border: 1px dashed #e0e5f5; border-radius: 12px; }
+.captcha-placeholder { display: grid; place-items: center; height: 100px; color: #9aa3ba; font-size: 12px; border: 1px dashed #e0e5f5; border-radius: 12px; }
 .submit { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 46px; margin-top: 8px; border-radius: 12px; background: linear-gradient(110deg, #536bf5, #795be8); box-shadow: 0 10px 22px rgba(82, 103, 246, .25); }
 
 /* Real border so the field itself is rounded, not only the focus glow */
