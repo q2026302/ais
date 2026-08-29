@@ -224,9 +224,10 @@ class CaptchaServiceTests {
     }
 
     /**
-     * Locates the notch's left edge (X) by scanning the background for the position where the
-     * piece's fully-opaque pixels (an exact, untouched crop of the notch interior) align pixel-for-
-     * pixel. Uses only the two served PNGs and the public geometry — no renderer internals.
+     * Locates the notch's left edge (X) from the served PNGs alone. The new display darkens the
+     * notch interior (the piece carries the undarkened texture), so instead of an exact pixel match
+     * we find the horizontal offset where the background is consistently *darker* than the piece's
+     * opaque pixels — exactly the darkened gap. Uses only the two PNGs and the public geometry.
      */
     private static int locateNotchX(int[][] bg, int[][] piece, int pieceY) {
         int pw = piece[0].length;
@@ -246,8 +247,13 @@ class CaptchaServiceTests {
             int score = 0;
             for (int[] r : refs) {
                 int by = pieceY + r[1];
-                if (by >= 0 && by < bg.length && bg[by][X + r[0]] == r[2]) {
-                    score++;
+                int bx = X + r[0];
+                if (by >= 0 && by < bg.length && bx >= 0 && bx < bgW) {
+                    // The notch is the darkened interior, so the background there is clearly darker
+                    // than the (undarkened) piece content. A random offset stays ~50% by chance.
+                    if (lum(bg[by][bx]) + 12 < lum(r[2])) {
+                        score++;
+                    }
                 }
             }
             if (score > bestScore) {
@@ -255,9 +261,14 @@ class CaptchaServiceTests {
                 bestX = X;
             }
         }
-        // Sanity: the winning alignment must be a substantial exact match, not a tie at zero.
-        assertTrue(bestScore > 500, "notch localization produced a weak match (" + bestScore + ")");
+        // Sanity: the winning alignment must dominate (>70% darker), not a random tie near 50%.
+        assertTrue(bestScore > refs.size() * 0.7,
+                "notch localization produced a weak match (" + bestScore + "/" + refs.size() + ")");
         return bestX;
+    }
+
+    private static int lum(int c) {
+        return (((c >> 16) & 0xff) + ((c >> 8) & 0xff) + (c & 0xff)) / 3;
     }
 
     private static int[][] decodeRgba(byte[] png) throws Exception {

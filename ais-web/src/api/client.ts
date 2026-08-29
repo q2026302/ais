@@ -96,7 +96,10 @@ client.interceptors.response.use(
       error.message ||
       'Unknown error'
     console.error('API Error:', msg)
-    return Promise.reject(new Error(msg))
+    // Preserve the HTTP status so callers can branch (e.g. login: 400 captcha vs 401 password).
+    const enriched = new Error(msg) as Error & { status?: number }
+    enriched.status = status
+    return Promise.reject(enriched)
   },
 )
 

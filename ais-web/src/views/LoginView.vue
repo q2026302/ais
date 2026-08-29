@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, MagicStick } from '@element-plus/icons-vue'
@@ -35,6 +35,13 @@ const loading = ref(false)
 const captchaLoading = ref(false)
 const pageRef = ref<HTMLElement | null>(null)
 let stopVisualViewport: (() => void) | null = null
+
+// True when the slider has been dragged to a drop point (or when captcha is disabled). Until then
+// the submit button stays greyed out and any submit attempt is answered with a hint.
+const captchaComplete = computed(() => {
+  if (!captchaEnabled.value) return true
+  return Boolean(captchaId.value) && captchaX.value != null && captchaTrack.value.length > 0
+})
 
 function onFieldFocus(event: FocusEvent) {
   const target = event.target
@@ -134,14 +141,20 @@ async function handleLogin() {
       captchaTrack: captchaEnabled.value ? captchaTrack.value : undefined,
     })
     ElMessage.success(auth.isAdmin ? '管理员登录成功' : '登录成功')
+    password.value = ''
     await redirectAfterLogin()
   } catch (error: any) {
     ElMessage.error(error.message || '登录失败')
+    // 401 = wrong password: clear the password but keep the username (security convention).
+    // 400 captcha failures (wrong position / bad track / expired / missing drop) and other
+    // transient errors keep the whole form so the user only re-drags the slider.
+    if (error?.status === 401) {
+      password.value = ''
+    }
     if (captchaEnabled.value) {
       await refreshCaptcha()
     }
   } finally {
-    password.value = ''
     loading.value = false
   }
 }
@@ -241,7 +254,14 @@ async function redirectAfterLogin() {
           </div>
         </div>
 
-        <el-button type="primary" size="large" native-type="submit" :loading="loading" class="submit">
+        <el-button
+          type="primary"
+          size="large"
+          native-type="submit"
+          :loading="loading"
+          class="submit"
+          :class="{ 'submit-disabled': !captchaComplete }"
+        >
           <span>进入工作台</span>
           <el-icon v-if="!loading"><ArrowRight /></el-icon>
         </el-button>
@@ -365,6 +385,14 @@ async function redirectAfterLogin() {
 .captcha-refresh:disabled { cursor: wait; opacity: .6; }
 .captcha-placeholder { display: grid; place-items: center; height: 100px; color: #9aa3ba; font-size: 12px; border: 1px dashed #e0e5f5; border-radius: 12px; }
 .submit { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 46px; margin-top: 8px; border-radius: 12px; background: linear-gradient(110deg, #536bf5, #795be8); box-shadow: 0 10px 22px rgba(82, 103, 246, .25); }
+/* Greyed-out (disabled-looking) submit until the slider reaches a drop point. It stays clickable
+   so a tap surfaces the "complete the slider" hint; handleLogin still blocks submission. */
+.submit.submit-disabled {
+  filter: grayscale(0.7);
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
 
 /* Real border so the field itself is rounded, not only the focus glow */
 .login-card :deep(.el-input .el-input__wrapper) {

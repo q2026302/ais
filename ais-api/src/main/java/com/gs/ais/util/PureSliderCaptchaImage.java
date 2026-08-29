@@ -42,6 +42,29 @@ public final class PureSliderCaptchaImage {
     /** Bottom strip of the background (in background px) reserved for the frontend's overlaid slider track. */
     public static final int TRACK_RESERVE_PX = 38;
 
+    // --- Visibility tuning (real-device feedback) ----------------------------------------------
+    // The gap must be unmistakable against the pastel background: darken its interior and ring it
+    // with a crisp dark outline. The piece carries the *undarkened* texture plus a dark stroke so it
+    // stays distinct through the whole drag; on drop it covers the darkened gap and completes the
+    // image seamlessly (piece content == original texture at the gap position).
+    private static final int NOTCH_INTERIOR_DARK_R = 22;
+    private static final int NOTCH_INTERIOR_DARK_G = 28;
+    private static final int NOTCH_INTERIOR_DARK_B = 58;
+    private static final int NOTCH_INTERIOR_DARK_A = 118;
+
+    private static final int NOTCH_OUTLINE_R = 24;
+    private static final int NOTCH_OUTLINE_G = 30;
+    private static final int NOTCH_OUTLINE_B = 62;
+    private static final int NOTCH_OUTLINE_A = 215;
+
+    private static final int PIECE_STROKE_R = 30;
+    private static final int PIECE_STROKE_G = 38;
+    private static final int PIECE_STROKE_B = 74;
+    private static final int PIECE_STROKE_A = 205;
+
+    /** Stroke band half-width (shape-space px); the stroke alpha falls off linearly to zero here. */
+    public static final double PIECE_STROKE_HALF_WIDTH = 2.0;
+
     private static final int PIECE_PNG_HEIGHT = PIECE_HEIGHT + TAB_RADIUS;
 
     private PureSliderCaptchaImage() {
@@ -100,21 +123,22 @@ public final class PureSliderCaptchaImage {
             }
         }
 
-        int blobs = 3 + rng.nextInt(4);
+        // Fewer, fainter soft circles so the gap and the piece are what stand out, not the backdrop.
+        int blobs = 2 + rng.nextInt(2);
         for (int i = 0; i < blobs; i++) {
             double cx = rng.nextDouble() * w;
             double cy = rng.nextDouble() * h;
-            double radius = 22 + rng.nextDouble() * 70;
-            int color = withAlpha(randomPastel(rng), 36 + rng.nextInt(46));
+            double radius = 22 + rng.nextDouble() * 60;
+            int color = withAlpha(randomPastel(rng), 24 + rng.nextInt(26));
             fillSoftCircle(px, w, h, cx, cy, radius, color);
         }
 
-        // Fine grain so the background is not a smooth gradient (harder to synthesize a forged piece).
-        for (int i = 0; i < w * h / 4; i++) {
+        // Fine grain (reduced) so the background stays non-smooth without adding visual noise.
+        for (int i = 0; i < w * h / 8; i++) {
             int x = rng.nextInt(w);
             int y = rng.nextInt(h);
             int idx = y * w + x;
-            int n = rng.nextInt(16) - 8;
+            int n = rng.nextInt(11) - 5;
             px[idx] = pack(255,
                     clamp(ch(px[idx], 16) + n),
                     clamp(ch(px[idx], 8) + n),
@@ -161,14 +185,25 @@ public final class PureSliderCaptchaImage {
             }
         }
 
-        // Crisp light edge so the piece reads as a distinct tile.
+        // Crisp dark stroke so the piece reads as a distinct tile against the pastel background.
+        // Stroke the whole shape *boundary neighborhood* (not just the anti-aliased transition band):
+        // for every covered pixel whose signed distance to the shape edge is within
+        // PIECE_STROKE_HALF_WIDTH px, blend in the stroke with distance-based alpha falloff. This
+        // covers straight edges, rounded corners, and the tab alike (the previous cov-in-(0,1)
+        // condition only touched anti-aliased pixels, so straight edges got no stroke at all).
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 double cov = shapeCoverage(x + 0.5, y + 0.5 - TAB_RADIUS);
-                if (cov > 0 && cov < 1) {
-                    int a = (int) Math.round(130 * (1 - cov));
-                    piece[y * w + x] = blendOver(piece[y * w + x], 255, 255, 255, a);
+                if (cov <= 0) {
+                    continue;
                 }
+                double d = shapeSignedDistance(x + 0.5, y + 0.5 - TAB_RADIUS);
+                double ad = Math.abs(d);
+                if (ad > PIECE_STROKE_HALF_WIDTH) {
+                    continue;
+                }
+                int a = (int) Math.round(PIECE_STROKE_A * (1.0 - ad / PIECE_STROKE_HALF_WIDTH));
+                piece[y * w + x] = blendOver(piece[y * w + x], PIECE_STROKE_R, PIECE_STROKE_G, PIECE_STROKE_B, a);
             }
         }
         return piece;
@@ -188,15 +223,23 @@ public final class PureSliderCaptchaImage {
                 int idx = y * BACKGROUND_WIDTH + x;
                 int src = background[idx];
                 if (cov >= 0.95) {
-                    // Interior: keep the original texture untouched so the dropped piece completes
-                    // the image seamlessly (piece content == background pixels at this exact spot).
-                    continue;
+                    // Interior: darken so the gap is unmistakable; the piece carries the undarkened
+                    // texture at this exact spot and restores the image when dropped into place.
+                    background[idx] = darkenNotchInterior(src);
+                } else {
+                    // Boundary: crisp dark outline ring so the target reads at a glance.
+                    background[idx] = blendOver(src, NOTCH_OUTLINE_R, NOTCH_OUTLINE_G, NOTCH_OUTLINE_B, NOTCH_OUTLINE_A);
                 }
-                // Edge band: dark outline so the notch target stays clearly visible on the background.
-                int amount = (int) Math.round(220 * cov);
-                background[idx] = blendOver(src, 52, 62, 98, amount);
             }
         }
+    }
+
+    /**
+     * Interior darkening applied to the notch. Package-private so the pixel-equivalence test can
+     * assert the piece (undarkened crop) is exactly this transform of the carved background.
+     */
+    static int darkenNotchInterior(int argb) {
+        return blendOver(argb, NOTCH_INTERIOR_DARK_R, NOTCH_INTERIOR_DARK_G, NOTCH_INTERIOR_DARK_B, NOTCH_INTERIOR_DARK_A);
     }
 
     /**
@@ -233,6 +276,39 @@ public final class PureSliderCaptchaImage {
     private static double circleCoverage(double px, double py, double cx, double cy, double r) {
         double d = Math.hypot(px - cx, py - cy) - r;
         return clamp01(0.5 - d);
+    }
+
+    /**
+     * Signed distance (negative inside, positive outside) to the piece-shape boundary, in
+     * shape-space px. Used to stroke a fixed-width band around the whole boundary — straight edges,
+     * rounded corners, and the tab — rather than only the anti-aliased transition band.
+     */
+    static double shapeSignedDistance(double lx, double ly) {
+        double core = roundedRectSignedDistance(lx, ly, 0, 0, PIECE_WIDTH, PIECE_HEIGHT, CORNER_RADIUS);
+        double tab = Double.POSITIVE_INFINITY;
+        if (ly <= 0) {
+            tab = circleSignedDistance(lx, ly, PIECE_WIDTH / 2.0, 0, TAB_RADIUS);
+        }
+        return Math.min(core, tab);
+    }
+
+    private static double roundedRectSignedDistance(double px, double py, double x0, double y0,
+                                                    double w, double h, double r) {
+        double cx = x0 + w / 2.0;
+        double cy = y0 + h / 2.0;
+        double hw = w / 2.0;
+        double hh = h / 2.0;
+        double qx = Math.abs(px - cx) - (hw - r);
+        double qy = Math.abs(py - cy) - (hh - r);
+        double ax = Math.max(qx, 0);
+        double ay = Math.max(qy, 0);
+        double outside = Math.hypot(ax, ay);
+        double inside = Math.min(Math.max(qx, qy), 0);
+        return outside + inside - r;
+    }
+
+    private static double circleSignedDistance(double px, double py, double cx, double cy, double r) {
+        return Math.hypot(px - cx, py - cy) - r;
     }
 
     private static void fillSoftCircle(int[] px, int w, int h, double cx, double cy, double radius, int color) {
@@ -285,7 +361,7 @@ public final class PureSliderCaptchaImage {
 
     private static int randomPastel(SecureRandom rng) {
         double hue = rng.nextDouble() * 360.0;
-        double saturation = 0.45 + rng.nextDouble() * 0.35;
+        double saturation = 0.32 + rng.nextDouble() * 0.24;
         double value = 0.72 + rng.nextDouble() * 0.20;
         return hsvToRgb(hue, saturation, value);
     }
