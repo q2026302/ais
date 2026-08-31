@@ -53,6 +53,7 @@ public class ImageGenerationService {
     private final BillingService billingService;
     private final ImageGenerationQueueService imageGenerationQueueService;
     private final AppUserRepository appUserRepository;
+    private final GeneratedImageFileService generatedImageFileService;
 
     private final Path uploadDir;
     private final Path attachmentDir;
@@ -67,6 +68,7 @@ public class ImageGenerationService {
                                   BillingService billingService,
                                   ImageGenerationQueueService imageGenerationQueueService,
                                   AppUserRepository appUserRepository,
+                                  GeneratedImageFileService generatedImageFileService,
                                   StoragePaths storagePaths) {
         this.llmClient = llmClient;
         this.modelProviderService = modelProviderService;
@@ -78,6 +80,7 @@ public class ImageGenerationService {
         this.billingService = billingService;
         this.imageGenerationQueueService = imageGenerationQueueService;
         this.appUserRepository = appUserRepository;
+        this.generatedImageFileService = generatedImageFileService;
         this.uploadDir = storagePaths.uploadDir();
         this.attachmentDir = storagePaths.attachmentDir();
         initUploadDir();
@@ -665,11 +668,6 @@ public class ImageGenerationService {
         return references;
     }
 
-    private void deleteOldImage(Message message) {
-        if (message.getImageUrl() == null) return;
-        deleteGeneratedImageUrl(message.getImageUrl());
-    }
-
     private byte[] generateImageWithRetry(String prompt, ModelProvider provider,
                                            LlmClient.ImageGenerationOptions options,
                                            List<LlmClient.ReferenceImage> references) {
@@ -763,47 +761,35 @@ public class ImageGenerationService {
                 .orElseThrow(() -> new RuntimeException("Message not found: " + messageId));
 
         // 1. Delete generated image file if present (file is gone; URL becomes a dangling ref but
-        //    the message record is kept for incremental-sync tombstoning).
-        deleteGeneratedImageIfPresent(message);
+        //    the message record is kept for incremental-sync tombstoning). The physical file is
+        //    removed only when no other message/attachment still references it.
+        if (message.getImageUrl() != null) {
+            generatedImageFileService.deleteIfUnreferenced(message.getImageUrl(), Set.of(message.getId()));
+        }
 
-        // 2. Delete associated attachment files (records stay for now since the message is kept).
+        // 2. Delete associated attachment records. The physical file is removed only
+        //    when no other record references it: de-duplication shares one physical
+        //    file across multiple records, so a blindly deleted file could break a
+        //    still-live attachment elsewhere.
         List<Attachment> attachments = attachmentRepository.findByMessageId(messageId);
         for (Attachment attachment : attachments) {
-            Path filePath = attachmentDir.resolve(attachment.getFilename());
-            try {
-                Files.deleteIfExists(filePath);
-            } catch (IOException e) {
-                log.warn("Failed to delete attachment file {}: {}", attachment.getFilename(), e.getMessage());
-            }
+            String filename = attachment.getFilename();
+            boolean otherReference = filename != null
+                    && attachmentRepository.findByFilename(filename).stream()
+                        .anyMatch(other -> !java.util.Objects.equals(other.getId(), attachment.getId()));
             attachmentRepository.delete(attachment);
+            if (!otherReference && filename != null) {
+                try {
+                    Files.deleteIfExists(attachmentDir.resolve(filename));
+                } catch (IOException e) {
+                    log.warn("Failed to delete attachment file {}: {}", filename, e.getMessage());
+                }
+            }
         }
 
         // 3. Soft-delete: mark as deleted so incremental-sync clients can detect the tombstone.
         message.setDeleted(true);
         messageRepository.save(message);
-    }
-
-    private void deleteGeneratedImageIfPresent(Message message) {
-        String imageUrl = message.getImageUrl();
-        if (imageUrl == null || !imageUrl.startsWith("/api/images/")) {
-            return;
-        }
-        deleteGeneratedImageUrl(imageUrl);
-    }
-
-    private void deleteGeneratedImageUrl(String imageUrl) {
-        if (imageUrl == null || !imageUrl.startsWith("/api/images/")) {
-            return;
-        }
-        try {
-            String filename = imageUrl.replace("/api/images/", "");
-            Files.deleteIfExists(uploadDir.resolve(filename));
-            int lastDot = filename.lastIndexOf('.');
-            String thumbFilename = (lastDot >= 0 ? filename.substring(0, lastDot) : filename) + "_thumb.png";
-            Files.deleteIfExists(uploadDir.resolve(thumbFilename));
-        } catch (IOException e) {
-            log.warn("Failed to delete generated image {}: {}", imageUrl, e.getMessage());
-        }
     }
 
     @Transactional(readOnly = true)

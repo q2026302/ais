@@ -17,6 +17,13 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     List<Message> findBySessionIdOrderByCreatedAtAsc(Long sessionId);
 
+    /**
+     * Finds the message(s) whose generated image URL matches exactly. Used to
+     * resolve image access through the message → session ownership chain. A list
+     * (not Optional) is returned to tolerate duplicate/legacy rows safely.
+     */
+    List<Message> findByImageUrl(String imageUrl);
+
     /** Incremental fetch: include soft-deleted messages as tombstones so clients can evict them. */
     @Query("select m from Message m where m.session.id = :sessionId and m.updatedAt > :since order by m.createdAt asc")
     List<Message> findBySessionIdAndUpdatedAtAfter(

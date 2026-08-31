@@ -2,6 +2,7 @@ package com.gs.ais.dto.response;
 
 import com.gs.ais.model.enums.MessageStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
+import tools.jackson.databind.annotation.JsonSerialize;
 
 @Schema(description = "生成操作响应结果")
 public class GenerateResponse {
@@ -13,6 +14,7 @@ public class GenerateResponse {
     private String optimizedPrompt;
 
     @Schema(description = "生成图像的 URL 地址", example = "/api/images/test_1_20260711120000_a1b2c3d4.png")
+    @JsonSerialize(using = SignedUrlSerializer.class)
     private String imageUrl;
 
     @Schema(description = "Token 使用统计")

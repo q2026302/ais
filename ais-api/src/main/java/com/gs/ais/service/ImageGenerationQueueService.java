@@ -41,6 +41,7 @@ public class ImageGenerationQueueService {
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
     private final BillingService billingService;
+    private final GeneratedImageFileService generatedImageFileService;
     private final Path uploadDir;
     private final Path attachmentDir;
 
@@ -65,6 +66,7 @@ public class ImageGenerationQueueService {
                                        MessageRepository messageRepository,
                                        AttachmentRepository attachmentRepository,
                                        BillingService billingService,
+                                       GeneratedImageFileService generatedImageFileService,
                                        StoragePaths storagePaths) {
         this.llmClient = llmClient;
         this.modelProviderService = modelProviderService;
@@ -72,6 +74,7 @@ public class ImageGenerationQueueService {
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
         this.billingService = billingService;
+        this.generatedImageFileService = generatedImageFileService;
         this.uploadDir = storagePaths.uploadDir();
         this.attachmentDir = storagePaths.attachmentDir();
         initUploadDir();
@@ -264,12 +267,12 @@ public class ImageGenerationQueueService {
                 String imageUrl = saveGeneratedImage(sessionId, imageData);
 
                 if (wasCancelled(assistantMessageId)) {
-                    deleteGeneratedImageUrl(imageUrl);
+                    generatedImageFileService.deleteIfUnreferenced(imageUrl, Set.of(assistantMessageId));
                     return;
                 }
 
                 if (previousImageUrl != null && !previousImageUrl.equals(imageUrl)) {
-                    deleteGeneratedImageUrl(previousImageUrl);
+                    generatedImageFileService.deleteIfUnreferenced(previousImageUrl, Set.of(assistantMessageId));
                 }
                 assistantMessage.setStatus(MessageStatus.SUCCESS);
                 assistantMessage.setContent("已根据提示词生成图片。");
@@ -460,19 +463,6 @@ public class ImageGenerationQueueService {
         if (data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F'
                 && data.length > 12 && data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P') return "webp";
         return "png";
-    }
-
-    private void deleteGeneratedImageUrl(String imageUrl) {
-        if (imageUrl == null || !imageUrl.startsWith("/api/images/")) return;
-        try {
-            String filename = imageUrl.replace("/api/images/", "");
-            Files.deleteIfExists(uploadDir.resolve(filename));
-            int lastDot = filename.lastIndexOf('.');
-            String thumbFilename = (lastDot >= 0 ? filename.substring(0, lastDot) : filename) + "_thumb.png";
-            Files.deleteIfExists(uploadDir.resolve(thumbFilename));
-        } catch (IOException e) {
-            log.warn("Failed to delete generated image {}: {}", imageUrl, e.getMessage());
-        }
     }
 
     private String cleanOption(String value) {

@@ -31,9 +31,11 @@ function normalizeMessage(message: Message): Message {
   return {
     ...message,
     imageUrl: resolveAppUrl(message.imageUrl) || null,
+    thumbnailUrl: resolveAppUrl(message.thumbnailUrl) || null,
     attachments: (message.attachments || []).map((attachment) => ({
       ...attachment,
       fileUrl: resolveAppUrl(attachment.fileUrl) || attachment.fileUrl,
+      thumbnailUrl: resolveAppUrl(attachment.thumbnailUrl) || null,
     })),
   }
 }

@@ -11,6 +11,7 @@ import type { Message } from '@/types'
 import { formatTimeHm } from '@/utils/dateTime'
 import { getThumbnailUrl } from '@/utils/imageUrl'
 import { mobileWorkspacePath } from '@/utils/mobileWorkspace'
+import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
 defineOptions({
   name: 'FeishuGalleryPage',
@@ -47,6 +48,7 @@ const imageViewerVisible = ref(false)
 const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
 const galleryThumbFailedIds = ref<Set<number>>(new Set())
+const { recoverImage } = useSignedUrlRefresh()
 
 // Close the image viewer when switching sessions (Bug 5: preview must not
 // stay open across session switches or the page becomes unusable).
@@ -59,14 +61,23 @@ watch(() => store.activeSessionId, () => {
 /** Generated images in the active session (messages that have an imageUrl). */
 const generatedImages = computed(() => store.messages.filter((message) => Boolean(message.imageUrl)))
 
-function onGalleryThumbError(id: number) {
-  galleryThumbFailedIds.value = new Set(galleryThumbFailedIds.value).add(id)
+function onGalleryThumbError(message: Message) {
+  const failedUrl = galleryDisplayUrl(message)
+  galleryThumbFailedIds.value = new Set(galleryThumbFailedIds.value).add(message.id)
+  recoverImage(failedUrl)
 }
 
 function galleryDisplayUrl(message: Message) {
   if (!message.imageUrl) return ''
-  return galleryThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id, 'small')
+  if (galleryThumbFailedIds.value.has(message.id)) return message.imageUrl
+  return getThumbnailUrl(message, 'small') || message.imageUrl
 }
+
+// Re-arm thumbnails after a refresh delivers fresh signed URLs.
+const galleryUrlKey = computed(() => generatedImages.value
+  .map((m) => `${m.imageUrl ?? ''}|${m.thumbnailUrl ?? ''}`)
+  .join('#'))
+watch(galleryUrlKey, () => { galleryThumbFailedIds.value = new Set() })
 
 function formatTime(value: string) {
   return formatTimeHm(value, '')
@@ -147,7 +158,7 @@ async function goToCreate() {
             :src="galleryDisplayUrl(message)"
             alt="AI 作品"
             loading="lazy"
-            @error="onGalleryThumbError(message.id)"
+            @error="onGalleryThumbError(message)"
           >
         </button>
         <div class="image-info">

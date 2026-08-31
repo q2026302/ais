@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import type { Message, ModelProvider } from '@/types'
+import { computed, ref, watch } from 'vue'
+import type { Attachment, Message, ModelProvider } from '@/types'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Edit, Refresh, Delete, Download } from '@element-plus/icons-vue'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import { getThumbnailUrl } from '@/utils/imageUrl'
 import { formatDateTimeSeconds } from '@/utils/dateTime'
 import { downloadImage as downloadImageAsset } from '@/utils/downloadImage'
+import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
 const props = defineProps<{
   message: Message
@@ -24,9 +25,24 @@ const emit = defineEmits<{
   refresh: [messageId: number]
 }>()
 
+const { recoverImage } = useSignedUrlRefresh()
+
 const thumbFailed = ref(false)
-const thumbUrl = computed(() => thumbFailed.value ? props.message.imageUrl : getThumbnailUrl(props.message.id, 'medium'))
-function onThumbError() { thumbFailed.value = true }
+const thumbnailUrl = computed(() => getThumbnailUrl(props.message, 'medium') || props.message.imageUrl || '')
+const thumbUrl = computed(() => thumbFailed.value ? (props.message.imageUrl || '') : thumbnailUrl.value)
+function onThumbError() {
+  const failedUrl = thumbUrl.value
+  thumbFailed.value = true
+  recoverImage(failedUrl)
+}
+function onAttachmentError(att: Attachment) {
+  recoverImage(att.fileUrl)
+}
+// Re-arm the thumbnail after a refresh delivers fresh signed URLs.
+watch(
+  () => [props.message.imageUrl, props.message.thumbnailUrl] as const,
+  () => { thumbFailed.value = false },
+)
 
 function providerLabel(provider: ModelProvider | null | undefined, fallback = 'AI') {
   if (!provider) return fallback
@@ -185,6 +201,7 @@ function formatDateTime(dateStr: string): string {
               fit="cover"
               :preview-src-list="[att.fileUrl]"
               preview-teleported
+              @error="onAttachmentError(att)"
             />
             <a v-else :href="att.fileUrl" target="_blank" class="attachment-link">
               {{ att.originalName }}

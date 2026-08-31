@@ -66,6 +66,22 @@ class OrphanFileCleanupServiceTests {
     }
 
     @Test
+    void directlyReferencedThumbnailIsKeptEvenWhenOriginalIsMissing() throws Exception {
+        // A de-duplicated attachment can reference a thumbnail file directly; it must
+        // not be treated as an orphan just because its original is no longer referenced.
+        Path thumbnail = write("attachments/pic_thumb_256.png", 5);
+
+        OrphanFileCleanupService service = serviceWithReferences(
+                List.of(),
+                List.of("/api/attachments/pic_thumb_256.png"));
+
+        OrphanFileCleanupService.CleanupResult result = service.cleanup(true);
+
+        assertEquals(0, result.orphanFiles());
+        assertTrue(Files.exists(thumbnail));
+    }
+
+    @Test
     void unsafeAndExternalUrlsDoNotProtectLocalFiles() throws Exception {
         Path orphan = write("outside-looking.png", 2);
         MessageRepository messages = mock(MessageRepository.class);

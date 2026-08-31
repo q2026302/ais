@@ -16,6 +16,8 @@ export interface Attachment {
   contentType: string
   fileSize: number
   fileUrl: string
+  /** Signed thumbnail URL (server-generated); append ?size=small|medium at render time. */
+  thumbnailUrl?: string | null
   createdAt: string
 }
 
@@ -41,6 +43,8 @@ export interface Message {
   content: string
   errorMessage?: string | null
   imageUrl: string | null
+  /** Signed thumbnail URL (server-generated); append ?size=small|medium at render time. */
+  thumbnailUrl?: string | null
   drawPrompt?: string | null
   drawSize?: string | null
   drawQuality?: string | null

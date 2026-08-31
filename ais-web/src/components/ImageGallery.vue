@@ -1,24 +1,38 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download, Select } from '@element-plus/icons-vue'
 import type { Message } from '@/types'
 import { getThumbnailUrl } from '@/utils/imageUrl'
 import { downloadImage as downloadImageAsset } from '@/utils/downloadImage'
 import { formatDateTime, formatLocalDateKey } from '@/utils/dateTime'
+import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
 const props = defineProps<{ messages: Message[] }>()
 const selectedIds = ref<number[]>([])
 const downloading = ref(false)
 const thumbFailedIds = ref<Set<number>>(new Set())
+const { recoverImage } = useSignedUrlRefresh()
 
 function onThumbError(message: Message) {
-  thumbFailedIds.value.add(message.id)
+  const failedUrl = displayUrl(message)
+  const next = new Set(thumbFailedIds.value)
+  next.add(message.id)
+  thumbFailedIds.value = next
+  recoverImage(failedUrl)
 }
 
 function displayUrl(message: Message): string {
-  return thumbFailedIds.value.has(message.id) ? (message.imageUrl || '') : getThumbnailUrl(message.id, 'medium')
+  if (thumbFailedIds.value.has(message.id)) return message.imageUrl || ''
+  return getThumbnailUrl(message, 'medium') || message.imageUrl || ''
 }
+
+// Re-arm thumbnails after a refresh delivers fresh signed URLs.
+const messagesUrlKey = computed(() => props.messages
+  .filter((m) => !!m.imageUrl)
+  .map((m) => `${m.imageUrl ?? ''}|${m.thumbnailUrl ?? ''}`)
+  .join('#'))
+watch(messagesUrlKey, () => { thumbFailedIds.value = new Set() })
 
 const images = computed(() => props.messages.filter((message) => !!message.imageUrl))
 const groups = computed(() => {

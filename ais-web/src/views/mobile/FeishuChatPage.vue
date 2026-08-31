@@ -27,7 +27,7 @@ import {
 import { useSessionStore } from '@/stores/session'
 import { sessionApi } from '@/api/sessions'
 import { userDefaultsApi } from '@/api/billing'
-import type { Message, ModelProvider, UploadResponse } from '@/types'
+import type { Message, ModelProvider, UploadResponse, Attachment } from '@/types'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
@@ -37,6 +37,7 @@ import { formatTimeHm, parseApiDate } from '@/utils/dateTime'
 import { getMessageEditableText } from '@/utils/messageText'
 import { useLongPress } from '@/composables/useLongPress'
 import { useImageActions } from '@/composables/useImageActions'
+import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 import type { MobileKeyboardApi } from './FeishuMobileLayout.vue'
 import { isPwaEntry, readPwaKeyboardDiagnostics } from '@/utils/visualViewport'
 
@@ -47,6 +48,8 @@ defineOptions({
 const store = useSessionStore()
 const router = useRouter()
 const route = useRoute()
+
+const { recoverImage } = useSignedUrlRefresh()
 
 const entryPrefix = computed(() => route.meta.mobileEntry ?? 'mobile')
 
@@ -131,20 +134,38 @@ interface HistoryImageItem {
 const messageThumbFailedIds = ref<Set<number>>(new Set())
 const historyThumbFailedIds = ref<Set<string>>(new Set())
 
-function onMessageThumbError(id: number) {
-  messageThumbFailedIds.value = new Set(messageThumbFailedIds.value).add(id)
+function onMessageThumbError(message: Message) {
+  const failedUrl = messageDisplayUrl(message)
+  messageThumbFailedIds.value = new Set(messageThumbFailedIds.value).add(message.id)
+  recoverImage(failedUrl)
 }
-function onHistoryThumbError(id: string) {
-  historyThumbFailedIds.value = new Set(historyThumbFailedIds.value).add(id)
+function onHistoryThumbError(item: HistoryImageItem) {
+  const failedUrl = item.thumbUrl || item.url
+  historyThumbFailedIds.value = new Set(historyThumbFailedIds.value).add(item.id)
+  recoverImage(failedUrl)
+}
+function onAttachmentImageError(attachment: Attachment) {
+  recoverImage(attachment.fileUrl)
 }
 function messageDisplayUrl(message: Message) {
   if (!message.imageUrl) return ''
-  return messageThumbFailedIds.value.has(message.id) ? message.imageUrl : getThumbnailUrl(message.id, 'small')
+  if (messageThumbFailedIds.value.has(message.id)) return message.imageUrl
+  return getThumbnailUrl(message, 'small') || message.imageUrl
 }
 function historyDisplayUrl(item: HistoryImageItem) {
   if (historyThumbFailedIds.value.has(item.id)) return item.url
   return item.thumbUrl || item.url
 }
+
+// Re-arm thumbnails after a refresh delivers fresh signed URLs.
+const messagesUrlKey = computed(() => store.messages
+  .filter((m) => !!m.imageUrl)
+  .map((m) => `${m.imageUrl ?? ''}|${m.thumbnailUrl ?? ''}`)
+  .join('#'))
+watch(messagesUrlKey, () => {
+  messageThumbFailedIds.value = new Set()
+  historyThumbFailedIds.value = new Set()
+})
 
 const activeSession = computed(() => store.sessions.find((item) => item.id === store.activeSessionId) || null)
 
@@ -157,7 +178,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
       items.push({
         id: `gen-${message.id}`,
         url: message.imageUrl,
-        thumbUrl: getThumbnailUrl(message.id, 'small'),
+        thumbUrl: getThumbnailUrl(message, 'small'),
         label: message.drawPrompt || 'AI 生成图片',
         format: message.drawFormat || 'png',
         messageId: message.id,
@@ -170,7 +191,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
           items.push({
             id: `att-${message.id}-${attachment.id}`,
             url: attachment.fileUrl,
-            thumbUrl: getAttachmentThumbnailUrl(attachment.id, 'small'),
+            thumbUrl: getAttachmentThumbnailUrl(attachment, 'small'),
             label: attachment.originalName || '用户上传图片',
             format: ext,
             messageId: message.id,
@@ -1337,7 +1358,7 @@ const debugInfo = computed(() => {
                 @touchcancel.stop="cancelLongPress(true)"
                 @contextmenu.prevent.stop="openImageAction(attachment.fileUrl, attachment.originalName || 'image.png')"
               >
-                <img :src="attachment.fileUrl" alt="消息图片" loading="lazy">
+                <img :src="attachment.fileUrl" alt="消息图片" loading="lazy" @error="onAttachmentImageError(attachment)">
               </button>
               <a v-else class="message-file" :href="attachment.fileUrl" target="_blank" rel="noopener"><Paperclip /> {{ attachment.originalName }}</a>
             </template>
@@ -1359,7 +1380,7 @@ const debugInfo = computed(() => {
             @touchcancel.stop="cancelLongPress(true)"
             @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`)"
           >
-            <img :src="messageDisplayUrl(message)" alt="AI 生成图片" loading="lazy" @error="onMessageThumbError(message.id)">
+            <img :src="messageDisplayUrl(message)" alt="AI 生成图片" loading="lazy" @error="onMessageThumbError(message)">
           </button>
           <p v-if="message.status === 'FAILED'" class="error-text">{{ message.errorMessage || '请求失败，请稍后重试' }}</p>
         </div>
@@ -1622,7 +1643,7 @@ const debugInfo = computed(() => {
                   :aria-pressed="isHistorySelected(item.id)"
                   @click="toggleHistorySelection(item)"
                 >
-                  <el-image :src="historyTileUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
+                  <el-image :src="historyTileUrl(item)" fit="cover" @error="onHistoryThumbError(item)" />
                   <span class="history-check" :class="{ checked: isHistorySelected(item.id) }" aria-hidden="true">
                     <Check v-if="isHistorySelected(item.id)" />
                   </span>

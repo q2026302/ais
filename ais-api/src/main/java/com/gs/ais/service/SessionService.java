@@ -1,6 +1,5 @@
 package com.gs.ais.service;
 
-import com.gs.ais.config.StoragePaths;
 import com.gs.ais.model.entity.AppUser;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.model.entity.Session;
@@ -10,38 +9,33 @@ import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.repository.SessionRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.security.AuthPrincipal;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
 public class SessionService {
 
-    private static final Logger log = LoggerFactory.getLogger(SessionService.class);
-
     private final SessionRepository sessionRepository;
     private final MessageRepository messageRepository;
     private final AppUserRepository appUserRepository;
-    private final Path uploadDir;
+    private final GeneratedImageFileService generatedImageFileService;
 
     public SessionService(SessionRepository sessionRepository,
                           MessageRepository messageRepository,
                           AppUserRepository appUserRepository,
-                          StoragePaths storagePaths) {
+                          GeneratedImageFileService generatedImageFileService) {
         this.sessionRepository = sessionRepository;
         this.messageRepository = messageRepository;
         this.appUserRepository = appUserRepository;
-        this.uploadDir = storagePaths.uploadDir();
+        this.generatedImageFileService = generatedImageFileService;
     }
 
     @Transactional(readOnly = true)
@@ -219,21 +213,19 @@ public class SessionService {
     public void deleteSession(Long id) {
         Session session = getSession(id);
 
-        // Delete associated image files
+        // Delete associated generated image files only when no other message or
+        // attachment record still references them (de-duplication/materialization
+        // means a physical file may be shared). The database relationships are
+        // dropped below regardless; the physical bytes are left for the remaining
+        // references.
         List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(id);
+        Set<Long> deletedMessageIds = messages.stream()
+                .map(Message::getId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
         for (Message msg : messages) {
             if (msg.getImageUrl() != null) {
-                // imageUrl format: /api/images/filename
-                String filename = msg.getImageUrl().replace("/api/images/", "");
-                Path imagePath = uploadDir.resolve(filename);
-                try {
-                    Files.deleteIfExists(imagePath);
-                    int lastDot = filename.lastIndexOf('.');
-                    String thumbFilename = (lastDot >= 0 ? filename.substring(0, lastDot) : filename) + "_thumb.png";
-                    Files.deleteIfExists(uploadDir.resolve(thumbFilename));
-                } catch (IOException e) {
-                    log.warn("Failed to delete image file: {}", imagePath, e);
-                }
+                generatedImageFileService.deleteIfUnreferenced(msg.getImageUrl(), deletedMessageIds);
             }
         }
 

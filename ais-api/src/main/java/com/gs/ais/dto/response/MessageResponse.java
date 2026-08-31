@@ -5,6 +5,7 @@ import com.gs.ais.model.enums.MessageRole;
 import com.gs.ais.model.enums.MessageStatus;
 import com.gs.ais.model.enums.MessageType;
 import io.swagger.v3.oas.annotations.media.Schema;
+import tools.jackson.databind.annotation.JsonSerialize;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -31,7 +32,12 @@ public class MessageResponse {
     private String errorMessage;
 
     @Schema(description = "关联的图像 URL", example = "/api/images/test_1_20260711120000_a1b2c3d4.png")
+    @JsonSerialize(using = SignedUrlSerializer.class)
     private String imageUrl;
+
+    @Schema(description = "消息缩略图 URL（按消息 id 懒生成；前端渲染时动态附加 size 参数）", example = "/api/images/10/thumbnail")
+    @JsonSerialize(using = SignedUrlSerializer.class)
+    private String thumbnailUrl;
 
     @Schema(description = "绘画提示词")
     private String drawPrompt;
@@ -86,6 +92,9 @@ public class MessageResponse {
         resp.setContent(message.getContent());
         resp.setErrorMessage(message.getErrorMessage());
         resp.setImageUrl(message.getImageUrl());
+        if (message.getImageUrl() != null && !message.getImageUrl().isBlank()) {
+            resp.setThumbnailUrl("/api/images/" + message.getId() + "/thumbnail");
+        }
         resp.setDrawPrompt(message.getDrawPrompt());
         resp.setDrawSize(message.getDrawSize());
         resp.setDrawQuality(message.getDrawQuality());
@@ -125,6 +134,8 @@ public class MessageResponse {
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public String getImageUrl() { return imageUrl; }
     public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
+    public String getThumbnailUrl() { return thumbnailUrl; }
+    public void setThumbnailUrl(String thumbnailUrl) { this.thumbnailUrl = thumbnailUrl; }
     public String getDrawPrompt() { return drawPrompt; }
     public void setDrawPrompt(String drawPrompt) { this.drawPrompt = drawPrompt; }
     public String getDrawSize() { return drawSize; }

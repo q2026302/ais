@@ -19,6 +19,7 @@ import { sessionApi } from '@/api/sessions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { selectHistorySourceUrl } from '@/utils/historyReference'
 import { getMessageEditableText } from '@/utils/messageText'
+import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
 const props = defineProps<{
   loading: boolean
@@ -42,6 +43,8 @@ const emit = defineEmits<{
   imageProviderChange: [id: number | null]
   fullscreenChange: [value: boolean]
 }>()
+
+const { recoverImage } = useSignedUrlRefresh()
 
 const inputText = ref('')
 const selectedProviderId = ref<number | null>(null)
@@ -146,7 +149,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
       items.push({
         id: `gen-${message.id}`,
         url: message.imageUrl,
-        thumbUrl: getThumbnailUrl(message.id, 'small'),
+        thumbUrl: getThumbnailUrl(message, 'small'),
         label: message.drawPrompt || 'AI 生成图片',
         format: message.drawFormat || 'png',
         messageId: message.id,
@@ -159,7 +162,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
           items.push({
             id: `att-${message.id}-${attachment.id}`,
             url: attachment.fileUrl,
-            thumbUrl: getAttachmentThumbnailUrl(attachment.id, 'small'),
+            thumbUrl: getAttachmentThumbnailUrl(attachment, 'small'),
             label: attachment.originalName || '用户上传图片',
             format: ext,
             messageId: message.id,
@@ -472,6 +475,10 @@ function handleInputKeydown(event: KeyboardEvent) {
 
 function isHistorySelected(id: string) {
   return selectedHistoryIds.value.includes(id)
+}
+
+function onHistoryThumbError(item: HistoryImageItem) {
+  recoverImage(item.thumbUrl || item.url)
 }
 
 function toggleHistorySelection(item: HistoryImageItem) {
@@ -943,7 +950,7 @@ defineExpose({ clearDraft })
                   :aria-pressed="isHistorySelected(item.id)"
                   @click="toggleHistorySelection(item)"
                 >
-                  <el-image :src="item.thumbUrl || item.url" fit="cover" />
+                  <el-image :src="item.thumbUrl || item.url" fit="cover" @error="onHistoryThumbError(item)" />
                   <span class="history-check" :class="{ checked: isHistorySelected(item.id) }" aria-hidden="true">
                     <el-icon v-if="isHistorySelected(item.id)"><Check /></el-icon>
                   </span>

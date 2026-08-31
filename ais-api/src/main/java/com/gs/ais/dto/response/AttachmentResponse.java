@@ -2,6 +2,7 @@ package com.gs.ais.dto.response;
 
 import com.gs.ais.model.entity.Attachment;
 import io.swagger.v3.oas.annotations.media.Schema;
+import tools.jackson.databind.annotation.JsonSerialize;
 
 import java.time.LocalDateTime;
 
@@ -21,7 +22,12 @@ public class AttachmentResponse {
     private Long fileSize;
 
     @Schema(description = "文件访问 URL", example = "/api/attachments/cat.jpg")
+    @JsonSerialize(using = SignedUrlSerializer.class)
     private String fileUrl;
+
+    @Schema(description = "附件缩略图 URL（按附件 id 懒生成；前端渲染时动态附加 size 参数）", example = "/api/attachments/1/thumbnail")
+    @JsonSerialize(using = SignedUrlSerializer.class)
+    private String thumbnailUrl;
 
     @Schema(description = "上传时间")
     private LocalDateTime createdAt;
@@ -33,6 +39,7 @@ public class AttachmentResponse {
         resp.setContentType(attachment.getContentType());
         resp.setFileSize(attachment.getFileSize());
         resp.setFileUrl(attachment.getFileUrl());
+        resp.setThumbnailUrl("/api/attachments/" + attachment.getId() + "/thumbnail");
         resp.setCreatedAt(attachment.getCreatedAt());
         return resp;
     }
@@ -47,6 +54,8 @@ public class AttachmentResponse {
     public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
     public String getFileUrl() { return fileUrl; }
     public void setFileUrl(String fileUrl) { this.fileUrl = fileUrl; }
+    public String getThumbnailUrl() { return thumbnailUrl; }
+    public void setThumbnailUrl(String thumbnailUrl) { this.thumbnailUrl = thumbnailUrl; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

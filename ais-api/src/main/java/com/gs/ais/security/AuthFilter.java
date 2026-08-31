@@ -35,16 +35,19 @@ public class AuthFilter extends OncePerRequestFilter {
     private final AccessTokenService accessTokenService;
     private final AppUserRepository appUserRepository;
     private final ObjectMapper objectMapper;
+    private final ResourceUrlSigner resourceUrlSigner;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
 
     public AuthFilter(SecurityProperties properties,
                       AccessTokenService accessTokenService,
                       AppUserRepository appUserRepository,
-                      ObjectMapper objectMapper) {
+                      ObjectMapper objectMapper,
+                      ResourceUrlSigner resourceUrlSigner) {
         this.properties = properties;
         this.accessTokenService = accessTokenService;
         this.appUserRepository = appUserRepository;
         this.objectMapper = objectMapper;
+        this.resourceUrlSigner = resourceUrlSigner;
     }
 
     @Override
@@ -53,8 +56,9 @@ public class AuthFilter extends OncePerRequestFilter {
             return true;
         }
         String path = path(request);
-        // Static images/attachments and non-API assets are public so <img> tags work.
-        if (path.startsWith("/api/images/") || path.startsWith("/api/attachments/")) {
+        // Provider test images (test_*.png) are public and have no DB record, so a
+        // strict DB-backed ownership check would make them unreachable. Keep them open.
+        if (ResourceUrlSigner.isPublicTestImage(path)) {
             return true;
         }
         if (!path.startsWith("/api/") && !path.startsWith("/actuator")
@@ -81,15 +85,26 @@ public class AuthFilter extends OncePerRequestFilter {
             if (header != null && header.regionMatches(true, 0, "Bearer ", 0, 7)) {
                 token = header.substring(7).trim();
             }
-            AuthPrincipal tokenPrincipal = accessTokenService.parseToken(token);
-            AppUser user = appUserRepository.findByUsernameIgnoreCase(tokenPrincipal.subject())
-                    .orElseThrow(() -> new AuthException(401, "用户不存在或访问凭证已失效"));
-            if (!user.isEnabled()) {
-                throw new AuthException(403, "账号已禁用");
+
+            AuthPrincipal principal = null;
+            if (token != null && !token.isBlank()) {
+                AuthPrincipal tokenPrincipal = accessTokenService.parseToken(token);
+                principal = resolvePrincipal(tokenPrincipal.subject());
+            } else if (isResourcePath(path)) {
+                // Header-less authorization for <img>/attachment tags: a short-lived
+                // signed URL query parameter bound to the request path and user.
+                String subject = resourceUrlSigner.verify(path, request.getParameter("sig"));
+                if (subject != null && !subject.isBlank()) {
+                    principal = resolvePrincipal(subject);
+                }
             }
+
+            if (principal == null) {
+                throw new AuthException(401, "缺少访问凭证");
+            }
+
             // Resolve role and enabled state from the database so an administrator's
             // role/status changes take effect immediately instead of waiting for token expiry.
-            AuthPrincipal principal = new AuthPrincipal(user.getRole(), user.getUsername());
             AuthRole required = requiredRole(path, request.getMethod());
             if (!principal.role().satisfies(required)) {
                 writeError(response, 403, "Forbidden", "需要管理员权限");
@@ -111,6 +126,19 @@ public class AuthFilter extends OncePerRequestFilter {
             return AuthRole.ADMIN;
         }
         return AuthRole.USER;
+    }
+
+    private AuthPrincipal resolvePrincipal(String subject) {
+        AppUser user = appUserRepository.findByUsernameIgnoreCase(subject)
+                .orElseThrow(() -> new AuthException(401, "用户不存在或访问凭证已失效"));
+        if (!user.isEnabled()) {
+            throw new AuthException(403, "账号已禁用");
+        }
+        return new AuthPrincipal(user.getRole(), user.getUsername());
+    }
+
+    private static boolean isResourcePath(String path) {
+        return path.startsWith("/api/images/") || path.startsWith("/api/attachments/");
     }
 
     private boolean isAdminPath(String path, String method) {

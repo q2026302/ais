@@ -16,6 +16,7 @@ import com.gs.ais.model.entity.ModelProvider;
 import com.gs.ais.model.enums.MessageStatus;
 import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.security.AuthContext;
+import com.gs.ais.security.ResourceUrlSigner;
 import com.gs.ais.service.BillingService;
 import com.gs.ais.service.ImageGenerationQueueService;
 import com.gs.ais.service.ImageGenerationService;
@@ -52,19 +53,22 @@ public class SessionController {
     private final AppUserRepository appUserRepository;
     private final BillingService billingService;
     private final OperationLogService operationLogService;
+    private final ResourceUrlSigner resourceUrlSigner;
 
     public SessionController(SessionService sessionService,
                              ImageGenerationService imageGenerationService,
                              ImageGenerationQueueService queueService,
                              AppUserRepository appUserRepository,
                              BillingService billingService,
-                             OperationLogService operationLogService) {
+                             OperationLogService operationLogService,
+                             ResourceUrlSigner resourceUrlSigner) {
         this.sessionService = sessionService;
         this.imageGenerationService = imageGenerationService;
         this.queueService = queueService;
         this.appUserRepository = appUserRepository;
         this.billingService = billingService;
         this.operationLogService = operationLogService;
+        this.resourceUrlSigner = resourceUrlSigner;
     }
 
     private Long getCurrentUserId() {
@@ -240,7 +244,7 @@ public class SessionController {
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("assistantMessageId", result.assistantMessageId());
-        body.put("imageUrl", result.imageUrl());
+        body.put("imageUrl", resourceUrlSigner.sign(result.imageUrl()));
         body.put("prompt", result.prompt());
         body.put("status", result.status());
         body.put("errorMessage", result.errorMessage());
@@ -265,7 +269,7 @@ public class SessionController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("messageId", messageId);
         body.put("status", message.getStatus() != null ? message.getStatus().name() : "PENDING");
-        body.put("imageUrl", message.getImageUrl());
+        body.put("imageUrl", resourceUrlSigner.sign(message.getImageUrl()));
         body.put("content", message.getContent());
         body.put("errorMessage", message.getErrorMessage());
         body.put("processingInfo", queueService.getProcessingInfo(messageId));

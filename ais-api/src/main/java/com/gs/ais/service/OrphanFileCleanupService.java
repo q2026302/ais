@@ -179,6 +179,13 @@ public class OrphanFileCleanupService {
             return referencedFiles.contains(path);
         }
 
+        // A thumbnail-named file may itself be referenced directly (for example an
+        // attachment record created by reusing an attachment thumbnail). Keep it in
+        // that case regardless of whether its original is still referenced.
+        if (referencedFiles.contains(path)) {
+            return true;
+        }
+
         // Thumbnail file - check if the original image is referenced.
         // Exact basename match (strip extension) to avoid prefix collisions
         // (e.g. "a_thumb_256.png" must not be kept because "ab.png" is referenced).

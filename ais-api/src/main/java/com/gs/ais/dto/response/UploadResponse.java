@@ -1,6 +1,7 @@
 package com.gs.ais.dto.response;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import tools.jackson.databind.annotation.JsonSerialize;
 
 @Schema(description = "文件上传响应")
 public class UploadResponse {
@@ -18,6 +19,7 @@ public class UploadResponse {
     private Long fileSize;
 
     @Schema(description = "文件访问 URL", example = "/api/attachments/cat.jpg")
+    @JsonSerialize(using = SignedUrlSerializer.class)
     private String fileUrl;
 
     public UploadResponse() {}

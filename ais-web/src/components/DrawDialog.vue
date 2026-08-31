@@ -6,6 +6,7 @@ import type { Message, ModelProvider, UploadResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { selectHistorySourceUrl } from '@/utils/historyReference'
+import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
 const props = defineProps<{
   visible: boolean
@@ -34,6 +35,8 @@ const emit = defineEmits<{
   }]
 }>()
 
+const { recoverImage } = useSignedUrlRefresh()
+
 const prompt = ref('')
 const references = ref<UploadResponse[]>([])
 const size = ref('1024x1024')
@@ -57,8 +60,10 @@ interface HistoryImageItem {
   sourceKey: string
 }
 
-function onHistoryThumbError(id: string) {
-  historyThumbFailedIds.value = new Set(historyThumbFailedIds.value).add(id)
+function onHistoryThumbError(item: HistoryImageItem) {
+  const failedUrl = item.thumbUrl || item.url
+  historyThumbFailedIds.value = new Set(historyThumbFailedIds.value).add(item.id)
+  recoverImage(failedUrl)
 }
 function historyDisplayUrl(item: HistoryImageItem) {
   if (historyThumbFailedIds.value.has(item.id)) return item.url
@@ -107,7 +112,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
       items.push({
         id: `gen-${message.id}`,
         url: message.imageUrl,
-        thumbUrl: getThumbnailUrl(message.id, 'small'),
+        thumbUrl: getThumbnailUrl(message, 'small'),
         label: message.drawPrompt || '历史图片',
         format: message.drawFormat || 'png',
         sourceKey: `gen-${message.id}`,
@@ -120,7 +125,7 @@ const historyImages = computed<HistoryImageItem[]>(() => {
           items.push({
             id: `att-${attachment.id}`,
             url: attachment.fileUrl,
-            thumbUrl: getAttachmentThumbnailUrl(attachment.id, 'small'),
+            thumbUrl: getAttachmentThumbnailUrl(attachment, 'small'),
             label: attachment.originalName || '用户上传图片',
             format: ext,
             sourceKey: `att-${attachment.id}`,
@@ -541,7 +546,7 @@ function handleGenerate() {
                   :title="item.label || '会话历史图片'"
                   @click="selectHistoryImage(item)"
                 >
-                  <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item.id)" />
+                  <el-image :src="historyDisplayUrl(item)" fit="cover" @error="onHistoryThumbError(item)" />
                   <span v-if="historyImportingId === item.id" class="history-image-loading">正在添加…</span>
                   <span v-else-if="historySelectedIds.includes(item.id)" class="history-image-selected">已添加</span>
                   <span class="history-image-caption">{{ item.label || '历史图片' }}</span>
