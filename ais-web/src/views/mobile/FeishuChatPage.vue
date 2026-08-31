@@ -748,6 +748,71 @@ function triggerAlbum(event?: MouseEvent) {
   albumInputRef.value?.click()
 }
 
+// ── Cold-start file-picker priming (PWA / WebAPK only) ─────────────────────
+// 小米 Android WebAPK 冷启动后的**第一次**点击（pointerdown→click）有时不会触发
+// overlaid <input type="file"> 的原生选择器（首次手势的 transient activation 被
+// 首帧 focus/layout 抖动吞掉），第二次起才正常。
+//
+// 修复：在同一个受信手势的 pointerup/touchend 阶段（早于原生 click 默认行为、且
+// 手指已抬起），对**首次**点击同步重放一次 input.click() 把选择器提前唤起，随后吞掉
+// 同一手势补发的可信原生 click（isTrusted）避免二次弹窗。首次之后恢复纯原生 overlay
+// 路径，不影响浏览器标签页 / 飞书 WebView（isPwaEntry 门控）。
+let coldStartFilePickerPrimed = false
+let suppressNextNativeFileClick = false
+let primeGestureActive = false
+let primeGestureStartX = 0
+let primeGestureStartY = 0
+
+function primeGesturePoint(event: Event): { x: number; y: number } {
+  if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
+    const touch = event.type === 'touchend' || event.type === 'touchcancel'
+      ? event.changedTouches[0]
+      : event.touches[0]
+    return { x: touch?.clientX ?? 0, y: touch?.clientY ?? 0 }
+  }
+  const pointer = event as MouseEvent
+  return { x: pointer.clientX ?? 0, y: pointer.clientY ?? 0 }
+}
+
+function primeFilePicker(input: HTMLInputElement | null | undefined) {
+  if (!input || input.disabled || coldStartFilePickerPrimed) return
+  coldStartFilePickerPrimed = true
+  suppressNextNativeFileClick = true
+  // 必须同步调用，不能 await / 异步后再 click（会丢失 user activation）。
+  input.click()
+}
+
+function onFileInputPrimeStart(event: Event) {
+  if (!isPwaEntry()) return
+  // 新手势开始：上一次手势的抑制已不再需要（其原生 click 要么已触发、要么已丢失）。
+  suppressNextNativeFileClick = false
+  primeGestureActive = true
+  const point = primeGesturePoint(event)
+  primeGestureStartX = point.x
+  primeGestureStartY = point.y
+}
+
+function onFileInputPrime(event: Event) {
+  if (!isPwaEntry() || !primeGestureActive) return
+  primeGestureActive = false
+  // 仅处理“点按”：位移过大视为拖拽/滚动，不唤出选择器。
+  const point = primeGesturePoint(event)
+  const dx = point.x - primeGestureStartX
+  const dy = point.y - primeGestureStartY
+  if ((dx * dx) + (dy * dy) > 120) return
+  primeFilePicker(event.currentTarget as HTMLInputElement)
+}
+
+function onFileInputClick(event: MouseEvent) {
+  // primeFilePicker 派发的是不可信 click（isTrusted=false），必须放行以打开首个
+  // 选择器；同一手势随后补发的可信原生 click 才需要吞掉，避免二次弹窗。
+  if (event.isTrusted && suppressNextNativeFileClick) {
+    suppressNextNativeFileClick = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+
 async function handlePaste(event: ClipboardEvent) {
   const files = Array.from(event.clipboardData?.items || [])
     .filter((item) => item.type.startsWith('image/'))
@@ -1458,6 +1523,11 @@ const debugInfo = computed(() => {
               :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'"
               multiple
               :disabled="store.loading || uploading"
+              @pointerdown="onFileInputPrimeStart"
+              @touchstart="onFileInputPrimeStart"
+              @pointerup="onFileInputPrime"
+              @touchend="onFileInputPrime"
+              @click="onFileInputClick"
               @change="handleFileUpload"
             >
           </div>
@@ -1579,6 +1649,11 @@ const debugInfo = computed(() => {
                 accept="image/*"
                 capture="environment"
                 :disabled="store.loading || uploading || referenceAdding"
+                @pointerdown="onFileInputPrimeStart"
+                @touchstart="onFileInputPrimeStart"
+                @pointerup="onFileInputPrime"
+                @touchend="onFileInputPrime"
+                @click="onFileInputClick"
                 @change="handleImagePick"
               >
             </label>
@@ -1598,6 +1673,11 @@ const debugInfo = computed(() => {
                 accept="image/*"
                 multiple
                 :disabled="store.loading || uploading || referenceAdding"
+                @pointerdown="onFileInputPrimeStart"
+                @touchstart="onFileInputPrimeStart"
+                @pointerup="onFileInputPrime"
+                @touchend="onFileInputPrime"
+                @click="onFileInputClick"
                 @change="handleImagePick"
               >
             </label>
