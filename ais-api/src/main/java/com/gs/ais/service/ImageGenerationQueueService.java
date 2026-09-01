@@ -40,6 +40,7 @@ public class ImageGenerationQueueService {
     private final SessionService sessionService;
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
+    private final AttachmentService attachmentService;
     private final BillingService billingService;
     private final GeneratedImageFileService generatedImageFileService;
     private final Path uploadDir;
@@ -65,6 +66,7 @@ public class ImageGenerationQueueService {
                                        SessionService sessionService,
                                        MessageRepository messageRepository,
                                        AttachmentRepository attachmentRepository,
+                                       AttachmentService attachmentService,
                                        BillingService billingService,
                                        GeneratedImageFileService generatedImageFileService,
                                        StoragePaths storagePaths) {
@@ -73,6 +75,7 @@ public class ImageGenerationQueueService {
         this.sessionService = sessionService;
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
+        this.attachmentService = attachmentService;
         this.billingService = billingService;
         this.generatedImageFileService = generatedImageFileService;
         this.uploadDir = storagePaths.uploadDir();
@@ -156,6 +159,12 @@ public class ImageGenerationQueueService {
                 ? safeRequest.getImageProviderId()
                 : session.getImageProviderId();
 
+        // Resolve existing-file references up front (still on the request thread, so
+        // AuthContext is available for access checks). This neither creates an
+        // attachment nor copies bytes — the resolved paths are read directly by the
+        // async generation task.
+        List<ResolvedReference> resolvedReferences = resolveReferenceUrls(safeRequest.getReferenceUrls());
+
         Message userMessage = new Message();
         userMessage.setSession(session);
         userMessage.setRole(MessageRole.USER);
@@ -163,6 +172,7 @@ public class ImageGenerationQueueService {
         userMessage.setStatus(MessageStatus.SUCCESS);
         userMessage.setContent(buildDrawMessageContent(prompt, safeRequest));
         applyDrawMetadata(userMessage, prompt, safeRequest, imageProviderId);
+        userMessage.setReferenceFileUrls(joinReferenceUrls(safeRequest.getReferenceUrls()));
         userMessage = messageRepository.save(userMessage);
         attachRequestAttachments(userMessage, safeRequest.getAttachmentIds());
 
@@ -188,7 +198,7 @@ public class ImageGenerationQueueService {
         processingInfo.put(assistantMessageId, "正在排队");
 
         Runnable task = () -> processDraw(sessionId, userMessageId, assistantMessageId,
-                finalPrompt, imageProviderId, safeRequest, finalUserId, null);
+                finalPrompt, imageProviderId, safeRequest, finalUserId, null, resolvedReferences);
         submitAfterCommit(assistantMessageId, imageProviderId, task);
 
         return assistantMessageId;
@@ -211,15 +221,21 @@ public class ImageGenerationQueueService {
         String finalPrompt = prompt.trim();
         processingInfo.put(assistantMessageId, "正在排队");
 
+        // Re-resolve the persisted existing-file references (raw, signature-less) for
+        // resend/regenerate so references survive without any attachment record.
+        List<String> persistedUrls = splitReferenceUrls(
+                messageRepository.findById(userMessageId).map(Message::getReferenceFileUrls).orElse(null));
+        List<ResolvedReference> resolvedReferences = resolveReferenceUrls(persistedUrls);
+
         Runnable task = () -> processDraw(sessionId, userMessageId, assistantMessageId,
-                finalPrompt, imageProviderId, safeRequest, userId, previousImageUrl);
+                finalPrompt, imageProviderId, safeRequest, userId, previousImageUrl, resolvedReferences);
         submitAfterCommit(assistantMessageId, imageProviderId, task);
         return assistantMessageId;
     }
 
     private void processDraw(Long sessionId, Long userMessageId, Long assistantMessageId, String prompt,
                              Long imageProviderId, DrawRequest request, Long userId,
-                             String previousImageUrl) {
+                             String previousImageUrl, List<ResolvedReference> resolvedReferences) {
         ProviderQueueState state = getOrCreateQueue(imageProviderId);
         boolean acquired = false;
         try {
@@ -249,7 +265,7 @@ public class ImageGenerationQueueService {
                 // Check if cancelled
                 if (wasCancelled(assistantMessageId)) return;
 
-                List<LlmClient.ReferenceImage> referenceImages = loadReferenceImages(userMessageId);
+                List<LlmClient.ReferenceImage> referenceImages = loadReferenceImages(userMessageId, resolvedReferences);
                 ModelProvider imageProvider = resolveImageProvider(imageProviderId);
                 LlmClient.ImageGenerationOptions options = new LlmClient.ImageGenerationOptions(
                         cleanOption(request.getSize()),
@@ -519,8 +535,11 @@ public class ImageGenerationQueueService {
         message.setDrawProviderId(imageProviderId);
     }
 
-    private List<LlmClient.ReferenceImage> loadReferenceImages(Long messageId) {
+    private List<LlmClient.ReferenceImage> loadReferenceImages(Long messageId,
+                                                               List<ResolvedReference> resolvedReferences) {
         List<LlmClient.ReferenceImage> references = new ArrayList<>();
+        // Uploaded attachments bound to the draw request message (the legacy path —
+        // user-uploaded reference images still create a real attachment).
         for (Attachment att : attachmentRepository.findByMessageId(messageId)) {
             if (att.getContentType() == null || !att.getContentType().startsWith("image/")) continue;
             try {
@@ -530,7 +549,76 @@ public class ImageGenerationQueueService {
                 throw new RuntimeException("Failed to read reference image: " + att.getOriginalName(), e);
             }
         }
+        // Existing-file references (history generated images / existing attachments):
+        // read the original bytes in place — no attachment, no copy.
+        if (resolvedReferences != null) {
+            for (ResolvedReference ref : resolvedReferences) {
+                try {
+                    references.add(new LlmClient.ReferenceImage(ref.filename(), ref.contentType(),
+                            Files.readAllBytes(ref.path())));
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to read reference image: " + ref.filename(), e);
+                }
+            }
+        }
         return references;
+    }
+
+    /** A resolved existing-file reference: physical path plus metadata for the model adapter. */
+    private record ResolvedReference(Path path, String filename, String contentType) {
+    }
+
+    /**
+     * Validates access to each existing-file URL and resolves its physical path. This
+     * is intentionally synchronous (runs on the request thread where {@code AuthContext}
+     * is populated); the resolved paths are handed to the async task, which reads the
+     * bytes directly. No attachment record is created and no bytes are copied.
+     */
+    private List<ResolvedReference> resolveReferenceUrls(List<String> referenceUrls) {
+        if (referenceUrls == null || referenceUrls.isEmpty()) {
+            return List.of();
+        }
+        List<ResolvedReference> resolved = new ArrayList<>(referenceUrls.size());
+        for (String url : referenceUrls) {
+            if (url == null || url.isBlank()) continue;
+            Path path = attachmentService.resolveExistingSourcePath(url);
+            resolved.add(new ResolvedReference(path, path.getFileName().toString(), contentTypeFor(path)));
+        }
+        return resolved;
+    }
+
+    private static String contentTypeFor(Path path) {
+        String name = path.getFileName().toString().toLowerCase();
+        if (name.endsWith(".png")) return "image/png";
+        if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+        if (name.endsWith(".gif")) return "image/gif";
+        if (name.endsWith(".webp")) return "image/webp";
+        return "image/png";
+    }
+
+    /** Joins reference URLs into a newline-separated persisted string (signatures stripped). */
+    private static String joinReferenceUrls(List<String> referenceUrls) {
+        if (referenceUrls == null || referenceUrls.isEmpty()) return null;
+        List<String> stripped = new ArrayList<>(referenceUrls.size());
+        for (String url : referenceUrls) {
+            String path = stripQuery(url);
+            if (path != null && !path.isBlank()) stripped.add(path);
+        }
+        return stripped.isEmpty() ? null : String.join("\n", stripped);
+    }
+
+    private static List<String> splitReferenceUrls(String stored) {
+        if (stored == null || stored.isBlank()) return List.of();
+        return java.util.Arrays.stream(stored.split("\n"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    private static String stripQuery(String url) {
+        if (url == null) return null;
+        int query = url.indexOf('?');
+        return query >= 0 ? url.substring(0, query) : url;
     }
 
 

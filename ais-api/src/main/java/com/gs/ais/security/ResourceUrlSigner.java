@@ -41,6 +41,16 @@ public class ResourceUrlSigner {
     static final long TTL_SECONDS = 3600L;
     static final String SIGNATURE_CONTEXT = "ais:resource-url-signature:v1";
 
+    /**
+     * Issue-time rounding granularity. {@code exp} is computed from a minute-aligned
+     * bucket instead of "now + TTL", so the same user + path resolves to the same
+     * signature (and therefore the same cache key) for every serialization within a
+     * bucket. This keeps the URL stable over a scrolling session while still
+     * expiring within {@link #TTL_SECONDS} (between TTL-bucket and TTL seconds of
+     * remaining validity).
+     */
+    static final long SIGNATURE_BUCKET_SECONDS = 60L;
+
     private final ObjectMapper objectMapper;
     private final SecretKeySpec signingKey;
 
@@ -76,7 +86,7 @@ public class ResourceUrlSigner {
             return url;
         }
 
-        long exp = Instant.now().getEpochSecond() + TTL_SECONDS;
+        long exp = expiryForNow();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sub", subject);
         payload.put("exp", exp);
@@ -125,6 +135,72 @@ public class ResourceUrlSigner {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * The expiry timestamp (unix seconds) used for a signature minted right now:
+     * the next bucket boundary plus the TTL, so signatures issued inside one bucket
+     * share an expiry and thus a stable URL.
+     */
+    static long expiryForNow() {
+        long now = Instant.now().getEpochSecond();
+        return (now / SIGNATURE_BUCKET_SECONDS) * SIGNATURE_BUCKET_SECONDS + TTL_SECONDS;
+    }
+
+    /**
+     * Remaining validity (seconds) of a signed URL's {@code sig} query value,
+     * floored at 0. Returns 0 when the signature is absent or unreadable, which
+     * callers treat as "do not cache" (public test images, legacy unsigned URLs).
+     *
+     * <p><strong>This is a non-authoritative cache hint only.</strong> It reads the
+     * (non-secret) {@code exp} field without verifying the HMAC, so it must never be
+     * used to mint or accept a signature, and it must never drive a cache policy on
+     * its own — a caller with an {@code Authorization} header can attach an arbitrary
+     * {@code sig} whose decoded {@code exp} is forged. Authorization and cache TTL
+     * decisions must use {@link #verify(String, String)} /
+     * {@link #remainingValiditySecondsVerified(String, String)} instead.
+     */
+    public long remainingValiditySeconds(String sig) {
+        if (sig == null || sig.isBlank()) {
+            return 0L;
+        }
+        String[] parts = sig.split("\\.", -1);
+        if (parts.length != 2) {
+            return 0L;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> payload = objectMapper.readValue(URL_DECODER.decode(parts[0]), Map.class);
+            Object expValue = payload.get("exp");
+            long exp = expValue instanceof Number number ? number.longValue() : 0L;
+            if (exp <= 0L) {
+                return 0L;
+            }
+            long remaining = exp - Instant.now().getEpochSecond();
+            return remaining > 0L ? remaining : 0L;
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Remaining validity (seconds) of a signed URL's {@code sig} query value that
+     * has <em>first been verified</em> against the exact context-relative request
+     * {@code path}: HMAC must match, the token must not be expired, and the payload
+     * {@code path} must equal {@code path}. Only then is the payload {@code exp}
+     * trusted to compute the remaining lifetime.
+     *
+     * <p>Returns 0 for an absent, malformed, forged, expired, or path-mismatched
+     * signature. Callers use 0 to mean "do not cache" ({@code no-store}). This is
+     * the only cache-TTL entry point that may feed a {@code max-age}; the unchecked
+     * {@link #remainingValiditySeconds(String)} must not be used for that purpose.
+     */
+    public long remainingValiditySecondsVerified(String path, String sig) {
+        if (verify(path, sig) == null) {
+            return 0L;
+        }
+        // The signature passed HMAC + expiry + path verification, so exp is genuine.
+        return remainingValiditySeconds(sig);
     }
 
     /** Static entry point used by {@link com.gs.ais.dto.response.SignedUrlSerializer}. */

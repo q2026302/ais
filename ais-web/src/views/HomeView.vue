@@ -10,7 +10,8 @@ import ModelSelector from '@/components/ModelSelector.vue'
 import DrawDialog from '@/components/DrawDialog.vue'
 import RegenerateDialog from '@/components/RegenerateDialog.vue'
 import ImageGallery from '@/components/ImageGallery.vue'
-import type { Message, ModelProvider, UploadResponse } from '@/types'
+import type { Message, ModelProvider, UploadResponse, DrawReference } from '@/types'
+import { referenceFromUpload } from '@/utils/historyReference'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import { userDefaultsApi } from '@/api/billing'
 
@@ -26,7 +27,7 @@ const editingAction = ref<'edit' | 'resend' | null>(null)
 
 const drawDialogVisible = ref(false)
 const drawInitialPrompt = ref('')
-const drawInitialReferences = ref<UploadResponse[]>([])
+const drawInitialReferences = ref<DrawReference[]>([])
 const drawInitialSize = ref('1024x1024')
 const drawInitialQuality = ref('auto')
 const drawInitialFormat = ref('png')
@@ -289,7 +290,11 @@ async function handleSystemCommand(payload: ChatInputPayload): Promise<boolean> 
         ElMessage.warning('用法：/draw <绘图提示词>')
         return true
       }
-      handleDraw({ ...payload, prompt: command.argument, attachments: payload.attachments || [] })
+      handleDraw({
+        prompt: command.argument,
+        references: (payload.attachments || []).filter(isImageAttachment).map(referenceFromUpload),
+        chatProviderId: payload.chatProviderId,
+      })
       return true
     default:
       ElMessage.warning(`未知命令 /${command.rawName}；输入 /help 查看可用命令。`)
@@ -357,16 +362,14 @@ function isImageAttachment(item: UploadResponse) {
 
 function handleDraw(payload: {
   prompt: string
-  attachmentIds: number[]
-  attachments: UploadResponse[]
+  references: DrawReference[]
   chatProviderId: number | null
   size?: string
   quality?: string
   format?: string
 }) {
-  const references = payload.attachments.filter(isImageAttachment)
+  drawInitialReferences.value = payload.references
   const userPrompt = payload.prompt.trim()
-  drawInitialReferences.value = references
   drawSmartParseInitialPrompt.value = !userPrompt
   drawInitialPrompt.value = userPrompt || getLastAssistantPrompt()
   drawInitialSize.value = payload.size || '1024x1024'
@@ -378,7 +381,8 @@ function handleDraw(payload: {
 async function handleDrawGenerate(payload: {
   prompt: string
   attachmentIds: number[]
-  references: UploadResponse[]
+  referenceUrls?: string[]
+  references: DrawReference[]
   size: string
   quality: string
   format: string
@@ -396,6 +400,7 @@ async function handleDrawGenerate(payload: {
     const drawPromise = store.draw({
       prompt: payload.prompt,
       attachmentIds: payload.attachmentIds,
+      referenceUrls: payload.referenceUrls,
       imageProviderId: payload.imageProviderId,
       size: payload.size,
       quality: payload.quality,

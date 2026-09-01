@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Session, Message, ModelProvider, DrawRequest, UploadResponse, Attachment, MessageStatusResponse } from '@/types'
+import type { Session, Message, ModelProvider, DrawRequest, DrawReference, UploadResponse, Attachment, MessageStatusResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { providerApi } from '@/api/providers'
 import { parseApiDate } from '@/utils/dateTime'
@@ -782,7 +782,20 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  function addDrawPlaceholder(request: DrawRequest, referenceFiles: UploadResponse[] = []) {
+  /** Map a draw reference (upload or reused history file) to an Attachment for the transient placeholder. */
+  function drawReferenceToAttachment(ref: DrawReference, index: number): Attachment {
+    return {
+      id: ref.attachmentId ?? -(index + 1),
+      originalName: ref.name,
+      contentType: ref.contentType,
+      fileSize: ref.fileSize,
+      fileUrl: ref.url,
+      thumbnailUrl: ref.thumbnailUrl || null,
+      createdAt: new Date().toISOString(),
+    }
+  }
+
+  function addDrawPlaceholder(request: DrawRequest, referenceFiles: DrawReference[] = []) {
     const now = new Date().toISOString()
     const tempBase = -Date.now()
     const optionParts = [
@@ -806,7 +819,7 @@ export const useSessionStore = defineStore('session', () => {
       drawQuality: request.quality,
       drawFormat: request.format,
       drawProviderId: request.imageProviderId ?? null,
-      attachments: referenceFiles.map(uploadToAttachment),
+      attachments: referenceFiles.map((ref, index) => drawReferenceToAttachment(ref, index)),
       tokenUsage: null,
       edited: false,
       createdAt: now,
@@ -935,7 +948,7 @@ export const useSessionStore = defineStore('session', () => {
     polledMessageStatuses.value.clear()
   }
 
-  async function draw(request: DrawRequest, referenceFiles: UploadResponse[] = []) {
+  async function draw(request: DrawRequest, referenceFiles: DrawReference[] = []) {
     const sessionId = activeSessionId.value
     if (sessionId == null || !isViewingSession(sessionId)) return
     loading.value = true

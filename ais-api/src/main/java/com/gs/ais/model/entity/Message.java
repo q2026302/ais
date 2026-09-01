@@ -63,6 +63,17 @@ public class Message {
     @Column(name = "chat_provider_id")
     private Long chatProviderId;
 
+    /**
+     * Server-side file URLs referenced by a DRAW_REQUEST that reuse an existing
+     * file (history generated image or existing attachment) without creating a new
+     * attachment record. Stored as newline-separated context-relative paths
+     * ({@code /api/images/...} / {@code /api/attachments/...}) without signatures,
+     * mirroring how {@link #imageUrl} keeps the raw path. Used to re-resolve the
+     * source files when the request is re-sent/regenerated.
+     */
+    @Column(name = "reference_file_urls", columnDefinition = "TEXT")
+    private String referenceFileUrls;
+
     @OneToMany(mappedBy = "message", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Attachment> attachments = new ArrayList<>();
 
@@ -159,6 +170,8 @@ public class Message {
     public void setDrawProviderId(Long drawProviderId) { this.drawProviderId = drawProviderId; }
     public Long getChatProviderId() { return chatProviderId; }
     public void setChatProviderId(Long chatProviderId) { this.chatProviderId = chatProviderId; }
+    public String getReferenceFileUrls() { return referenceFileUrls; }
+    public void setReferenceFileUrls(String referenceFileUrls) { this.referenceFileUrls = referenceFileUrls; }
     public List<Attachment> getAttachments() { return attachments; }
     public void setAttachments(List<Attachment> attachments) { this.attachments = attachments; }
     public Integer getPromptTokens() { return promptTokens; }

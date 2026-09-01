@@ -1,8 +1,10 @@
 package com.gs.ais.service;
 
 import com.gs.ais.config.StoragePaths;
+import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
+import com.gs.ais.util.ReferenceFileUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -90,11 +92,32 @@ public class GeneratedImageFileService {
         if (referencedByOtherMessage) {
             return true;
         }
+        // Existing-file references persisted on surviving messages (draw requests that
+        // reuse a history generated image without an attachment record). These are
+        // stored in Message.reference_file_urls as raw /api/images/... paths, so a
+        // source image referenced this way must not be physically deleted.
+        if (isReferencedByReferenceUrls(imageUrl, excludingMessageIds)) {
+            return true;
+        }
         // Defensive: attachment records always store under /api/attachments/ today, so
         // this is empty in practice, but a same-URL attachment reference would still
         // keep the file alive. Cheap to check and matches the review requirement to
         // consider both messages and attachment records before physical deletion.
         return !attachmentRepository.findByFileUrl(imageUrl).isEmpty();
+    }
+
+    /**
+     * True when any surviving message (excluding {@code excludingMessageIds})
+     * references {@code imageUrl}'s raw path in its {@code reference_file_urls}.
+     * The match is exact and query-stripped so it cannot protect a different file
+     * that merely shares a prefix or a name.
+     */
+    private boolean isReferencedByReferenceUrls(String imageUrl, Collection<Long> excludingMessageIds) {
+        List<String> storedValues = messageRepository.findMessagesWithReferenceFileUrls().stream()
+                .filter(message -> message.getId() == null || !excludingMessageIds.contains(message.getId()))
+                .map(Message::getReferenceFileUrls)
+                .toList();
+        return ReferenceFileUrls.containsPath(storedValues, imageUrl);
     }
 
     private void deleteFileAndThumbnails(Path original) {

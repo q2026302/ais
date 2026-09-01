@@ -4,6 +4,8 @@ import com.gs.ais.config.SecurityProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -59,6 +61,55 @@ class ResourceUrlSignerTests {
         String signed = signer.signFor("/api/attachments/doc.pdf", "alice");
         assertTrue(signed.contains("sig="));
         assertEquals("alice", signer.verify("/api/attachments/doc.pdf", extractSig(signed)));
+    }
+
+    @Test
+    void expiryIsBucketAlignedForStableUrls() {
+        long now = Instant.now().getEpochSecond();
+        long exp = ResourceUrlSigner.expiryForNow();
+        assertEquals(0L, (exp - ResourceUrlSigner.TTL_SECONDS) % ResourceUrlSigner.SIGNATURE_BUCKET_SECONDS);
+        assertTrue(exp > now, "expiry must be in the future");
+        assertTrue(exp - now <= ResourceUrlSigner.TTL_SECONDS, "remaining validity must not exceed TTL");
+    }
+
+    @Test
+    void remainingValiditySecondsTracksSignatureExpiry() {
+        String signed = signer.signFor("/api/images/generated/a.png", "alice");
+        long remaining = signer.remainingValiditySeconds(extractSig(signed));
+        assertTrue(remaining > 0L, "a fresh signature must have positive remaining validity");
+        assertTrue(remaining <= ResourceUrlSigner.TTL_SECONDS);
+        assertEquals(0L, signer.remainingValiditySeconds(null));
+        assertEquals(0L, signer.remainingValiditySeconds("malformed"));
+    }
+
+    @Test
+    void remainingValiditySecondsVerifiedReturnsValidityOnlyForValidSignature() {
+        String signed = signer.signFor("/api/images/generated/a.png", "alice");
+        String sig = extractSig(signed);
+        long remaining = signer.remainingValiditySecondsVerified("/api/images/generated/a.png", sig);
+        assertTrue(remaining > 0L, "a verified fresh signature must have positive remaining validity");
+        assertTrue(remaining <= ResourceUrlSigner.TTL_SECONDS);
+    }
+
+    @Test
+    void remainingValiditySecondsVerifiedRejectsForgedSignature() {
+        String signed = signer.signFor("/api/images/generated/a.png", "alice");
+        String sig = extractSig(signed);
+        // Keep the (valid) decoded header but replace the HMAC with garbage.
+        String forged = sig.substring(0, sig.indexOf('.') + 1) + "forged-hmac";
+        assertEquals(0L, signer.remainingValiditySecondsVerified("/api/images/generated/a.png", forged));
+    }
+
+    @Test
+    void remainingValiditySecondsVerifiedRejectsWrongPath() {
+        String signed = signer.signFor("/api/images/a.png", "alice");
+        assertEquals(0L, signer.remainingValiditySecondsVerified("/api/images/b.png", extractSig(signed)));
+    }
+
+    @Test
+    void remainingValiditySecondsVerifiedRejectsMissingOrMalformed() {
+        assertEquals(0L, signer.remainingValiditySecondsVerified("/api/images/a.png", null));
+        assertEquals(0L, signer.remainingValiditySecondsVerified("/api/images/a.png", "malformed"));
     }
 
     private static String extractSig(String signed) {

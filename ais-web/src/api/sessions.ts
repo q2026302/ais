@@ -24,7 +24,11 @@ const CHAT_TIMEOUT = 5 * 60 * 1000
 const IMAGE_TIMEOUT = 15 * 60 * 1000
 
 function normalizeUpload(upload: UploadResponse): UploadResponse {
-  return { ...upload, fileUrl: resolveAppUrl(upload.fileUrl) || upload.fileUrl }
+  return {
+    ...upload,
+    fileUrl: resolveAppUrl(upload.fileUrl) || upload.fileUrl,
+    thumbnailUrl: resolveAppUrl(upload.thumbnailUrl) || null,
+  }
 }
 
 function normalizeMessage(message: Message): Message {

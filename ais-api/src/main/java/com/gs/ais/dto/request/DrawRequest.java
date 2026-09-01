@@ -13,6 +13,9 @@ public class DrawRequest {
     @Schema(description = "参考图附件 ID 列表", example = "[1, 2]")
     private List<Long> attachmentIds;
 
+    @Schema(description = "直接引用的服务端已有文件 URL 列表（历史生成图 / 已有附件，不新建附件）", example = "[\"/api/images/generated/2026/08/31/abc.png\"]")
+    private List<String> referenceUrls;
+
     @Schema(description = "图像供应商 ID（不传则使用会话默认配置）", example = "2")
     private Long imageProviderId;
 
@@ -29,6 +32,8 @@ public class DrawRequest {
     public void setPrompt(String prompt) { this.prompt = prompt; }
     public List<Long> getAttachmentIds() { return attachmentIds; }
     public void setAttachmentIds(List<Long> attachmentIds) { this.attachmentIds = attachmentIds; }
+    public List<String> getReferenceUrls() { return referenceUrls; }
+    public void setReferenceUrls(List<String> referenceUrls) { this.referenceUrls = referenceUrls; }
     public Long getImageProviderId() { return imageProviderId; }
     public void setImageProviderId(Long imageProviderId) { this.imageProviderId = imageProviderId; }
     public String getSize() { return size; }

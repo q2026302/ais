@@ -22,6 +22,7 @@ import { adminApi, type OperationLog } from '@/api/admin'
 import { usersApi, type ManagedUser } from '@/api/users'
 import { userDefaultsApi } from '@/api/billing'
 import type { Message, ModelProvider, Session, UploadResponse } from '@/types'
+import { referenceFromUpload } from '@/utils/historyReference'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
@@ -486,7 +487,7 @@ async function handleSubmit() {
   if (!(await ensureSession())) return
   inputText.value = ''; pendingAttachments.value = []
   try {
-    if (mode.value === 'draw') await store.draw({ prompt, attachmentIds: attachments.map((item) => item.id), imageProviderId: selectedImageProviderId.value, size: drawSize.value, quality: drawQuality.value, format: drawFormat.value }, attachments)
+    if (mode.value === 'draw') await store.draw({ prompt, attachmentIds: attachments.map((item) => item.id), imageProviderId: selectedImageProviderId.value, size: drawSize.value, quality: drawQuality.value, format: drawFormat.value }, attachments.map(referenceFromUpload))
     else await store.chat(prompt, attachments.map((item) => item.id), selectedChatProviderId.value, attachments)
     await scrollToBottom()
   } catch (error: any) { if (error?.name !== 'CanceledError') ElMessage.error(error.message || '请求失败，请稍后重试') }

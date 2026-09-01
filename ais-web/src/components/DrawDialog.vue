@@ -2,16 +2,17 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Paperclip, Picture } from '@element-plus/icons-vue'
-import type { Message, ModelProvider, UploadResponse } from '@/types'
+import type { Message, ModelProvider, DrawReference } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
-import { selectHistorySourceUrl } from '@/utils/historyReference'
+import { referenceFromHistory, referenceFromUpload, referenceUrlForBackend } from '@/utils/historyReference'
+import { getAppBasePath } from '@/utils/appBasePath'
 import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
 const props = defineProps<{
   visible: boolean
   initialPrompt: string
-  initialReferences: UploadResponse[]
+  initialReferences: DrawReference[]
   initialSize?: string
   initialQuality?: string
   initialFormat?: string
@@ -27,7 +28,8 @@ const emit = defineEmits<{
   generate: [payload: {
     prompt: string
     attachmentIds: number[]
-    references: UploadResponse[]
+    referenceUrls: string[]
+    references: DrawReference[]
     size: string
     quality: string
     format: string
@@ -38,7 +40,7 @@ const emit = defineEmits<{
 const { recoverImage } = useSignedUrlRefresh()
 
 const prompt = ref('')
-const references = ref<UploadResponse[]>([])
+const references = ref<DrawReference[]>([])
 const size = ref('1024x1024')
 const quality = ref('auto')
 const format = ref('png')
@@ -335,7 +337,7 @@ async function addReferenceFiles(files: File[]) {
     for (const file of imageFiles) {
       try {
         const resp = await sessionApi.uploadFile(file)
-        references.value.push(resp)
+        references.value.push(referenceFromUpload(resp))
       } catch {
         failedCount += 1
       }
@@ -398,8 +400,8 @@ function handleReferenceDrop(event: DragEvent) {
 onMounted(() => window.addEventListener('paste', handleReferencePaste))
 onBeforeUnmount(() => window.removeEventListener('paste', handleReferencePaste))
 
-function removeReference(id: number) {
-  references.value = references.value.filter((item) => item.id !== id)
+function removeReference(key: string) {
+  references.value = references.value.filter((item) => item.key !== key)
 }
 
 function historyImageFilename(item: HistoryImageItem) {
@@ -409,7 +411,7 @@ function historyImageFilename(item: HistoryImageItem) {
   return `history-${item.id}.${item.format || 'png'}`
 }
 
-async function selectHistoryImage(item: HistoryImageItem) {
+function selectHistoryImage(item: HistoryImageItem) {
   if (!item.url || historyImportingId.value != null) return
   if (historySelectedIds.value.includes(item.id)) {
     ElMessage.info('这张图片已经添加为参考图')
@@ -417,20 +419,16 @@ async function selectHistoryImage(item: HistoryImageItem) {
   }
 
   historyImportingId.value = item.id
-  uploadTaskCount.value += 1
   try {
-    const uploaded = await sessionApi.reuseAttachment(
-      selectHistorySourceUrl(item, true),
+    // Drawing: reuse the server-side file directly — no new attachment, no copy.
+    references.value.push(referenceFromHistory(
+      { url: item.url, thumbUrl: item.thumbUrl },
       historyImageFilename(item),
       `image/${item.format === 'jpg' ? 'jpeg' : item.format}`,
-    )
-    references.value.push(uploaded)
+    ))
     historySelectedIds.value.push(item.id)
     ElMessage.success('已从会话历史添加参考图')
-  } catch (error: any) {
-    ElMessage.error(error?.message || '历史图片添加失败')
   } finally {
-    uploadTaskCount.value -= 1
     historyImportingId.value = null
   }
 }
@@ -451,7 +449,10 @@ function handleGenerate() {
   }
   emit('generate', {
     prompt: text,
-    attachmentIds: references.value.map((item) => item.id),
+    attachmentIds: references.value.filter((item) => item.kind === 'upload').map((item) => item.attachmentId!),
+    referenceUrls: references.value
+      .filter((item) => item.kind === 'history')
+      .map((item) => referenceUrlForBackend(item.url, getAppBasePath())),
     references: [...references.value],
     size: size.value,
     quality: quality.value,
@@ -517,17 +518,17 @@ function handleGenerate() {
         <el-form-item label="参考图">
           <div class="reference-field">
           <div v-if="references.length > 0" class="reference-list">
-              <div v-for="item in references" :key="item.id" class="reference-item">
+              <div v-for="item in references" :key="item.key" class="reference-item">
                 <el-image
                   v-if="isImage(item.contentType)"
-                  :src="item.fileUrl"
+                  :src="item.thumbnailUrl || item.url"
                   fit="cover"
                   class="reference-thumb"
-                  :preview-src-list="[item.fileUrl]"
+                  :preview-src-list="[item.url]"
                   preview-teleported
                 />
-                <span class="reference-name">{{ item.originalName }}</span>
-                <el-button text size="small" type="danger" @click="removeReference(item.id)">移除</el-button>
+                <span class="reference-name">{{ item.name }}</span>
+                <el-button text size="small" type="danger" @click="removeReference(item.key)">移除</el-button>
               </div>
             </div>
             <div v-if="historyImages.length > 0" class="history-reference-picker">

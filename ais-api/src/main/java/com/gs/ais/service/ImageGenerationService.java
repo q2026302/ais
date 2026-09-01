@@ -18,6 +18,7 @@ import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.util.LlmErrorMessageUtils;
 import com.gs.ais.util.PureThumbnail;
+import com.gs.ais.util.ReferenceFileUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -770,15 +771,22 @@ public class ImageGenerationService {
         // 2. Delete associated attachment records. The physical file is removed only
         //    when no other record references it: de-duplication shares one physical
         //    file across multiple records, so a blindly deleted file could break a
-        //    still-live attachment elsewhere.
+        //    still-live attachment elsewhere. A surviving draw-request message that
+        //    reuses this attachment via reference_file_urls also keeps the bytes.
         List<Attachment> attachments = attachmentRepository.findByMessageId(messageId);
+        List<String> referenceValues = messageRepository.findMessagesWithReferenceFileUrls().stream()
+                .filter(other -> other.getId() == null || !java.util.Objects.equals(other.getId(), messageId))
+                .map(Message::getReferenceFileUrls)
+                .toList();
         for (Attachment attachment : attachments) {
             String filename = attachment.getFilename();
+            boolean referencedByReferenceUrls = filename != null
+                    && ReferenceFileUrls.containsPath(referenceValues, "/api/attachments/" + filename);
             boolean otherReference = filename != null
                     && attachmentRepository.findByFilename(filename).stream()
                         .anyMatch(other -> !java.util.Objects.equals(other.getId(), attachment.getId()));
             attachmentRepository.delete(attachment);
-            if (!otherReference && filename != null) {
+            if (!otherReference && !referencedByReferenceUrls && filename != null) {
                 try {
                     Files.deleteIfExists(attachmentDir.resolve(filename));
                 } catch (IOException e) {

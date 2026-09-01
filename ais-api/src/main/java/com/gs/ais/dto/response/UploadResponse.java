@@ -22,6 +22,10 @@ public class UploadResponse {
     @JsonSerialize(using = SignedUrlSerializer.class)
     private String fileUrl;
 
+    @Schema(description = "附件缩略图 URL（按附件 id 懒生成；前端渲染时动态附加 size 参数）", example = "/api/attachments/1/thumbnail")
+    @JsonSerialize(using = SignedUrlSerializer.class)
+    private String thumbnailUrl;
+
     public UploadResponse() {}
 
     public UploadResponse(Long id, String originalName, String contentType, Long fileSize, String fileUrl) {
@@ -42,4 +46,6 @@ public class UploadResponse {
     public void setFileSize(Long fileSize) { this.fileSize = fileSize; }
     public String getFileUrl() { return fileUrl; }
     public void setFileUrl(String fileUrl) { this.fileUrl = fileUrl; }
+    public String getThumbnailUrl() { return thumbnailUrl; }
+    public void setThumbnailUrl(String thumbnailUrl) { this.thumbnailUrl = thumbnailUrl; }
 }

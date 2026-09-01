@@ -1,8 +1,10 @@
 package com.gs.ais.service;
 
 import com.gs.ais.config.StoragePaths;
+import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
+import com.gs.ais.util.ReferenceFileUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -114,6 +116,18 @@ public class OrphanFileCleanupService {
         }
         for (String fileUrl : attachmentRepository.findAllFileUrls()) {
             resolveLocalUrl(fileUrl, ATTACHMENT_URL_PREFIX, attachmentRoot).ifPresent(referenced::add);
+        }
+        // Draw-request messages that reuse an existing server-side file without an
+        // attachment record store its raw path in reference_file_urls. These are live
+        // references too: a file referenced only this way must not be swept as orphan.
+        for (Message message : messageRepository.findMessagesWithReferenceFileUrls()) {
+            for (String reference : ReferenceFileUrls.split(message.getReferenceFileUrls())) {
+                if (reference.startsWith(IMAGE_URL_PREFIX)) {
+                    resolveLocalUrl(reference, IMAGE_URL_PREFIX, uploadRoot).ifPresent(referenced::add);
+                } else if (reference.startsWith(ATTACHMENT_URL_PREFIX)) {
+                    resolveLocalUrl(reference, ATTACHMENT_URL_PREFIX, attachmentRoot).ifPresent(referenced::add);
+                }
+            }
         }
         return referenced;
     }

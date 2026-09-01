@@ -211,10 +211,32 @@ export interface DrawPlaceholder {
 export interface DrawRequest {
   prompt: string
   attachmentIds?: number[]
+  /** Existing server-side file URLs to reuse directly (history generated image / existing attachment). */
+  referenceUrls?: string[]
   imageProviderId?: number | null
   size?: string
   quality?: string
   format?: string
+}
+
+/**
+ * A reference image in the draw composer. `kind === 'upload'` is a real attachment
+ * (sent via `attachmentIds`); `kind === 'history'` reuses an existing server-side
+ * file (sent via `referenceUrls`) without creating a new attachment or copying bytes.
+ */
+export interface DrawReference {
+  /** Stable unique key within the current draft list. */
+  key: string
+  name: string
+  contentType: string
+  fileSize: number
+  /** Original (full-size) signed URL — used for "view original" and sent to the model. */
+  url: string
+  /** Thumbnail signed URL (empty string when unavailable) — used for grid/list display. */
+  thumbnailUrl: string
+  kind: 'upload' | 'history'
+  /** Attachment id, present only for `kind === 'upload'`. */
+  attachmentId?: number
 }
 
 export interface RegenerateRequest {
@@ -240,6 +262,8 @@ export interface UploadResponse {
   contentType: string
   fileSize: number
   fileUrl: string
+  /** Signed thumbnail URL (server-generated); append ?size=small|medium at render time. */
+  thumbnailUrl?: string | null
 }
 
 export interface TestConnectionRequest {

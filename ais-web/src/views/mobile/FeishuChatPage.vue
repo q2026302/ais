@@ -27,12 +27,13 @@ import {
 import { useSessionStore } from '@/stores/session'
 import { sessionApi } from '@/api/sessions'
 import { userDefaultsApi } from '@/api/billing'
-import type { Message, ModelProvider, UploadResponse, Attachment } from '@/types'
+import type { Message, ModelProvider, UploadResponse, Attachment, DrawReference } from '@/types'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
-import { selectHistorySourceUrl } from '@/utils/historyReference'
+import { referenceFromHistory, referenceFromUpload, referenceUrlForBackend } from '@/utils/historyReference'
+import { getAppBasePath } from '@/utils/appBasePath'
 import { formatTimeHm, parseApiDate } from '@/utils/dateTime'
 import { getMessageEditableText } from '@/utils/messageText'
 import { useLongPress } from '@/composables/useLongPress'
@@ -66,6 +67,8 @@ const inputChromeCollapsed = computed(() => mobileKeyboard?.inputChromeCollapsed
 const fullscreenInput = ref(false)
 const inputText = ref('')
 const pendingAttachments = ref<UploadResponse[]>([])
+/** History references (draw mode only): reused server-side files, no new attachment. */
+const historyReferences = ref<DrawReference[]>([])
 const uploadCount = ref(0)
 const uploading = computed(() => uploadCount.value > 0)
 const initializing = ref(true)
@@ -241,10 +244,15 @@ const selectedChatProvider = computed<ModelProvider | null>(() => {
   if (selectedChatProviderId.value == null) return null
   return store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
 })
-const referenceImageCount = computed(() => pendingAttachments.value.filter((item) => item.contentType?.startsWith('image/')).length)
+const referenceImageCount = computed(() => pendingAttachments.value.filter((item) => item.contentType?.startsWith('image/')).length + historyReferences.value.length)
+/** Merged draft references (uploads + history) for the composer strip. */
+const composerItems = computed<DrawReference[]>(() => [
+  ...pendingAttachments.value.map(referenceFromUpload),
+  ...historyReferences.value,
+])
 const editingMessage = computed(() => store.messages.find((item) => item.id === editingMessageId.value) || null)
 const isEditing = computed(() => editingMessage.value != null)
-const canSubmit = computed(() => !store.loading && !uploading.value && (Boolean(inputText.value.trim()) || pendingAttachments.value.length > 0))
+const canSubmit = computed(() => !store.loading && !uploading.value && (Boolean(inputText.value.trim()) || pendingAttachments.value.length > 0 || historyReferences.value.length > 0))
 const canSubmitEdit = computed(() => isEditing.value && !store.loading && !uploading.value && Boolean(inputText.value.trim()))
 const activeSessionTitle = computed(() => activeSession.value?.title || 'AI 创作')
 const selectedHistoryItems = computed(() =>
@@ -253,7 +261,7 @@ const selectedHistoryItems = computed(() =>
     .filter((item): item is HistoryImageItem => item != null),
 )
 const referenceSelectionCount = computed(() => selectedHistoryIds.value.length)
-const showOriginalCheckbox = computed(() => selectedHistoryIds.value.length > 0)
+const showOriginalCheckbox = computed(() => mode.value === 'chat' && selectedHistoryIds.value.length > 0)
 const canConfirmReference = computed(() => referenceSelectionCount.value > 0 && !referenceAdding.value && !store.loading)
 const referencePreviewItems = computed(() =>
   selectedHistoryItems.value.map((item) => ({
@@ -583,12 +591,14 @@ async function handleSubmit() {
   }
   const prompt = inputText.value.trim()
   const attachments = [...pendingAttachments.value]
+  const historyRefs = [...historyReferences.value]
   try {
     const commandResult = await handleSystemCommand(prompt, attachments)
     if (commandResult.handled) {
       if (!commandResult.keepDraft) {
         inputText.value = ''
         pendingAttachments.value = []
+        historyReferences.value = []
       }
       return
     }
@@ -599,16 +609,18 @@ async function handleSubmit() {
   if (!(await ensureSession())) return
   inputText.value = ''
   pendingAttachments.value = []
+  historyReferences.value = []
   try {
     if (mode.value === 'draw') {
       await store.draw({
         prompt,
         attachmentIds: attachments.map((item) => item.id),
+        referenceUrls: historyRefs.map((ref) => referenceUrlForBackend(ref.url, getAppBasePath())),
         imageProviderId: selectedImageProviderId.value,
         size: drawSize.value,
         quality: drawQuality.value,
         format: drawFormat.value,
-      }, attachments)
+      }, [...attachments.map(referenceFromUpload), ...historyRefs])
     } else {
       await store.chat(prompt, attachments.map((item) => item.id), selectedChatProviderId.value, attachments)
     }
@@ -628,6 +640,8 @@ function handleInputKeydown(event: KeyboardEvent) {
 
 function toggleMode() {
   mode.value = mode.value === 'draw' ? 'chat' : 'draw'
+  // History references only apply to drawing; drop them when leaving draw mode.
+  historyReferences.value = []
 }
 
 function openSettingsPanel() {
@@ -827,6 +841,14 @@ function removeAttachment(id: number) {
   pendingAttachments.value = pendingAttachments.value.filter((item) => item.id !== id)
 }
 
+function removeComposerItem(ref: DrawReference) {
+  if (ref.kind === 'upload') {
+    pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== ref.attachmentId)
+  } else {
+    historyReferences.value = historyReferences.value.filter((r) => r.key !== ref.key)
+  }
+}
+
 function isHistorySelected(id: string) {
   return selectedHistoryIds.value.includes(id)
 }
@@ -879,12 +901,26 @@ async function confirmReferenceSelection() {
   uploadCount.value++
   let added = 0
   try {
-    for (const item of selectedHistoryItems.value) {
-      const attachment = await sessionApi.reuseAttachment(
-        selectHistorySourceUrl(item, referenceUseOriginal.value),
-      )
-      pendingAttachments.value.push(attachment)
-      added += 1
+    if (mode.value === 'draw') {
+      // Drawing: reuse the server-side file directly — no new attachment, no copy.
+      for (const item of selectedHistoryItems.value) {
+        if (historyReferences.value.some((ref) => ref.url === item.url)) continue
+        historyReferences.value.push(referenceFromHistory(
+          { url: item.url, thumbUrl: item.thumbUrl },
+          `history-${item.messageId}.${item.format}`,
+          `image/${item.format === 'jpg' ? 'jpeg' : item.format}`,
+        ))
+        added += 1
+      }
+    } else {
+      // Chat: history images are real multimodal attachments (existing path).
+      for (const item of selectedHistoryItems.value) {
+        const attachment = await sessionApi.reuseAttachment(
+          referenceUseOriginal.value ? item.url : (item.thumbUrl || item.url),
+        )
+        pendingAttachments.value.push(attachment)
+        added += 1
+      }
     }
     referenceVisible.value = false
     resetReferencePanel()
@@ -1000,6 +1036,7 @@ function resetComposerDraft() {
   editingAction.value = null
   inputText.value = ''
   pendingAttachments.value = []
+  historyReferences.value = []
 }
 
 async function handleEditSend() {
@@ -1464,11 +1501,11 @@ const debugInfo = computed(() => {
     </div>
 
     <footer class="composer">
-      <div v-if="pendingAttachments.length" class="attachment-strip">
-        <div v-for="attachment in pendingAttachments" :key="attachment.id" class="attachment-preview">
-          <el-image v-if="isImageAttachment(attachment.contentType)" :src="attachment.fileUrl" fit="cover" />
-          <div v-else class="attachment-file-icon"><Paperclip /><small>{{ attachment.originalName }}</small></div>
-          <button type="button" aria-label="移除附件" @click="removeAttachment(attachment.id)"><Close /></button>
+      <div v-if="composerItems.length" class="attachment-strip">
+        <div v-for="item in composerItems" :key="item.key" class="attachment-preview">
+          <el-image v-if="isImageAttachment(item.contentType)" :src="item.thumbnailUrl || item.url" fit="cover" :preview-src-list="[item.url]" preview-teleported />
+          <div v-else class="attachment-file-icon"><Paperclip /><small>{{ item.name }}</small></div>
+          <button type="button" aria-label="移除附件" @click="removeComposerItem(item)"><Close /></button>
         </div>
       </div>
       <div class="composer-main">

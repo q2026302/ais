@@ -82,6 +82,28 @@ class OrphanFileCleanupServiceTests {
     }
 
     @Test
+    void referenceFileUrlsKeepOriginalAndThumbnailAlive() throws Exception {
+        Path referenced = write("generated/x.png", 3);
+        Path thumbnail = write("generated/x_thumb_256.png", 3);
+
+        MessageRepository messages = mock(MessageRepository.class);
+        AttachmentRepository attachments = mock(AttachmentRepository.class);
+        when(messages.findAllImageUrls()).thenReturn(List.of());
+        when(attachments.findAllFileUrls()).thenReturn(List.of());
+        com.gs.ais.model.entity.Message referencing = new com.gs.ais.model.entity.Message();
+        referencing.setId(10L);
+        referencing.setReferenceFileUrls("/api/images/generated/x.png");
+        when(messages.findMessagesWithReferenceFileUrls()).thenReturn(List.of(referencing));
+
+        OrphanFileCleanupService service = new OrphanFileCleanupService(messages, attachments, tempDir);
+        OrphanFileCleanupService.CleanupResult result = service.cleanup(true);
+
+        assertEquals(0, result.orphanFiles());
+        assertTrue(Files.exists(referenced));
+        assertTrue(Files.exists(thumbnail));
+    }
+
+    @Test
     void unsafeAndExternalUrlsDoNotProtectLocalFiles() throws Exception {
         Path orphan = write("outside-looking.png", 2);
         MessageRepository messages = mock(MessageRepository.class);

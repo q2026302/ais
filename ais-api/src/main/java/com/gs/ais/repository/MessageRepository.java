@@ -52,4 +52,18 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     @Query("select m.imageUrl from Message m where m.imageUrl is not null and m.imageUrl <> ''")
     List<String> findAllImageUrls();
+
+    /**
+     * All surviving messages carrying at least one persisted existing-file
+     * reference ({@code reference_file_urls}). Used by physical-file deletion
+     * (generated images and attachments) to keep a file alive while any
+     * surviving message still references it by raw path.
+     *
+     * <p>Soft-deleted messages ({@code deleted = true}) are excluded: they are
+     * only kept as incremental-sync tombstones, so their reference_file_urls must
+     * not keep physical files alive (otherwise soft-deleted history would leak
+     * storage forever).
+     */
+    @Query("select m from Message m where m.referenceFileUrls is not null and m.referenceFileUrls <> '' and m.deleted = false")
+    List<Message> findMessagesWithReferenceFileUrls();
 }

@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Serves image/attachment binaries and (lazily generated) thumbnails, enforcing
@@ -33,10 +34,13 @@ import java.nio.file.Path;
  * {@code /api/attachments/**} resource handling in {@code WebConfig} was replaced
  * by these controller endpoints so each response can run the ownership chain.
  *
- * <p>Authenticated resources are served with {@code CacheControl.noStore()} to avoid
- * cross-user cache leakage (串号); the signed URL query parameter is unique per
- * user+hour, so a later stage can safely re-enable browser caching keyed on the
- * full URL.
+ * <p>Authenticated resources are served with a <em>private</em> cache directive
+ * whose {@code max-age} matches the signed URL's remaining validity, so the
+ * browser reuses the copy only while the signature is still live. The signature
+ * itself is bound to the requesting user + path, and {@code private} stops shared
+ * caches from ever storing the body, so cross-user cache leakage (串号) remains
+ * impossible. Public test images ({@code test_*.png}) keep their original
+ * {@code no-store} behaviour.
  */
 @RestController
 public class ImageController {
@@ -49,6 +53,7 @@ public class ImageController {
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
     private final ResourceAccessService resourceAccessService;
+    private final ResourceUrlSigner resourceUrlSigner;
     private final Path uploadDir;
     private final Path attachmentDir;
 
@@ -56,10 +61,12 @@ public class ImageController {
             MessageRepository messageRepository,
             AttachmentRepository attachmentRepository,
             ResourceAccessService resourceAccessService,
+            ResourceUrlSigner resourceUrlSigner,
             StoragePaths storagePaths) {
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
         this.resourceAccessService = resourceAccessService;
+        this.resourceUrlSigner = resourceUrlSigner;
         this.uploadDir = storagePaths.uploadDir();
         this.attachmentDir = storagePaths.attachmentDir();
     }
@@ -75,11 +82,11 @@ public class ImageController {
         if (filename == null || filename.isBlank()) {
             return ResponseEntity.notFound().build();
         }
-        if (!ResourceUrlSigner.isPublicTestImage(IMAGE_URL_PREFIX + filename)
-                && !resourceAccessService.canAccessImageByPath(filename)) {
+        boolean publicImage = ResourceUrlSigner.isPublicTestImage(IMAGE_URL_PREFIX + filename);
+        if (!publicImage && !resourceAccessService.canAccessImageByPath(filename)) {
             return ResponseEntity.notFound().build();
         }
-        return serveFile(uploadDir, filename);
+        return serveFile(uploadDir, filename, publicImage, request);
     }
 
     /**
@@ -95,13 +102,14 @@ public class ImageController {
         if (!resourceAccessService.canAccessAttachmentByFilename(filename)) {
             return ResponseEntity.notFound().build();
         }
-        return serveFile(attachmentDir, filename);
+        return serveFile(attachmentDir, filename, false, request);
     }
 
     @GetMapping("/api/images/{id}/thumbnail")
     public ResponseEntity<Resource> messageThumbnail(
             @PathVariable("id") Long id,
-            @RequestParam(name = "size", defaultValue = "small") String sizeParam) {
+            @RequestParam(name = "size", defaultValue = "small") String sizeParam,
+            HttpServletRequest request) {
         Message message = messageRepository.findById(id).orElse(null);
         if (message == null || !resourceAccessService.canAccessMessage(message)) {
             return ResponseEntity.notFound().build();
@@ -113,7 +121,7 @@ public class ImageController {
         }
 
         String relative = imageUrl.substring(IMAGE_URL_PREFIX.length());
-        return serveThumbnail(uploadDir, relative, sizeParam);
+        return serveThumbnail(uploadDir, relative, sizeParam, request);
     }
 
     /**
@@ -123,7 +131,8 @@ public class ImageController {
     @GetMapping("/api/attachments/{id}/thumbnail")
     public ResponseEntity<Resource> attachmentThumbnail(
             @PathVariable("id") Long id,
-            @RequestParam(name = "size", defaultValue = "small") String sizeParam) {
+            @RequestParam(name = "size", defaultValue = "small") String sizeParam,
+            HttpServletRequest request) {
         Attachment attachment = attachmentRepository.findById(id).orElse(null);
         if (attachment == null || !resourceAccessService.canAccessAttachment(attachment)) {
             return ResponseEntity.notFound().build();
@@ -140,21 +149,26 @@ public class ImageController {
         }
 
         String relative = fileUrl.substring(ATTACHMENT_URL_PREFIX.length());
-        return serveThumbnail(attachmentDir, relative, sizeParam);
+        return serveThumbnail(attachmentDir, relative, sizeParam, request);
     }
 
-    private ResponseEntity<Resource> serveFile(Path rootDir, String relative) {
+    private ResponseEntity<Resource> serveFile(Path rootDir, String relative,
+                                               boolean publicResource, HttpServletRequest request) {
         Path file = resolveWithin(rootDir, relative);
         if (file == null) {
             return ResponseEntity.notFound().build();
         }
+        CacheControl cacheControl = publicResource
+                ? CacheControl.noStore()
+                : authenticatedCacheControl(requestPath(request), request.getParameter("sig"));
         return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
+                .cacheControl(cacheControl)
                 .contentType(mediaTypeFor(file))
                 .body(new FileSystemResource(file));
     }
 
-    private ResponseEntity<Resource> serveThumbnail(Path rootDir, String relative, String sizeParam) {
+    private ResponseEntity<Resource> serveThumbnail(Path rootDir, String relative, String sizeParam,
+                                                    HttpServletRequest request) {
         Path original = resolveWithin(rootDir, relative);
         if (original == null) {
             return ResponseEntity.notFound().build();
@@ -178,9 +192,27 @@ public class ImageController {
         MediaType mediaType = mediaTypeFor(toServe);
         Resource resource = new FileSystemResource(toServe);
         return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
+                .cacheControl(authenticatedCacheControl(requestPath(request), request.getParameter("sig")))
                 .contentType(mediaType)
                 .body(resource);
+    }
+
+    /**
+     * Cache policy for an authenticated (signed-URL) resource: {@code private}
+     * with a {@code max-age} equal to the <em>verified</em> signature's remaining
+     * validity. The remaining TTL is read only after the HMAC + expiry + path have
+     * been verified, so a caller cannot forge a large {@code max-age} by attaching a
+     * decoded-but-unsigned {@code sig} (e.g. alongside an {@code Authorization}
+     * header that bypasses URL-signature checks). Falls back to {@code noStore}
+     * whenever the signature is absent, forged, expired, or bound to another path —
+     * which also covers Bearer-authenticated requests that carry no valid signature.
+     */
+    private CacheControl authenticatedCacheControl(String path, String sig) {
+        long remaining = resourceUrlSigner.remainingValiditySecondsVerified(path, sig);
+        if (remaining <= 0L) {
+            return CacheControl.noStore();
+        }
+        return CacheControl.maxAge(remaining, TimeUnit.SECONDS).cachePrivate();
     }
 
     private Path resolveWithin(Path rootDir, String relative) {
@@ -216,6 +248,20 @@ public class ImageController {
             return null;
         }
         return file;
+    }
+
+    /**
+     * The context-relative request path (request URI minus servlet context path).
+     * This is exactly the {@code path} the {@code AuthFilter} verifies a {@code sig}
+     * against, so cache-TTL verification must use the same value.
+     */
+    private static String requestPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String context = request.getContextPath();
+        if (context != null && !context.isEmpty() && uri.startsWith(context)) {
+            return uri.substring(context.length());
+        }
+        return uri;
     }
 
     /**

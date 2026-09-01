@@ -14,10 +14,11 @@ import {
   Setting,
   View,
 } from '@element-plus/icons-vue'
-import type { Message, ModelProvider, UploadResponse } from '@/types'
+import type { Message, ModelProvider, UploadResponse, DrawReference } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
-import { selectHistorySourceUrl } from '@/utils/historyReference'
+import { referenceFromHistory, referenceFromUpload, referenceUrlForBackend } from '@/utils/historyReference'
+import { getAppBasePath } from '@/utils/appBasePath'
 import { getMessageEditableText } from '@/utils/messageText'
 import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
@@ -36,7 +37,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [payload: { prompt: string; attachmentIds: number[]; attachments: UploadResponse[]; chatProviderId: number | null }]
-  draw: [payload: { prompt: string; attachmentIds: number[]; attachments: UploadResponse[]; chatProviderId: number | null; size: string; quality: string; format: string }]
+  draw: [payload: { prompt: string; attachmentIds: number[]; referenceUrls: string[]; references: DrawReference[]; chatProviderId: number | null; size: string; quality: string; format: string }]
   cancel: []
   editSave: [payload: { messageId: number; content: string; chatProviderId: number | null; action: 'edit' | 'resend' }]
   editCancel: []
@@ -49,6 +50,8 @@ const { recoverImage } = useSignedUrlRefresh()
 const inputText = ref('')
 const selectedProviderId = ref<number | null>(null)
 const pendingAttachments = ref<UploadResponse[]>([])
+/** History references (draw mode only): reused server-side files, no new attachment. */
+const historyReferences = ref<DrawReference[]>([])
 const uploading = ref(false)
 const mode = ref<'chat' | 'draw'>('chat')
 const fullscreenInput = ref(false)
@@ -60,7 +63,6 @@ const drawQuality = ref('auto')
 const drawFormat = ref('png')
 const referenceVisible = ref(false)
 const referenceAdding = ref(false)
-const referenceUseOriginal = ref(false)
 const previewVisible = ref(false)
 // PC 输入区浮层层级收口，自上而下：预览浮层 > el-drawer > 抽屉遮罩。
 // 各抽屉虽通过 :z-index 传值(2100~2102)，但都被全局
@@ -78,12 +80,17 @@ const inputRef = ref<HTMLTextAreaElement | null>(null)
 const fullscreenInputRef = ref<HTMLTextAreaElement | null>(null)
 const composerRootRef = ref<HTMLElement | null>(null)
 
-const canSend = computed(() => inputText.value.trim().length > 0 || pendingAttachments.value.length > 0)
+const canSend = computed(() => inputText.value.trim().length > 0 || pendingAttachments.value.length > 0 || historyReferences.value.length > 0)
 const isEditing = computed(() => props.editingMessage != null && props.editingAction != null)
 const canEditSend = computed(() => isEditing.value && inputText.value.trim().length > 0)
 const referenceImageCount = computed(
-  () => pendingAttachments.value.filter((item) => item.contentType?.startsWith('image/')).length,
+  () => pendingAttachments.value.filter((item) => item.contentType?.startsWith('image/')).length + historyReferences.value.length,
 )
+/** Merged draft references (uploads + history) for the composer strip. */
+const composerItems = computed<DrawReference[]>(() => [
+  ...pendingAttachments.value.map(referenceFromUpload),
+  ...historyReferences.value,
+])
 const defaultProviderId = computed(() => {
   if (
     props.activeChatProviderId != null
@@ -180,7 +187,6 @@ const selectedHistoryItems = computed(() =>
     .filter((item): item is HistoryImageItem => item != null),
 )
 const referenceSelectionCount = computed(() => selectedHistoryIds.value.length)
-const showOriginalCheckbox = computed(() => selectedHistoryIds.value.length > 0)
 const canConfirmReference = computed(() => referenceSelectionCount.value > 0 && !referenceAdding.value && !props.loading)
 const referencePreviewItems = computed(() =>
   selectedHistoryItems.value.map((item) => ({
@@ -329,8 +335,12 @@ async function onDrop(event: DragEvent) {
   for (const file of files) await uploadFile(file)
 }
 
-function removeAttachment(id: number) {
-  pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== id)
+function removeComposerItem(ref: DrawReference) {
+  if (ref.kind === 'upload') {
+    pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== ref.attachmentId)
+  } else {
+    historyReferences.value = historyReferences.value.filter((r) => r.key !== ref.key)
+  }
 }
 
 function openReferencePanel() {
@@ -400,6 +410,8 @@ function backfillDrawSettingsFromHistory() {
 
 function toggleMode() {
   mode.value = mode.value === 'draw' ? 'chat' : 'draw'
+  // History references only apply to drawing; drop them when leaving draw mode.
+  historyReferences.value = []
 }
 
 function toggleFullscreenInput() {
@@ -418,20 +430,24 @@ function handleSend() {
   }
   if (!canSend.value || props.loading) return
   const chatProviderId = selectedProviderId.value
-  const payload = {
-    prompt: inputText.value.trim(),
-    attachmentIds: pendingAttachments.value.map((a) => a.id),
-    attachments: [...pendingAttachments.value],
-    chatProviderId,
-  }
   if (mode.value === 'draw') {
     emit('draw', {
-      ...payload,
+      prompt: inputText.value.trim(),
+      attachmentIds: pendingAttachments.value.map((a) => a.id),
+      referenceUrls: historyReferences.value.map((ref) => referenceUrlForBackend(ref.url, getAppBasePath())),
+      references: [...composerItems.value],
+      chatProviderId,
       size: drawSize.value,
       quality: drawQuality.value,
       format: drawFormat.value,
     })
     return
+  }
+  const payload = {
+    prompt: inputText.value.trim(),
+    attachmentIds: pendingAttachments.value.map((a) => a.id),
+    attachments: [...pendingAttachments.value],
+    chatProviderId,
   }
   emit('send', payload)
   inputText.value = ''
@@ -496,7 +512,6 @@ function removeHistorySelection(id: string) {
 
 function clearReferenceSelection() {
   selectedHistoryIds.value = []
-  referenceUseOriginal.value = false
 }
 
 function resetReferencePanel() {
@@ -520,14 +535,28 @@ async function confirmReferenceSelection() {
   uploading.value = true
   let added = 0
   try {
-    for (const item of selectedHistoryItems.value) {
-      const attachment = await sessionApi.reuseAttachment(
-        selectHistorySourceUrl(item, referenceUseOriginal.value),
-        `history-${item.messageId}.${item.format}`,
-        `image/${item.format === 'jpg' ? 'jpeg' : item.format}`,
-      )
-      pendingAttachments.value.push(attachment)
-      added += 1
+    if (mode.value === 'draw') {
+      // Drawing: reuse the server-side file directly — no new attachment, no copy.
+      for (const item of selectedHistoryItems.value) {
+        if (historyReferences.value.some((ref) => ref.url === item.url)) continue
+        historyReferences.value.push(referenceFromHistory(
+          { url: item.url, thumbUrl: item.thumbUrl },
+          `history-${item.messageId}.${item.format}`,
+          `image/${item.format === 'jpg' ? 'jpeg' : item.format}`,
+        ))
+        added += 1
+      }
+    } else {
+      // Chat: history images are real multimodal attachments (existing path).
+      for (const item of selectedHistoryItems.value) {
+        const attachment = await sessionApi.reuseAttachment(
+          item.url,
+          `history-${item.messageId}.${item.format}`,
+          `image/${item.format === 'jpg' ? 'jpeg' : item.format}`,
+        )
+        pendingAttachments.value.push(attachment)
+        added += 1
+      }
     }
     referenceVisible.value = false
     resetReferencePanel()
@@ -543,6 +572,7 @@ async function confirmReferenceSelection() {
 function clearDraft() {
   inputText.value = ''
   pendingAttachments.value = []
+  historyReferences.value = []
 }
 
 onMounted(() => {
@@ -580,25 +610,27 @@ defineExpose({ clearDraft })
       <span>拖放文件到此处上传</span>
     </div>
 
-    <div v-if="!fullscreenInput && pendingAttachments.length > 0" class="attachment-bar">
+    <div v-if="!fullscreenInput && composerItems.length > 0" class="attachment-bar">
       <div
-        v-for="att in pendingAttachments"
-        :key="att.id"
+        v-for="ref in composerItems"
+        :key="ref.key"
         class="attachment-chip"
       >
         <el-image
-          v-if="isImage(att.contentType)"
-          :src="att.fileUrl"
+          v-if="isImage(ref.contentType)"
+          :src="ref.thumbnailUrl || ref.url"
           class="attachment-thumb"
           fit="cover"
+          :preview-src-list="[ref.url]"
+          preview-teleported
         />
         <el-icon v-else class="attachment-icon"><Paperclip /></el-icon>
-        <span class="attachment-name">{{ att.originalName }}</span>
+        <span class="attachment-name">{{ ref.name }}</span>
         <el-button
           text
           size="small"
           type="danger"
-          @click="removeAttachment(att.id)"
+          @click="removeComposerItem(ref)"
         >
           ✕
         </el-button>
@@ -961,17 +993,6 @@ defineExpose({ clearDraft })
           </div>
         </div>
         <div class="reference-footer">
-          <el-tooltip
-            v-if="showOriginalCheckbox"
-            content="仅对历史作品生效；本地图片始终为原图"
-            placement="top"
-            :show-after="200"
-          >
-            <label class="reference-original">
-              <input v-model="referenceUseOriginal" type="checkbox">
-              <span>原图</span>
-            </label>
-          </el-tooltip>
           <div class="reference-preview-strip" aria-label="已选参考图">
             <template v-if="referencePreviewItems.length">
               <div

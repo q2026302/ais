@@ -1,3 +1,5 @@
+import type { DrawReference, UploadResponse } from '@/types'
+
 export interface HistoryReferenceSource {
   url: string
   thumbUrl?: string
@@ -9,15 +11,51 @@ export interface ReuseAttachmentRequest {
   contentType?: string
 }
 
-/** Select the server-side file that matches the reference panel's quality choice. */
-export function selectHistorySourceUrl(item: HistoryReferenceSource, useOriginal: boolean): string {
-  return useOriginal ? item.url : (item.thumbUrl || item.url)
+/** Build a reference item from a freshly uploaded attachment (a real attachment record). */
+export function referenceFromUpload(upload: UploadResponse): DrawReference {
+  return {
+    key: `upload-${upload.id}`,
+    name: upload.originalName,
+    contentType: upload.contentType,
+    fileSize: upload.fileSize,
+    url: upload.fileUrl,
+    thumbnailUrl: upload.thumbnailUrl || '',
+    kind: 'upload',
+    attachmentId: upload.id,
+  }
+}
+
+/**
+ * Build a reference item that reuses an existing server-side file (a history
+ * generated image or an existing attachment). It carries no attachment id: the
+ * draw request sends its URL via `referenceUrls`, so no attachment is created and
+ * the physical file is never copied.
+ */
+export function referenceFromHistory(
+  source: HistoryReferenceSource,
+  name: string,
+  contentType: string,
+): DrawReference {
+  return {
+    key: `history-${source.url}`,
+    name,
+    contentType,
+    fileSize: 0,
+    url: source.url,
+    thumbnailUrl: source.thumbUrl || '',
+    kind: 'history',
+  }
 }
 
 /** Remove the SPA servlet context before sending a resource URL to the API. */
 export function stripAppBasePath(fileUrl: string, appBasePath: string): string {
   const base = appBasePath.replace(/\/$/, '')
   return fileUrl.startsWith(base) ? fileUrl.slice(base.length) || '/' : fileUrl
+}
+
+/** Reference URL to send to the draw endpoint (server-side path, servlet context stripped). */
+export function referenceUrlForBackend(fileUrl: string, appBasePath: string): string {
+  return stripAppBasePath(fileUrl, appBasePath)
 }
 
 /** Build the JSON body used by the server-side attachment reuse endpoint. */

@@ -6,6 +6,7 @@ import com.gs.ais.model.entity.Attachment;
 import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.model.entity.Message;
+import com.gs.ais.security.AuthException;
 import com.gs.ais.util.ContentHashUtil;
 import com.gs.ais.util.ThumbnailSize;
 import org.slf4j.Logger;
@@ -111,8 +112,7 @@ public class AttachmentService {
 
         log.info("Attachment {}: {} ({} bytes, sha256={})", allocation.deduplicated() ? "deduplicated" : "saved",
                 allocation.filename(), safeContent.length, sha256);
-        return new UploadResponse(attachment.getId(), attachment.getOriginalName(), attachment.getContentType(),
-                attachment.getFileSize(), attachment.getFileUrl());
+        return toResponse(attachment);
     }
 
     /**
@@ -188,8 +188,33 @@ public class AttachmentService {
         attachment = attachmentRepository.save(attachment);
 
         log.info("Attachment reused from {}: {} ({} bytes, sha256={})", fileUrl, newFilename, fileSize, sha256);
-        return new UploadResponse(attachment.getId(), attachment.getOriginalName(), attachment.getContentType(),
-                attachment.getFileSize(), attachment.getFileUrl());
+        return toResponse(attachment);
+    }
+
+    /**
+     * Resolves a server-side file URL to its physical path after enforcing that the
+     * current caller may access it. Unlike {@link #reuseAttachment}, this creates no
+     * attachment record and copies no bytes — the caller reads the original file in
+     * place. A missing or inaccessible source surfaces as a 404 (indistinguishable
+     * from a non-existent resource, matching the ownership rules).
+     *
+     * @param fileUrl an original-file URL ({@code /api/images/...} or
+     *                {@code /api/attachments/...}); the {@code ?sig=...} query is ignored.
+     */
+    public Path resolveExistingSourcePath(String fileUrl) {
+        resourceAccessService.requireSourceAccess(fileUrl);
+        Path sourcePath = resolveSourcePath(fileUrl);
+        if (sourcePath == null || !Files.isRegularFile(sourcePath)) {
+            throw new AuthException(404, "资源不存在或无权访问");
+        }
+        return sourcePath;
+    }
+
+    private UploadResponse toResponse(Attachment attachment) {
+        UploadResponse response = new UploadResponse(attachment.getId(), attachment.getOriginalName(),
+                attachment.getContentType(), attachment.getFileSize(), attachment.getFileUrl());
+        response.setThumbnailUrl("/api/attachments/" + attachment.getId() + "/thumbnail");
+        return response;
     }
 
     private record FilenameAllocation(String filename, boolean deduplicated) {
