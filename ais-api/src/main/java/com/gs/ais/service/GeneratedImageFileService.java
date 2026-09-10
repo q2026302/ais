@@ -3,6 +3,7 @@ package com.gs.ais.service;
 import com.gs.ais.config.StoragePaths;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.util.ReferenceFileUrls;
 import org.slf4j.Logger;
@@ -41,13 +42,16 @@ public class GeneratedImageFileService {
 
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
+    private final FavoriteRepository favoriteRepository;
     private final Path uploadDir;
 
     public GeneratedImageFileService(MessageRepository messageRepository,
                                      AttachmentRepository attachmentRepository,
+                                     FavoriteRepository favoriteRepository,
                                      StoragePaths storagePaths) {
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
+        this.favoriteRepository = favoriteRepository;
         this.uploadDir = storagePaths.uploadDir().toAbsolutePath().normalize();
     }
 
@@ -87,6 +91,11 @@ public class GeneratedImageFileService {
     }
 
     private boolean isReferencedElsewhere(String imageUrl, Collection<Long> excludingMessageIds) {
+        // A saved work (favourite) is an independent, durable reference: deleting
+        // the message/session must never remove the bytes behind it.
+        if (isReferencedByFavorites(imageUrl)) {
+            return true;
+        }
         boolean referencedByOtherMessage = messageRepository.findByImageUrl(imageUrl).stream()
                 .anyMatch(message -> message.getId() == null || !excludingMessageIds.contains(message.getId()));
         if (referencedByOtherMessage) {
@@ -118,6 +127,22 @@ public class GeneratedImageFileService {
                 .map(Message::getReferenceFileUrls)
                 .toList();
         return ReferenceFileUrls.containsPath(storedValues, imageUrl);
+    }
+
+    /**
+     * True when any work-library snapshot references {@code fileUrl} — either as
+     * the saved image itself or as one of its reference images. Favourites have no
+     * "surviving" filter: they exist precisely to outlive their source message, so
+     * they always keep the referenced bytes alive.
+     */
+    public boolean isReferencedByFavorites(String fileUrl) {
+        if (fileUrl == null || fileUrl.isBlank()) {
+            return false;
+        }
+        if (favoriteRepository.existsByImageUrl(fileUrl)) {
+            return true;
+        }
+        return ReferenceFileUrls.containsPath(favoriteRepository.findAllReferenceFileUrls(), fileUrl);
     }
 
     private void deleteFileAndThumbnails(Path original) {

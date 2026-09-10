@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { Session, Message, ModelProvider, DrawRequest, DrawReference, UploadResponse, Attachment, MessageStatusResponse } from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { providerApi } from '@/api/providers'
+import { useFavoriteStore } from '@/stores/favorite'
 import { parseApiDate } from '@/utils/dateTime'
 
 const PINNED_STORAGE_KEY = 'ais_pinned'
@@ -554,6 +555,9 @@ export const useSessionStore = defineStore('session', () => {
 
   async function selectSession(id: number) {
     const generation = beginSessionSelection(id)
+    // Reconciliation must not let a snapshot fetched before a local favourite
+    // mutation undo that mutation; capture when this request starts.
+    const fetchStartedAt = Date.now()
 
     let selectedMessages: Message[]
     const cached = messagesCache.value.get(id)
@@ -591,6 +595,9 @@ export const useSessionStore = defineStore('session', () => {
 
     activeSessionId.value = id
     messages.value = selectedMessages
+    // The server payload carries the current user's own favourite state; apply
+    // it so a cross-device cancellation is reflected after a refresh.
+    useFavoriteStore().reconcileFromMessages(selectedMessages, fetchStartedAt)
     // Mark read only once the requested conversation has loaded.
     markAsRead(id)
     // Keep last-viewed ahead of any messages just loaded for this session.
@@ -618,6 +625,7 @@ export const useSessionStore = defineStore('session', () => {
 
   async function reloadSessionIfCurrent(sessionId: number) {
     if (!isViewingSession(sessionId)) return false
+    const fetchStartedAt = Date.now()
     const selectedMessages = await sessionApi.getMessages(sessionId)
     if (!isViewingSession(sessionId)) return false
 
@@ -631,6 +639,7 @@ export const useSessionStore = defineStore('session', () => {
     })
     messages.value = selectedMessages
     recordLastViewed(sessionId)
+    useFavoriteStore().reconcileFromMessages(selectedMessages, fetchStartedAt)
     for (const msg of selectedMessages) {
       if (msg.status === 'PENDING' && msg.messageType === 'DRAW_RESPONSE') {
         startPolling(sessionId, msg.id)

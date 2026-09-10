@@ -72,6 +72,14 @@ public class MessageResponse {
     @Schema(description = "是否已软删除，用于增量同步墓碑")
     private boolean deleted;
 
+    @Schema(description = "当前用户本人的收藏记录 ID；未收藏时为 null。取消收藏以该记录为定位单元。",
+            example = "5")
+    private Long favoriteId;
+
+    @Schema(description = "当前用户本人是否已收藏此消息的图片（始终只反映当前用户自己的记录）",
+            example = "false")
+    private boolean favorited;
+
     @Schema(description = "消息创建时间")
     private LocalDateTime createdAt;
 
@@ -84,6 +92,19 @@ public class MessageResponse {
     private LocalDateTime updatedAt;
 
     public static MessageResponse from(Message message) {
+        return from(message, null);
+    }
+
+    /**
+     * @param favoriteId the current user's own favourite record for this message,
+     *                   or {@code null} when the current user has not saved it.
+     *                   Resolved by the caller (it needs the current user scope) so
+     *                   the mapper stays free of repository access. The boolean
+     *                   {@code favorited} is derived from it, so an administrator who
+     *                   did not save the message is no longer reported as favourited
+     *                   just because another user did.
+     */
+    public static MessageResponse from(Message message, Long favoriteId) {
         MessageResponse resp = new MessageResponse();
         resp.setId(message.getId());
         resp.setRole(message.getRole());
@@ -115,6 +136,8 @@ public class MessageResponse {
         resp.setParentMessageId(message.getParentMessageId());
         resp.setEdited(message.isEdited());
         resp.setDeleted(message.isDeleted());
+        resp.setFavoriteId(favoriteId);
+        resp.setFavorited(favoriteId != null);
         resp.setCreatedAt(message.getCreatedAt());
         resp.setUpdatedAt(message.getUpdatedAt());
         return resp;
@@ -158,6 +181,10 @@ public class MessageResponse {
     public void setEdited(boolean edited) { this.edited = edited; }
     public boolean isDeleted() { return deleted; }
     public void setDeleted(boolean deleted) { this.deleted = deleted; }
+    public boolean isFavorited() { return favorited; }
+    public void setFavorited(boolean favorited) { this.favorited = favorited; }
+    public Long getFavoriteId() { return favoriteId; }
+    public void setFavoriteId(Long favoriteId) { this.favoriteId = favoriteId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

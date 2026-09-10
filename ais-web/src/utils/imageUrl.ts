@@ -1,4 +1,4 @@
-import type { Attachment, Message } from '@/types'
+import type { Attachment, Favorite, FavoriteReferenceImage, Message } from '@/types'
 
 /**
  * Image/attachment URL helpers.
@@ -58,6 +58,31 @@ export function getAttachmentThumbnailUrl(
   if (typeof attachment === 'number') return ''
   if (!attachment.thumbnailUrl) return ''
   return withSizeParam(attachment.thumbnailUrl, size)
+}
+
+/**
+ * Build the signed thumbnail URL for a saved work (作品库). Falls back to an
+ * empty string when the favourite has no server-issued `thumbnailUrl` (callers
+ * should then fall back to `favorite.imageUrl`).
+ */
+export function getFavoriteThumbnailUrl(
+  favorite: Favorite | null | undefined,
+  size: ThumbnailSize = 'small',
+): string {
+  if (!favorite?.thumbnailUrl) return ''
+  return withSizeParam(favorite.thumbnailUrl, size)
+}
+
+/**
+ * Build the signed thumbnail URL for one reference image captured in a saved
+ * work. Falls back to an empty string when only the original URL is available.
+ */
+export function getFavoriteReferenceThumbnailUrl(
+  reference: FavoriteReferenceImage | null | undefined,
+  size: ThumbnailSize = 'small',
+): string {
+  if (!reference?.thumbnailUrl) return ''
+  return withSizeParam(reference.thumbnailUrl, size)
 }
 
 /**

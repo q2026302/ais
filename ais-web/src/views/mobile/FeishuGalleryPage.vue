@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Close, CopyDocument, Download, Picture } from '@element-plus/icons-vue'
+import { Close, CopyDocument, Delete, Download, Link, Picture } from '@element-plus/icons-vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
 import { useImageActions } from '@/composables/useImageActions'
 import { useLongPress } from '@/composables/useLongPress'
-import { useSessionStore } from '@/stores/session'
-import type { Message } from '@/types'
-import { formatTimeHm } from '@/utils/dateTime'
-import { getThumbnailUrl } from '@/utils/imageUrl'
+import { useFavoriteStore } from '@/stores/favorite'
+import { useAuthStore } from '@/stores/auth'
+import type { Favorite } from '@/types'
+import { formatDateTimeSeconds } from '@/utils/dateTime'
+import { getFavoriteReferenceThumbnailUrl, getFavoriteThumbnailUrl } from '@/utils/imageUrl'
 import { mobileWorkspacePath } from '@/utils/mobileWorkspace'
 import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
@@ -17,9 +18,10 @@ defineOptions({
   name: 'FeishuGalleryPage',
 })
 
-const store = useSessionStore()
 const route = useRoute()
 const router = useRouter()
+const favoriteStore = useFavoriteStore()
+const authStore = useAuthStore()
 
 const mobileSource = computed(() => route.meta.mobileEntry ?? 'mobile')
 
@@ -30,6 +32,7 @@ const {
   saveHelperFilename,
   openImageAction: openImageActionBase,
   downloadImageAction,
+  downloadImage,
   shareFromHelper,
   closeSaveHelper,
 } = useImageActions()
@@ -44,43 +47,79 @@ const {
   setSelectionSuppressed,
 } = useLongPress()
 
+/** Work owning the image currently open in the image-action drawer (null for reference images). */
+const imageActionFavorite = ref<Favorite | null>(null)
 const imageViewerVisible = ref(false)
 const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
 const galleryThumbFailedIds = ref<Set<number>>(new Set())
-const { recoverImage } = useSignedUrlRefresh()
+const referenceThumbFailed = ref<Set<string>>(new Set())
+const { recoverFavoriteImage } = useSignedUrlRefresh()
 
-// Close the image viewer when switching sessions (Bug 5: preview must not
-// stay open across session switches or the page becomes unusable).
-watch(() => store.activeSessionId, () => {
-  imageViewerVisible.value = false
-  imageViewerImages.value = []
-  imageViewerIndex.value = 0
+/** Saved works (作品库): cross-session, user-level, independent of any session. */
+const favorites = computed(() => favoriteStore.favorites)
+
+onMounted(() => {
+  void loadFavorites()
 })
 
-/** Generated images in the active session (messages that have an imageUrl). */
-const generatedImages = computed(() => store.messages.filter((message) => Boolean(message.imageUrl)))
+onActivated(() => {
+  void loadFavorites()
+})
 
-function onGalleryThumbError(message: Message) {
-  const failedUrl = galleryDisplayUrl(message)
-  galleryThumbFailedIds.value = new Set(galleryThumbFailedIds.value).add(message.id)
-  recoverImage(failedUrl)
+async function loadFavorites() {
+  try {
+    await favoriteStore.fetchFavorites(0)
+    // Close the viewer if the works it showed are gone (e.g. unfavourited elsewhere).
+    if (imageViewerVisible.value && favorites.value.length === 0) {
+      imageViewerVisible.value = false
+      imageViewerImages.value = []
+      imageViewerIndex.value = 0
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || '作品库加载失败')
+  }
 }
 
-function galleryDisplayUrl(message: Message) {
-  if (!message.imageUrl) return ''
-  if (galleryThumbFailedIds.value.has(message.id)) return message.imageUrl
-  return getThumbnailUrl(message, 'small') || message.imageUrl
+function favoriteImageUrls(): string[] {
+  return favorites.value.map((favorite) => favorite.imageUrl).filter(Boolean)
+}
+
+function onGalleryThumbError(favorite: Favorite) {
+  const failedUrl = galleryDisplayUrl(favorite)
+  galleryThumbFailedIds.value = new Set(galleryThumbFailedIds.value).add(favorite.id)
+  recoverFavoriteImage(failedUrl)
+}
+
+function galleryDisplayUrl(favorite: Favorite) {
+  if (!favorite.imageUrl) return ''
+  if (galleryThumbFailedIds.value.has(favorite.id)) return favorite.imageUrl
+  return getFavoriteThumbnailUrl(favorite, 'small') || favorite.imageUrl
+}
+
+function referenceDisplayUrl(fileUrl: string, reference: { fileUrl: string; thumbnailUrl?: string | null }) {
+  if (referenceThumbFailed.value.has(fileUrl)) return reference.fileUrl
+  return getFavoriteReferenceThumbnailUrl(reference, 'small') || reference.fileUrl
+}
+
+function onReferenceThumbError(fileUrl: string) {
+  const next = new Set(referenceThumbFailed.value)
+  next.add(fileUrl)
+  referenceThumbFailed.value = next
+  recoverFavoriteImage(fileUrl)
 }
 
 // Re-arm thumbnails after a refresh delivers fresh signed URLs.
-const galleryUrlKey = computed(() => generatedImages.value
-  .map((m) => `${m.imageUrl ?? ''}|${m.thumbnailUrl ?? ''}`)
+const galleryUrlKey = computed(() => favorites.value
+  .map((favorite) => `${favorite.imageUrl ?? ''}|${favorite.thumbnailUrl ?? ''}`)
   .join('#'))
-watch(galleryUrlKey, () => { galleryThumbFailedIds.value = new Set() })
+watch(galleryUrlKey, () => {
+  galleryThumbFailedIds.value = new Set()
+  referenceThumbFailed.value = new Set()
+})
 
-function formatTime(value: string) {
-  return formatTimeHm(value, '')
+function formatFavoriteTime(value: string) {
+  return formatDateTimeSeconds(value, '')
 }
 
 function openImageViewer(images: string[], index = 0) {
@@ -109,6 +148,30 @@ function openImageAction(url: string, filename = 'ai-image.png') {
   }, 320)
 }
 
+function openFavoriteAction(favorite: Favorite) {
+  imageActionFavorite.value = favorite
+  openImageAction(favorite.imageUrl, favoriteFilename(favorite))
+}
+
+/** Reference images are not separate works, so the favourite action is hidden. */
+function openReferenceAction(reference: { fileUrl: string }) {
+  imageActionFavorite.value = null
+  openImageAction(reference.fileUrl, 'reference.png')
+}
+
+async function removeFavoriteFromAction() {
+  const favorite = imageActionFavorite.value
+  imageActionVisible.value = false
+  imageActionFavorite.value = null
+  if (favorite) await removeFavorite(favorite)
+}
+
+function favoriteFilename(favorite: Favorite) {
+  const url = favorite.imageUrl || ''
+  const rawName = (url.split('?')[0] || url).split('/').filter(Boolean).pop() || `favorite-${favorite.id}.png`
+  return rawName.includes('.') ? rawName : `${rawName}.${favorite.drawFormat || 'png'}`
+}
+
 async function copyText(text: string, successMessage = '内容已复制') {
   if (!text.trim()) return
   try {
@@ -121,12 +184,32 @@ async function copyText(text: string, successMessage = '内容已复制') {
   }
 }
 
-async function goToCreate() {
-  const base = mobileWorkspacePath(mobileSource.value)
-  if (store.activeSessionId != null) {
-    await router.push(`${base}/chat/${store.activeSessionId}`)
+async function removeFavorite(favorite: Favorite) {
+  try {
+    await favoriteStore.removeFavorite(favorite)
+    ElMessage.success('已取消收藏')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '取消收藏失败')
+  }
+}
+
+/** Owner label for the all-users (admin) view so each record can be managed individually. */
+function ownerLabel(favorite: Favorite): string {
+  if (favorite.userName) return favorite.userName
+  if (favorite.userId != null) return `用户 #${favorite.userId}`
+  return '未知用户'
+}
+
+async function openOriginalSession(favorite: Favorite) {
+  if (!favorite.sessionAvailable || favorite.sessionId == null) {
+    ElMessage.info('原会话已删除，仅可查看作品')
     return
   }
+  await router.push(`${mobileWorkspacePath(mobileSource.value)}/chat/${favorite.sessionId}`)
+}
+
+async function goToCreate() {
+  const base = mobileWorkspacePath(mobileSource.value)
   await router.push(`${base}/sessions`)
 }
 </script>
@@ -138,47 +221,103 @@ async function goToCreate() {
         <span>作品库</span>
         <strong>我的 AI 作品</strong>
       </div>
-      <small>{{ generatedImages.length }} 张</small>
+      <small>{{ favorites.length }} / {{ favoriteStore.totalElements }} 张</small>
     </div>
 
-    <div v-if="generatedImages.length" class="image-grid">
-      <article v-for="message in generatedImages" :key="message.id" class="image-tile">
+    <div v-if="!favorites.length && !favoriteStore.loaded" class="center-state gallery-loading">
+      <span class="state-orb"><Picture /></span>
+      <strong>正在加载作品库…</strong>
+    </div>
+
+    <div v-else-if="favorites.length" class="image-grid">
+      <article v-for="favorite in favorites" :key="favorite.id" class="image-tile">
         <button
           type="button"
           class="gallery-image-trigger mobile-image-trigger"
           aria-label="查看作品图片"
-          @click="handleImageClick(generatedImages.map((item) => item.imageUrl || ''), generatedImages.findIndex((item) => item.id === message.id))"
-          @touchstart.stop="startLongPress($event, () => openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`))"
+          @click="handleImageClick(favoriteImageUrls(), favoriteImageUrls().indexOf(favorite.imageUrl))"
+          @touchstart.stop="startLongPress($event, () => openFavoriteAction(favorite))"
           @touchmove.stop="moveLongPress"
           @touchend.stop="finishLongPress"
           @touchcancel.stop="cancelLongPress(true)"
-          @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`)"
+          @contextmenu.prevent.stop="openFavoriteAction(favorite)"
         >
           <img
-            :src="galleryDisplayUrl(message)"
+            :src="galleryDisplayUrl(favorite)"
             alt="AI 作品"
             loading="lazy"
-            @error="onGalleryThumbError(message)"
+            @error="onGalleryThumbError(favorite)"
           >
         </button>
         <div class="image-info">
-          <time>{{ formatTime(message.createdAt) }}</time>
-          <p>{{ message.drawPrompt || message.content || 'AI 生成图片' }}</p>
+          <time>收藏于 {{ formatFavoriteTime(favorite.createdAt) }}</time>
+          <p class="owner-label" v-if="authStore.isAdmin">归属：{{ ownerLabel(favorite) }}</p>
+          <p>{{ favorite.drawPrompt || 'AI 生成图片' }}</p>
+          <div v-if="favorite.referenceImages.length" class="reference-strip">
+            <span class="reference-label">参考图</span>
+            <div class="reference-list">
+              <button
+                v-for="(reference, refIndex) in favorite.referenceImages"
+                :key="`${favorite.id}-reference-${refIndex}`"
+                type="button"
+                class="reference-thumb"
+                aria-label="查看参考图片"
+                @click.stop="openImageViewer(favorite.referenceImages.map((item) => item.fileUrl), refIndex)"
+                @touchstart.stop="startLongPress($event, () => openReferenceAction(reference))"
+                @touchmove.stop="moveLongPress"
+                @touchend.stop="finishLongPress"
+                @touchcancel.stop="cancelLongPress(true)"
+                @contextmenu.prevent.stop="openReferenceAction(reference)"
+              >
+                <img
+                  :src="referenceDisplayUrl(reference.fileUrl, reference)"
+                  alt="参考图片"
+                  loading="lazy"
+                  @error="onReferenceThumbError(reference.fileUrl)"
+                >
+              </button>
+            </div>
+          </div>
           <div class="gallery-actions">
-            <button type="button" @click="copyText(message.drawPrompt || message.content || '')">
+            <button type="button" @click="copyText(favorite.drawPrompt || '', '提示词已复制')">
               <CopyDocument /> 复制提示词
             </button>
-            <span class="gallery-long-press-tip">长按图片操作</span>
+            <button type="button" @click="downloadImage(favorite.imageUrl, favoriteFilename(favorite))">
+              下载
+            </button>
+          </div>
+          <div class="gallery-actions">
+            <button
+              v-if="favorite.sessionAvailable && favorite.sessionId != null"
+              type="button"
+              @click="openOriginalSession(favorite)"
+            >
+              <Link /> 回原会话
+            </button>
+            <button
+              type="button"
+              class="danger-action"
+              :disabled="favoriteStore.isRecordPending(favorite.id)"
+              @click="removeFavorite(favorite)"
+            >
+              <Delete /> 取消收藏
+            </button>
           </div>
         </div>
       </article>
     </div>
 
-    <div v-else class="center-state gallery-empty">
+    <div v-if="favoriteStore.hasMore" class="load-more">
+      <button type="button" :disabled="favoriteStore.loading" @click="favoriteStore.loadMore()">
+        {{ favoriteStore.loading ? '加载中…' : '加载更多' }}
+      </button>
+    </div>
+
+    <div v-else-if="!favorites.length && favoriteStore.loaded" class="center-state gallery-empty">
       <span class="state-orb"><Picture /></span>
-      <strong>还没有生成作品</strong>
-      <p>返回「创作」生成第一张图片。</p>
-      <button type="button" @click="goToCreate">开始创作</button>
+      <strong>作品库还是空的</strong>
+      <p>在对话中对生成的图片点击「收藏」，就会出现在这里。</p>
+      <button type="button" @click="goToCreate">去创作</button>
     </div>
 
     <el-drawer
@@ -195,6 +334,15 @@ async function goToCreate() {
         </div>
       </div>
       <div class="action-list">
+        <button
+          v-if="imageActionFavorite"
+          type="button"
+          class="danger-action"
+          :disabled="favoriteStore.isRecordPending(imageActionFavorite.id)"
+          @click="removeFavoriteFromAction"
+        >
+          <Delete /><span>取消收藏</span>
+        </button>
         <button type="button" @click="downloadImageAction">
           <Download /><span>下载图片</span>
         </button>
@@ -341,9 +489,20 @@ async function goToCreate() {
   line-clamp: 2;
 }
 
+/* Admin-only ownership line: compact, single line, before the prompt. */
+.image-tile p.owner-label {
+  min-height: 0;
+  margin: 2px 0 4px;
+  color: #7b5ea7;
+  font-weight: 700;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
 .gallery-actions {
   display: flex;
   gap: 6px;
+  margin-top: 6px;
 }
 
 .gallery-actions button {
@@ -363,9 +522,82 @@ async function goToCreate() {
   background: #f1f3f9;
 }
 
+.gallery-actions button:disabled {
+  opacity: .55;
+}
+
+.gallery-actions button.danger-action {
+  color: #b95564;
+  background: #fff1f3;
+}
+
 .gallery-actions button :deep(svg) {
   width: 12px;
   height: 12px;
+}
+
+.danger-action :deep(svg) {
+  color: #cf6572;
+}
+
+/* Reference images captured in the saved-work snapshot. */
+.reference-strip {
+  margin-top: 6px;
+}
+
+.reference-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #9ca5b7;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+
+.reference-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.reference-thumb {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid #e4e8f1;
+  border-radius: 9px;
+  background: #eef1f7;
+}
+
+.reference-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.load-more {
+  display: flex;
+  justify-content: center;
+  margin: 16px auto 0;
+}
+
+.load-more button {
+  min-height: 36px;
+  padding: 0 18px;
+  color: #5a6bd0;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #dbe0ff;
+  border-radius: 11px;
+  background: #eef1ff;
+}
+
+.load-more button:disabled {
+  opacity: .6;
 }
 
 .gallery-long-press-tip {
@@ -412,6 +644,10 @@ async function goToCreate() {
 
 .gallery-empty {
   height: calc(100% - 58px);
+  min-height: 280px;
+}
+
+.gallery-loading {
   min-height: 280px;
 }
 

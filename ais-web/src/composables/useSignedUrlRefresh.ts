@@ -1,4 +1,5 @@
 import { useSessionStore } from '@/stores/session'
+import { useFavoriteStore } from '@/stores/favorite'
 import { signedUrlExpired } from '@/utils/imageUrl'
 
 /**
@@ -30,6 +31,7 @@ const sessionStates = new Map<number, SessionRefreshState>()
 
 export function useSignedUrlRefresh() {
   const store = useSessionStore()
+  const favoriteStore = useFavoriteStore()
 
   function requestRefresh(sessionId: number | null | undefined): void {
     if (sessionId == null) return
@@ -56,5 +58,27 @@ export function useSignedUrlRefresh() {
     requestRefresh(store.activeSessionId)
   }
 
-  return { recoverImage, requestRefresh }
+  /**
+   * Work-library images are signed the same way but are not part of a session, so
+   * an expired signature there is recovered by re-fetching every page that has
+   * already been loaded (which re-signs every URL) — never just the current page,
+   * which would truncate a multi-page library to its last page. Throttled like
+   * the session path.
+   */
+  let favoriteRefreshInFlight = false
+  let favoriteLastRefreshAt = 0
+
+  function recoverFavoriteImage(failedUrl: string): void {
+    if (!signedUrlExpired(failedUrl)) return
+    const now = Date.now()
+    if (favoriteRefreshInFlight) return
+    if (now - favoriteLastRefreshAt < REFRESH_THROTTLE_MS) return
+    favoriteRefreshInFlight = true
+    favoriteLastRefreshAt = now
+    favoriteStore.refreshAll()
+      .catch(() => { /* a failed background refresh must not surface or loop */ })
+      .finally(() => { favoriteRefreshInFlight = false })
+  }
+
+  return { recoverImage, requestRefresh, recoverFavoriteImage }
 }

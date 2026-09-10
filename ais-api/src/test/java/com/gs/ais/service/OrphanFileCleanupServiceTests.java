@@ -1,6 +1,7 @@
 package com.gs.ais.service;
 
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -95,12 +96,43 @@ class OrphanFileCleanupServiceTests {
         referencing.setReferenceFileUrls("/api/images/generated/x.png");
         when(messages.findMessagesWithReferenceFileUrls()).thenReturn(List.of(referencing));
 
-        OrphanFileCleanupService service = new OrphanFileCleanupService(messages, attachments, tempDir);
+        OrphanFileCleanupService service = new OrphanFileCleanupService(
+                messages, attachments, emptyFavorites(), tempDir);
         OrphanFileCleanupService.CleanupResult result = service.cleanup(true);
 
         assertEquals(0, result.orphanFiles());
         assertTrue(Files.exists(referenced));
         assertTrue(Files.exists(thumbnail));
+    }
+
+    @Test
+    void favoriteSnapshotsKeepImageAndReferenceFilesAlive() throws Exception {
+        // A favourited image and its reference images must never be orphan
+        // candidates, even when no message or attachment record references them.
+        Path favoriteImage = write("generated/saved.png", 3);
+        Path favoriteThumb = write("generated/saved_thumb_256.png", 3);
+        Path referenceAttachment = write("attachments/ref.png", 4);
+        Path orphan = write("generated/dropped.png", 5);
+
+        FavoriteRepository favorites = mock(FavoriteRepository.class);
+        when(favorites.findAllImageUrls()).thenReturn(List.of("/api/images/generated/saved.png"));
+        when(favorites.findAllReferenceFileUrls())
+                .thenReturn(List.of("/api/attachments/ref.png\n/api/images/generated/saved.png"));
+
+        MessageRepository messages = mock(MessageRepository.class);
+        AttachmentRepository attachments = mock(AttachmentRepository.class);
+        when(messages.findAllImageUrls()).thenReturn(List.of());
+        when(attachments.findAllFileUrls()).thenReturn(List.of());
+        when(messages.findMessagesWithReferenceFileUrls()).thenReturn(List.of());
+
+        OrphanFileCleanupService service = new OrphanFileCleanupService(messages, attachments, favorites, tempDir);
+        OrphanFileCleanupService.CleanupResult result = service.cleanup(true);
+
+        assertEquals(List.of("generated/dropped.png"), result.candidates());
+        assertTrue(Files.exists(favoriteImage));
+        assertTrue(Files.exists(favoriteThumb));
+        assertTrue(Files.exists(referenceAttachment));
+        assertTrue(Files.exists(orphan));
     }
 
     @Test
@@ -113,7 +145,8 @@ class OrphanFileCleanupServiceTests {
                 "https://cdn.example.test/image.png"));
         when(attachments.findAllFileUrls()).thenReturn(List.of());
 
-        OrphanFileCleanupService service = new OrphanFileCleanupService(messages, attachments, tempDir);
+        OrphanFileCleanupService service = new OrphanFileCleanupService(
+                messages, attachments, emptyFavorites(), tempDir);
         OrphanFileCleanupService.CleanupResult result = service.cleanup(true);
 
         assertEquals(0, result.referencedFiles());
@@ -128,7 +161,14 @@ class OrphanFileCleanupServiceTests {
         AttachmentRepository attachments = mock(AttachmentRepository.class);
         when(messages.findAllImageUrls()).thenReturn(imageUrls);
         when(attachments.findAllFileUrls()).thenReturn(attachmentUrls);
-        return new OrphanFileCleanupService(messages, attachments, tempDir);
+        return new OrphanFileCleanupService(messages, attachments, emptyFavorites(), tempDir);
+    }
+
+    private FavoriteRepository emptyFavorites() {
+        FavoriteRepository favorites = mock(FavoriteRepository.class);
+        when(favorites.findAllImageUrls()).thenReturn(List.of());
+        when(favorites.findAllReferenceFileUrls()).thenReturn(List.of());
+        return favorites;
     }
 
     private Path write(String relativePath, int bytes) throws Exception {

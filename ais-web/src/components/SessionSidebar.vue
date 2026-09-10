@@ -1,14 +1,23 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { Close, Delete, Expand, Fold, Plus } from '@element-plus/icons-vue'
+import { ChatDotRound, Close, Collection, Delete, Expand, Fold, Plus } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import { useSessionStore } from '@/stores/session'
 import { formatRelativeSessionTime } from '@/utils/dateTime'
 
 const store = useSessionStore()
 
-const props = withDefaults(defineProps<{ mobileOpen?: boolean }>(), { mobileOpen: false })
-const emit = defineEmits<{ close: [] }>()
+const props = withDefaults(defineProps<{ mobileOpen?: boolean; activeView?: 'conversation' | 'works' }>(), {
+  mobileOpen: false,
+  activeView: 'conversation',
+})
+const emit = defineEmits<{ close: []; selectView: [view: 'conversation' | 'works'] }>()
+
+/** Top-level navigation shared with the mobile bottom tabs (会话 / 作品库). */
+function selectView(view: 'conversation' | 'works') {
+  emit('selectView', view)
+  emit('close')
+}
 
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
@@ -60,14 +69,16 @@ onBeforeUnmount(() => {
 async function handleNew() {
   const session = await store.createSession()
   if (session) {
+    // Selecting a conversation must also leave the work-library view.
+    selectView('conversation')
     store.selectSession(session.id)
-    emit('close')
   }
 }
 
 async function handleSelect(id: number) {
+  // Selecting a conversation must also leave the work-library view.
+  selectView('conversation')
   store.selectSession(id)
-  emit('close')
 }
 
 async function handleDelete(id: number) {
@@ -109,6 +120,26 @@ function formatTime(dateStr: string): string {
     </button>
 
     <template v-else>
+      <nav class="sidebar-nav" aria-label="主导航">
+        <button
+          type="button"
+          class="nav-entry"
+          :class="{ active: props.activeView === 'conversation' }"
+          @click="selectView('conversation')"
+        >
+          <el-icon><ChatDotRound /></el-icon>
+          <span>会话</span>
+        </button>
+        <button
+          type="button"
+          class="nav-entry"
+          :class="{ active: props.activeView === 'works' }"
+          @click="selectView('works')"
+        >
+          <el-icon><Collection /></el-icon>
+          <span>作品库</span>
+        </button>
+      </nav>
       <div class="sidebar-header">
         <div class="sidebar-heading">
           <span class="sidebar-title">历史会话</span>
@@ -185,6 +216,41 @@ function formatTime(dateStr: string): string {
 
 .sidebar-backdrop { display: none; }
 .sidebar-header, .session-list { position: relative; z-index: 1; }
+
+/* Top-level navigation: 会话 (conversation workspace) / 作品库 (work library). */
+.sidebar-nav {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+  padding: 14px 12px 0;
+}
+.nav-entry {
+  display: inline-flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  color: #6b7690;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .6);
+  transition: color .16s ease, background .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.nav-entry:hover { color: #4e62d2; background: #eef1ff; }
+.nav-entry.active {
+  color: #4658ca;
+  border-color: #dbe0ff;
+  background: linear-gradient(105deg, #ebefff, #f5f2ff);
+  box-shadow: 0 4px 12px rgba(79, 94, 196, .12);
+}
+.nav-entry :deep(svg) { width: 15px; height: 15px; }
 
 .sidebar.is-collapsed {
   width: 40px;

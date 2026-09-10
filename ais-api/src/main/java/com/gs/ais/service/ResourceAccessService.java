@@ -2,15 +2,20 @@ package com.gs.ais.service;
 
 import com.gs.ais.model.entity.AppUser;
 import com.gs.ais.model.entity.Attachment;
+import com.gs.ais.model.entity.Favorite;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.security.AuthException;
 import com.gs.ais.security.AuthPrincipal;
 import com.gs.ais.security.ResourceUrlSigner;
+import com.gs.ais.util.ReferenceFileUrls;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 /**
  * Central ownership checks for image and attachment binary resources.
@@ -34,13 +39,16 @@ public class ResourceAccessService {
     private final AppUserRepository appUserRepository;
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
+    private final FavoriteRepository favoriteRepository;
 
     public ResourceAccessService(AppUserRepository appUserRepository,
                                  MessageRepository messageRepository,
-                                 AttachmentRepository attachmentRepository) {
+                                 AttachmentRepository attachmentRepository,
+                                 FavoriteRepository favoriteRepository) {
         this.appUserRepository = appUserRepository;
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
+        this.favoriteRepository = favoriteRepository;
     }
 
     public boolean isAdmin() {
@@ -67,9 +75,18 @@ public class ResourceAccessService {
             return false;
         }
         String imageUrl = IMAGE_URL_PREFIX + relativePath;
-        return messageRepository.findByImageUrl(imageUrl).stream()
+        boolean accessibleViaMessage = messageRepository.findByImageUrl(imageUrl).stream()
                 .anyMatch(message -> message.getSession() != null
                         && userId.equals(message.getSession().getUserId()));
+        if (accessibleViaMessage) {
+            return true;
+        }
+        // A saved work outlives its message/session: the owner must still be able
+        // to view and download the image (and reference images) after deletion.
+        if (favoriteRepository.existsByUserIdAndImageUrl(userId, imageUrl)) {
+            return true;
+        }
+        return favoriteReferencesFile(userId, imageUrl);
     }
 
     /** Image access by message record (thumbnail endpoints resolve by message id). */
@@ -114,8 +131,28 @@ public class ResourceAccessService {
         if (isAdmin()) {
             return true;
         }
-        return attachmentRepository.findByFilename(filename).stream()
-                .anyMatch(this::canAccessAttachment);
+        if (attachmentRepository.findByFilename(filename).stream().anyMatch(this::canAccessAttachment)) {
+            return true;
+        }
+        // Favourited reference images survive message/session deletion; keep them
+        // readable for their owner through the same /api/attachments/... path.
+        Long userId = currentUserId();
+        return userId != null && favoriteReferencesFile(userId, ATTACHMENT_URL_PREFIX + filename);
+    }
+
+    /** True when the user's work-library snapshot references {@code fileUrl} exactly. */
+    private boolean favoriteReferencesFile(Long userId, String fileUrl) {
+        List<String> stored = favoriteRepository.findReferenceFileUrlsContainingForUser(userId, fileUrl);
+        return ReferenceFileUrls.containsPath(stored, fileUrl);
+    }
+
+    /** Whether the caller may read a favourite record and its binary resources. */
+    public boolean canAccessFavorite(Favorite favorite) {
+        if (isAdmin()) {
+            return true;
+        }
+        Long userId = currentUserId();
+        return favorite != null && userId != null && userId.equals(favorite.getUserId());
     }
 
     /**

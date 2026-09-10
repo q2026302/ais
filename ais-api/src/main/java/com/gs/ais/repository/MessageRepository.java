@@ -3,7 +3,9 @@ package com.gs.ais.repository;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.model.enums.MessageStatus;
 import com.gs.ais.model.enums.MessageType;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -11,11 +13,29 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface MessageRepository extends JpaRepository<Message, Long> {
 
     List<Message> findBySessionIdOrderByCreatedAtAsc(Long sessionId);
+
+    /**
+     * Loads a message while asking for a database write lock on the row.
+     *
+     * <p>Used when saving a message to the work library. On dialects that support
+     * {@code SELECT ... FOR UPDATE} (MySQL, H2) this serialises concurrent saves of
+     * the same message and spares the second writer a rejected insert. It is an
+     * <em>optimisation only</em>: the community {@code SQLiteDialect} returns an
+     * empty {@code getForUpdateString()}, so on the production database this is a
+     * plain read and no row lock is taken. Idempotency must never depend on it —
+     * the real, cross-dialect guarantee is the unique index on
+     * {@code favorites(user_id, message_id)} plus the insert-conflict retry in
+     * {@code FavoriteService#add}.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select m from Message m where m.id = :id")
+    Optional<Message> findByIdForUpdate(@Param("id") Long id);
 
     /**
      * Finds the message(s) whose generated image URL matches exactly. Used to

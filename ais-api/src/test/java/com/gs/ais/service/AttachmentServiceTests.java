@@ -163,7 +163,8 @@ class AttachmentServiceTests {
                 .withProperty("app.base-dir", tempDir.toString())
                 .withProperty("app.upload-dir", uploadDir.toString());
         ResourceAccessService resourceAccessService = new ResourceAccessService(
-                mock(AppUserRepository.class), messages, attachments);
+                mock(AppUserRepository.class), messages, attachments,
+                mock(com.gs.ais.repository.FavoriteRepository.class));
         return new AttachmentService(attachments, messages, resourceAccessService, new StoragePaths(environment));
     }
 

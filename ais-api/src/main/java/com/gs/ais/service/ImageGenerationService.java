@@ -782,11 +782,15 @@ public class ImageGenerationService {
             String filename = attachment.getFilename();
             boolean referencedByReferenceUrls = filename != null
                     && ReferenceFileUrls.containsPath(referenceValues, "/api/attachments/" + filename);
+            // A work-library snapshot may reference this attachment as a reference
+            // image; the saved work must keep working after the message is deleted.
+            boolean referencedByFavorites = filename != null
+                    && generatedImageFileService.isReferencedByFavorites("/api/attachments/" + filename);
             boolean otherReference = filename != null
                     && attachmentRepository.findByFilename(filename).stream()
                         .anyMatch(other -> !java.util.Objects.equals(other.getId(), attachment.getId()));
             attachmentRepository.delete(attachment);
-            if (!otherReference && !referencedByReferenceUrls && filename != null) {
+            if (!otherReference && !referencedByReferenceUrls && !referencedByFavorites && filename != null) {
                 try {
                     Files.deleteIfExists(attachmentDir.resolve(filename));
                 } catch (IOException e) {

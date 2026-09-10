@@ -16,8 +16,10 @@ import com.gs.ais.model.entity.ModelProvider;
 import com.gs.ais.model.enums.MessageStatus;
 import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.security.AuthContext;
+import com.gs.ais.security.AuthRole;
 import com.gs.ais.security.ResourceUrlSigner;
 import com.gs.ais.service.BillingService;
+import com.gs.ais.service.FavoriteService;
 import com.gs.ais.service.ImageGenerationQueueService;
 import com.gs.ais.service.ImageGenerationService;
 import com.gs.ais.service.SessionService;
@@ -54,6 +56,7 @@ public class SessionController {
     private final BillingService billingService;
     private final OperationLogService operationLogService;
     private final ResourceUrlSigner resourceUrlSigner;
+    private final FavoriteService favoriteService;
 
     public SessionController(SessionService sessionService,
                              ImageGenerationService imageGenerationService,
@@ -61,7 +64,8 @@ public class SessionController {
                              AppUserRepository appUserRepository,
                              BillingService billingService,
                              OperationLogService operationLogService,
-                             ResourceUrlSigner resourceUrlSigner) {
+                             ResourceUrlSigner resourceUrlSigner,
+                             FavoriteService favoriteService) {
         this.sessionService = sessionService;
         this.imageGenerationService = imageGenerationService;
         this.queueService = queueService;
@@ -69,11 +73,33 @@ public class SessionController {
         this.billingService = billingService;
         this.operationLogService = operationLogService;
         this.resourceUrlSigner = resourceUrlSigner;
+        this.favoriteService = favoriteService;
     }
 
     private Long getCurrentUserId() {
         var principal = AuthContext.get();
         if (principal == null) return null;
+        return appUserRepository.findByUsernameIgnoreCase(principal.subject())
+                .map(AppUser::getId)
+                .orElse(null);
+    }
+
+    /**
+     * Owner of the favourite records whose state is reported on messages. This is
+     * always the <em>current user</em> — including the security-disabled synthetic
+     * operator resolved to the persisted administrator — so an administrator's chat
+     * "已收藏" flag means "the administrator saved this", not "anybody did".
+     */
+    private Long favoriteOwnerUserId() {
+        var principal = AuthContext.get();
+        if (principal == null || principal.subject() == null || principal.subject().isBlank()) {
+            return null;
+        }
+        if ("security-disabled".equals(principal.subject())) {
+            return appUserRepository.findFirstByRoleOrderByIdAsc(AuthRole.ADMIN)
+                    .map(AppUser::getId)
+                    .orElse(null);
+        }
         return appUserRepository.findByUsernameIgnoreCase(principal.subject())
                 .map(AppUser::getId)
                 .orElse(null);
@@ -136,7 +162,11 @@ public class SessionController {
         List<Message> messages = since != null
                 ? imageGenerationService.getMessagesSince(id, since)
                 : imageGenerationService.getMessages(id);
-        return ResponseEntity.ok(messages.stream().map(MessageResponse::from).toList());
+        java.util.Map<Long, Long> favoritedIds = favoriteService.favoriteIdsByMessageId(
+                favoriteOwnerUserId(), messages.stream().map(Message::getId).toList());
+        return ResponseEntity.ok(messages.stream()
+                .map(message -> MessageResponse.from(message, favoritedIds.get(message.getId())))
+                .toList());
     }
 
     @PostMapping("/{id}/messages")
@@ -283,7 +313,8 @@ public class SessionController {
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
         Message updated = imageGenerationService.editMessage(id, messageId, request.getContent());
-        return ResponseEntity.ok(MessageResponse.from(updated));
+        return ResponseEntity.ok(MessageResponse.from(updated,
+                favoriteService.favoriteId(favoriteOwnerUserId(), messageId)));
     }
 
     @PostMapping("/{id}/messages/{messageId}/regenerate")

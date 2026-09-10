@@ -61,7 +61,8 @@ class ImageGenerationQueueServiceTests {
         AppUserRepository appUserRepository = mock(AppUserRepository.class);
 
         ResourceAccessService resourceAccessService = new ResourceAccessService(
-                appUserRepository, messageRepository, attachmentRepository);
+                appUserRepository, messageRepository, attachmentRepository,
+                mock(com.gs.ais.repository.FavoriteRepository.class));
         AttachmentService attachmentService = new AttachmentService(
                 attachmentRepository, messageRepository, resourceAccessService, storagePaths);
 

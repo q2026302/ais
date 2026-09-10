@@ -138,7 +138,8 @@ public class AuthFilter extends OncePerRequestFilter {
     }
 
     private static boolean isResourcePath(String path) {
-        return path.startsWith("/api/images/") || path.startsWith("/api/attachments/");
+        return path.startsWith("/api/images/") || path.startsWith("/api/attachments/")
+                || path.startsWith("/api/favorites/");
     }
 
     private boolean isAdminPath(String path, String method) {

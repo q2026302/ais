@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { Attachment, Message, ModelProvider } from '@/types'
 import { ElMessage } from 'element-plus'
-import { CopyDocument, Edit, Refresh, Delete, Download } from '@element-plus/icons-vue'
+import { CopyDocument, Edit, Refresh, Delete, Download, Star, StarFilled } from '@element-plus/icons-vue'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import { getThumbnailUrl } from '@/utils/imageUrl'
 import { formatDateTimeSeconds } from '@/utils/dateTime'
@@ -14,6 +14,12 @@ const props = defineProps<{
   chatProvider?: ModelProvider | null
   /** Optional list to resolve message.chatProviderId / drawProviderId */
   providers?: ModelProvider[]
+  /** Current user's work-library state for this message (overrides the payload flag). */
+  favorited?: boolean
+  /** Current user's own favourite record id; required to cancel exactly that record. */
+  favoriteId?: number | null
+  /** A favourite mutation is in flight for this message. */
+  favoritePending?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,6 +29,8 @@ const emit = defineEmits<{
   delete: [messageId: number]
   copy: [content: string]
   refresh: [messageId: number]
+  /** Toggle the message's saved-work state; payload is the desired state and the target record. */
+  toggleFavorite: [messageId: number, favorited: boolean, favoriteId: number | null]
 }>()
 
 const { recoverImage } = useSignedUrlRefresh()
@@ -174,6 +182,17 @@ function formatTokens(tokens: number | null | undefined): string {
 function formatDateTime(dateStr: string): string {
   return formatDateTimeSeconds(dateStr, dateStr)
 }
+
+/** Work-library state: local override (props.favorited) wins over the payload flag. */
+const isFavorited = computed(() => props.favorited ?? props.message.favorited ?? false)
+const canFavorite = computed(() => !!props.message.imageUrl && props.message.status !== 'PENDING')
+/** Current user's own record id, preferring the store override over the payload. */
+const favoriteId = computed(() => props.favoriteId ?? props.message.favoriteId ?? null)
+
+function toggleFavorite() {
+  if (!canFavorite.value) return
+  emit('toggleFavorite', props.message.id, !isFavorited.value, favoriteId.value)
+}
 </script>
 
 <template>
@@ -242,6 +261,14 @@ function formatDateTime(dateStr: string): string {
             </span>
           </div>
           <div class="image-actions">
+            <el-button
+              size="small"
+              :type="isFavorited ? 'warning' : 'default'"
+              :icon="isFavorited ? StarFilled : Star"
+              :loading="favoritePending"
+              :disabled="!canFavorite"
+              @click="toggleFavorite"
+            >{{ isFavorited ? '已收藏' : '收藏' }}</el-button>
             <el-button size="small" :icon="Download" @click="downloadImage">下载图片</el-button>
           </div>
         </div>
@@ -287,6 +314,16 @@ function formatDateTime(dateStr: string): string {
       <!-- Action buttons (hover reveal) -->
       <div class="actions">
         <el-button text size="small" @click="copyContent" :icon="CopyDocument" title="复制" />
+        <el-button
+          v-if="canFavorite"
+          text
+          size="small"
+          :class="{ 'favorite-active': isFavorited }"
+          :loading="favoritePending"
+          @click="toggleFavorite"
+          :icon="isFavorited ? StarFilled : Star"
+          :title="isFavorited ? '取消收藏' : '收藏到作品库'"
+        />
         <el-button
           v-if="message.role === 'USER'"
           text
@@ -358,6 +395,7 @@ function formatDateTime(dateStr: string): string {
 .image-prompt { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prompt-copy { margin-left: 3px; }
 .image-actions { display: flex; justify-content: flex-end; padding: 6px 7px 8px; }
+.favorite-active { color: #e6a23c; }
 .typing-indicator { display: inline-flex; align-items: center; gap: 5px; min-width: 52px; padding: 8px 2px; }
 .typing-indicator span { width: 7px; height: 7px; border-radius: 50%; background: #7784e8; animation: typing-bounce 1s infinite ease-in-out; }
 .typing-indicator span:nth-child(2) { animation-delay: .15s; }.typing-indicator span:nth-child(3) { animation-delay: .3s; }

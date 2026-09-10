@@ -22,9 +22,12 @@ import {
   Promotion,
   RefreshRight,
   Setting,
+  Star,
+  StarFilled,
   View,
 } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
+import { useFavoriteStore } from '@/stores/favorite'
 import { sessionApi } from '@/api/sessions'
 import { userDefaultsApi } from '@/api/billing'
 import type { Message, ModelProvider, UploadResponse, Attachment, DrawReference } from '@/types'
@@ -47,6 +50,7 @@ defineOptions({
 })
 
 const store = useSessionStore()
+const favoriteStore = useFavoriteStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -86,6 +90,8 @@ const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
 const messageActionVisible = ref(false)
 const messageActionTarget = ref<Message | null>(null)
+/** Message owning the image currently shown in the image-action drawer. */
+const imageActionTarget = ref<Message | null>(null)
 const editingMessageId = ref<number | null>(null)
 const editingAction = ref<'edit' | 'resend' | null>(null)
 const selectedChatProviderId = ref<number | null>(null)
@@ -973,13 +979,40 @@ function handleImageClick(images: string[], index = 0) {
   openImageViewer(images, index)
 }
 
-function openImageAction(url: string, filename = 'ai-image.png') {
+function openImageAction(url: string, filename = 'ai-image.png', message: Message | null = null) {
+  imageActionTarget.value = message
   openImageActionBase(url, filename)
   clearResidualSelection()
   window.setTimeout(() => {
     clearResidualSelection()
     setSelectionSuppressed(false)
   }, 320)
+}
+
+/** Work-library state for a message: local override wins over the payload flag. */
+function isMessageFavorited(message: Message) {
+  return favoriteStore.isFavorited(message.id, message.favorited)
+}
+
+/** Save / unsave a generated image; the state reflects immediately in both ends. */
+async function toggleFavorite(message: Message | null) {
+  if (!message || !message.imageUrl) return
+  try {
+    const favorited = await favoriteStore.toggleFavorite(
+      message.id,
+      message.favorited,
+      favoriteStore.favoriteIdFor(message.id, message.favoriteId),
+    )
+    ElMessage.success(favorited ? '已收藏到作品库' : '已取消收藏')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '收藏操作失败')
+  }
+}
+
+async function toggleFavoriteFromImageAction() {
+  const message = imageActionTarget.value
+  imageActionVisible.value = false
+  await toggleFavorite(message)
 }
 
 function openMessageAction(message: Message) {
@@ -992,7 +1025,7 @@ function openMessageAction(message: Message) {
   }, 320)
 }
 
-async function handleMessageAction(action: 'copy' | 'edit' | 'resend' | 'download' | 'delete') {
+async function handleMessageAction(action: 'copy' | 'edit' | 'resend' | 'download' | 'delete' | 'favorite') {
   const message = messageActionTarget.value
   messageActionVisible.value = false
   messageActionTarget.value = null
@@ -1002,7 +1035,8 @@ async function handleMessageAction(action: 'copy' | 'edit' | 'resend' | 'downloa
   else if (action === 'resend') await resendMessage(message)
   else if (action === 'download' && message.imageUrl) {
     await downloadImage(message.imageUrl, `ai-image-${message.id}.${message.drawFormat || 'png'}`)
-  } else if (action === 'delete') await deleteMessage(message)
+  } else if (action === 'favorite') await toggleFavorite(message)
+  else if (action === 'delete') await deleteMessage(message)
 }
 
 function messageText(message: Message) {
@@ -1441,6 +1475,18 @@ const debugInfo = computed(() => {
             <button v-if="message.content" type="button" title="复制内容" aria-label="复制内容" @click="copyText(messageText(message))"><CopyDocument /></button>
             <button v-if="message.role === 'USER'" type="button" title="编辑消息" aria-label="编辑消息" @click="openEdit(message)"><EditPen /></button>
             <button type="button" :title="message.role === 'USER' ? '再次发送' : '重新生成'" :aria-label="message.role === 'USER' ? '再次发送' : '重新生成'" @click="resendMessage(message)"><RefreshRight /></button>
+            <button
+              v-if="message.imageUrl"
+              type="button"
+              :class="{ 'favorite-active': isMessageFavorited(message) }"
+              :title="isMessageFavorited(message) ? '取消收藏' : '收藏到作品库'"
+              :aria-label="isMessageFavorited(message) ? '取消收藏' : '收藏到作品库'"
+              :disabled="favoriteStore.isPending(message.id)"
+              @click="toggleFavorite(message)"
+            >
+              <StarFilled v-if="isMessageFavorited(message)" />
+              <Star v-else />
+            </button>
             <button v-if="message.imageUrl" type="button" title="下载图片" aria-label="下载图片" @click="downloadImage(message.imageUrl || '')"><Download /></button>
             <button type="button" title="删除消息" aria-label="删除消息" @click="deleteMessage(message)"><Delete /></button>
           </div>
@@ -1476,11 +1522,11 @@ const debugInfo = computed(() => {
             class="result-image mobile-image-trigger"
             aria-label="查看生成图片"
             @click.stop="handleImageClick(generatedImages.map((item) => item.imageUrl || ''), generatedImages.findIndex((item) => item.id === message.id))"
-            @touchstart.stop="startLongPress($event, () => openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`))"
+            @touchstart.stop="startLongPress($event, () => openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`, message))"
             @touchmove.stop="moveLongPress"
             @touchend.stop="finishLongPress"
             @touchcancel.stop="cancelLongPress(true)"
-            @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`)"
+            @contextmenu.prevent.stop="openImageAction(message.imageUrl || '', `ai-image-${message.id}.${message.drawFormat || 'png'}`, message)"
           >
             <img :src="messageDisplayUrl(message)" alt="AI 生成图片" loading="lazy" @error="onMessageThumbError(message)">
           </button>
@@ -1837,8 +1883,23 @@ const debugInfo = computed(() => {
     <el-drawer v-model="imageActionVisible" direction="btt" size="auto" class="h5-drawer action-drawer" :with-header="false">
       <div class="drawer-title compact"><div><strong>图片操作</strong><span>长按图片即可再次打开此菜单</span></div></div>
       <div class="action-list">
-        <button type="button" @click="downloadImageAction"><Download /><span>下载图片</span></button>
-        <button type="button" @click="imageActionVisible = false"><Close /><span>取消</span></button>
+        <button
+          v-if="imageActionTarget && imageActionTarget.imageUrl"
+          type="button"
+          :class="{ 'favorite-active': isMessageFavorited(imageActionTarget) }"
+          :disabled="favoriteStore.isPending(imageActionTarget.id)"
+          @click="toggleFavoriteFromImageAction"
+        >
+          <StarFilled v-if="isMessageFavorited(imageActionTarget)" />
+          <Star v-else />
+          <span>{{ isMessageFavorited(imageActionTarget) ? '取消收藏' : '收藏到作品库' }}</span>
+        </button>
+        <button type="button" @click="downloadImageAction">
+          <Download /><span>下载图片</span>
+        </button>
+        <button type="button" @click="imageActionVisible = false">
+          <Close /><span>取消</span>
+        </button>
       </div>
     </el-drawer>
 
@@ -1848,6 +1909,17 @@ const debugInfo = computed(() => {
         <button v-if="messageActionTarget.content" type="button" @click="handleMessageAction('copy')"><CopyDocument /><span>复制内容</span></button>
         <button v-if="messageActionTarget.role === 'USER'" type="button" @click="handleMessageAction('edit')"><EditPen /><span>编辑消息</span></button>
         <button type="button" @click="handleMessageAction('resend')"><RefreshRight /><span>{{ messageActionTarget.role === 'USER' ? '再次发送' : '重新生成' }}</span></button>
+        <button
+          v-if="messageActionTarget.imageUrl"
+          type="button"
+          :class="{ 'favorite-active': isMessageFavorited(messageActionTarget) }"
+          :disabled="favoriteStore.isPending(messageActionTarget.id)"
+          @click="handleMessageAction('favorite')"
+        >
+          <StarFilled v-if="isMessageFavorited(messageActionTarget)" />
+          <Star v-else />
+          <span>{{ isMessageFavorited(messageActionTarget) ? '取消收藏' : '收藏到作品库' }}</span>
+        </button>
         <button v-if="messageActionTarget.imageUrl" type="button" @click="handleMessageAction('download')"><Download /><span>下载图片</span></button>
         <button type="button" class="danger-action" @click="handleMessageAction('delete')"><Delete /><span>删除消息</span></button>
       </div>
@@ -2954,6 +3026,10 @@ const debugInfo = computed(() => {
 .action-list button :deep(svg) { width: 18px; color: #6d7bd5; }
 .action-list button.danger-action { color: #b95564; background: #fff1f3; }
 .action-list button.danger-action :deep(svg) { color: #cf6572; }
+.action-list button.favorite-active { color: #b7791f; background: #fff8e8; }
+.action-list button.favorite-active :deep(svg) { color: #e6a23c; }
+.action-list button:disabled { opacity: .6; }
+.message-actions button.favorite-active { color: #e6a23c; }
 :deep(.action-drawer .el-drawer__body),
 :deep(.action-drawer .el-drawer__body *) {
   -webkit-user-select: none !important;

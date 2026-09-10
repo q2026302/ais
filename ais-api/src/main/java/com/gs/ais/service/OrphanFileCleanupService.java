@@ -3,6 +3,7 @@ package com.gs.ais.service;
 import com.gs.ais.config.StoragePaths;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.util.ReferenceFileUrls;
 import org.slf4j.Logger;
@@ -37,6 +38,7 @@ public class OrphanFileCleanupService {
 
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
+    private final FavoriteRepository favoriteRepository;
     private final Path uploadRoot;
     private final Path attachmentRoot;
 
@@ -44,9 +46,11 @@ public class OrphanFileCleanupService {
     public OrphanFileCleanupService(
             MessageRepository messageRepository,
             AttachmentRepository attachmentRepository,
+            FavoriteRepository favoriteRepository,
             StoragePaths storagePaths,
             @Value("${maintenance.orphan-cleanup.upload-root:}") String uploadRoot) {
-        this(messageRepository, attachmentRepository, resolveConfiguredRoot(storagePaths, uploadRoot));
+        this(messageRepository, attachmentRepository, favoriteRepository,
+                resolveConfiguredRoot(storagePaths, uploadRoot));
     }
 
     private static Path resolveConfiguredRoot(StoragePaths storagePaths, String configured) {
@@ -60,9 +64,11 @@ public class OrphanFileCleanupService {
     OrphanFileCleanupService(
             MessageRepository messageRepository,
             AttachmentRepository attachmentRepository,
+            FavoriteRepository favoriteRepository,
             Path uploadRoot) {
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
+        this.favoriteRepository = favoriteRepository;
         this.uploadRoot = uploadRoot.toAbsolutePath().normalize();
         this.attachmentRoot = this.uploadRoot.resolve("attachments").normalize();
     }
@@ -121,15 +127,29 @@ public class OrphanFileCleanupService {
         // attachment record store its raw path in reference_file_urls. These are live
         // references too: a file referenced only this way must not be swept as orphan.
         for (Message message : messageRepository.findMessagesWithReferenceFileUrls()) {
-            for (String reference : ReferenceFileUrls.split(message.getReferenceFileUrls())) {
-                if (reference.startsWith(IMAGE_URL_PREFIX)) {
-                    resolveLocalUrl(reference, IMAGE_URL_PREFIX, uploadRoot).ifPresent(referenced::add);
-                } else if (reference.startsWith(ATTACHMENT_URL_PREFIX)) {
-                    resolveLocalUrl(reference, ATTACHMENT_URL_PREFIX, attachmentRoot).ifPresent(referenced::add);
-                }
-            }
+            addReferenceFiles(referenced, message.getReferenceFileUrls());
+        }
+        // Work-library snapshots are independent durable references. A favourited
+        // image (or one of its reference images) must survive even after its
+        // message/session is deleted, so it is never an orphan candidate.
+        for (String imageUrl : favoriteRepository.findAllImageUrls()) {
+            resolveLocalUrl(imageUrl, IMAGE_URL_PREFIX, uploadRoot).ifPresent(referenced::add);
+        }
+        for (String stored : favoriteRepository.findAllReferenceFileUrls()) {
+            addReferenceFiles(referenced, stored);
         }
         return referenced;
+    }
+
+    /** Resolves each stored newline-separated raw path to its local file, if any. */
+    private void addReferenceFiles(Set<Path> referenced, String stored) {
+        for (String reference : ReferenceFileUrls.split(stored)) {
+            if (reference.startsWith(IMAGE_URL_PREFIX)) {
+                resolveLocalUrl(reference, IMAGE_URL_PREFIX, uploadRoot).ifPresent(referenced::add);
+            } else if (reference.startsWith(ATTACHMENT_URL_PREFIX)) {
+                resolveLocalUrl(reference, ATTACHMENT_URL_PREFIX, attachmentRoot).ifPresent(referenced::add);
+            }
+        }
     }
 
     private java.util.Optional<Path> resolveLocalUrl(String url, String prefix, Path baseDir) {

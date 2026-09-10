@@ -3,6 +3,7 @@ package com.gs.ais.service;
 import com.gs.ais.config.StoragePaths;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,19 +34,46 @@ class GeneratedImageFileServiceTests {
 
     private MessageRepository messageRepository;
     private AttachmentRepository attachmentRepository;
+    private FavoriteRepository favoriteRepository;
     private GeneratedImageFileService service;
 
     @BeforeEach
     void setUp() {
         messageRepository = mock(MessageRepository.class);
         attachmentRepository = mock(AttachmentRepository.class);
+        favoriteRepository = mock(FavoriteRepository.class);
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("app.base-dir", tempDir.toString())
                 .withProperty("app.upload-dir", "uploads");
         service = new GeneratedImageFileService(
-                messageRepository, attachmentRepository, new StoragePaths(environment));
+                messageRepository, attachmentRepository, favoriteRepository, new StoragePaths(environment));
         when(messageRepository.findByImageUrl(anyString())).thenReturn(List.of());
         when(attachmentRepository.findByFileUrl(anyString())).thenReturn(List.of());
+        when(favoriteRepository.findAllReferenceFileUrls()).thenReturn(List.of());
+        when(favoriteRepository.existsByImageUrl(anyString())).thenReturn(false);
+    }
+
+    @Test
+    void keepsGeneratedImageReferencedByAFavorite() throws Exception {
+        Path original = write("generated/x.png");
+        when(favoriteRepository.existsByImageUrl("/api/images/generated/x.png")).thenReturn(true);
+
+        boolean deleted = service.deleteIfUnreferenced("/api/images/generated/x.png", Set.of(1L));
+
+        assertFalse(deleted, "a favourited generated image must not be deleted");
+        assertTrue(Files.exists(original));
+    }
+
+    @Test
+    void keepsReferenceImageCapturedInAFavorite() throws Exception {
+        Path original = write("generated/x.png");
+        when(favoriteRepository.findAllReferenceFileUrls())
+                .thenReturn(List.of("/api/images/generated/x.png\n/api/attachments/cat.png"));
+
+        boolean deleted = service.deleteIfUnreferenced("/api/images/generated/x.png", Set.of(1L));
+
+        assertFalse(deleted, "an image referenced by a favourite snapshot must not be deleted");
+        assertTrue(Files.exists(original));
     }
 
     @Test

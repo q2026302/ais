@@ -240,7 +240,8 @@ public class ResourceUrlSigner {
     private static String resourcePathOf(String url) {
         int query = url.indexOf('?');
         String path = query >= 0 ? url.substring(0, query) : url;
-        if (path.startsWith("/api/images/") || path.startsWith("/api/attachments/")) {
+        if (path.startsWith("/api/images/") || path.startsWith("/api/attachments/")
+                || path.startsWith("/api/favorites/")) {
             return path;
         }
         return null;

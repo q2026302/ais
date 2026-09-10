@@ -5,6 +5,7 @@ import com.gs.ais.config.StoragePaths;
 import com.gs.ais.model.entity.Attachment;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.security.ResourceUrlSigner;
 import com.gs.ais.service.ResourceAccessService;
@@ -38,6 +39,7 @@ class ImageControllerTests {
 
     private MessageRepository messageRepository;
     private AttachmentRepository attachmentRepository;
+    private FavoriteRepository favoriteRepository;
     private ResourceAccessService resourceAccessService;
     private ResourceUrlSigner resourceUrlSigner;
     private MockMvc mockMvc;
@@ -46,6 +48,7 @@ class ImageControllerTests {
     void setUp() {
         messageRepository = mock(MessageRepository.class);
         attachmentRepository = mock(AttachmentRepository.class);
+        favoriteRepository = mock(FavoriteRepository.class);
         resourceAccessService = mock(ResourceAccessService.class);
         SecurityProperties securityProperties = new SecurityProperties();
         securityProperties.setTokenSecret("unit-test-secret");
@@ -54,9 +57,59 @@ class ImageControllerTests {
                 .withProperty("app.base-dir", tempDir.toString())
                 .withProperty("app.upload-dir", "uploads");
         ImageController controller = new ImageController(
-                messageRepository, attachmentRepository, resourceAccessService, resourceUrlSigner,
+                messageRepository, attachmentRepository, favoriteRepository,
+                resourceAccessService, resourceUrlSigner,
                 new StoragePaths(environment));
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+    }
+
+    @Test
+    void favoriteThumbnailResolvesFromTheSnapshotAfterTheMessageIsGone() throws Exception {
+        // No message record exists; the saved work alone must serve the image.
+        write(tempDir.resolve("uploads/generated/saved.png"), new byte[]{1, 2, 3});
+        com.gs.ais.model.entity.Favorite favorite = new com.gs.ais.model.entity.Favorite();
+        favorite.setId(5L);
+        favorite.setUserId(1L);
+        favorite.setMessageId(42L);
+        favorite.setImageUrl("/api/images/generated/saved.png");
+        when(favoriteRepository.findById(5L)).thenReturn(Optional.of(favorite));
+        when(resourceAccessService.canAccessFavorite(favorite)).thenReturn(true);
+
+        mockMvc.perform(get("/api/favorites/5/thumbnail?size=small"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void favoriteThumbnailIsNotFoundForAnotherUser() throws Exception {
+        com.gs.ais.model.entity.Favorite favorite = new com.gs.ais.model.entity.Favorite();
+        favorite.setId(5L);
+        favorite.setUserId(2L);
+        favorite.setImageUrl("/api/images/generated/saved.png");
+        when(favoriteRepository.findById(5L)).thenReturn(Optional.of(favorite));
+        when(resourceAccessService.canAccessFavorite(favorite)).thenReturn(false);
+
+        mockMvc.perform(get("/api/favorites/5/thumbnail?size=small"))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(get("/api/favorites/5/references/0/thumbnail"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void favoriteReferenceThumbnailServesTheCapturedReferencePath() throws Exception {
+        write(tempDir.resolve("uploads/attachments/cat.png"), new byte[]{4, 5});
+        com.gs.ais.model.entity.Favorite favorite = new com.gs.ais.model.entity.Favorite();
+        favorite.setId(5L);
+        favorite.setUserId(1L);
+        favorite.setImageUrl("/api/images/generated/saved.png");
+        favorite.setReferenceFileUrls("/api/attachments/cat.png\n/api/images/generated/other.png");
+        when(favoriteRepository.findById(5L)).thenReturn(Optional.of(favorite));
+        when(resourceAccessService.canAccessFavorite(favorite)).thenReturn(true);
+
+        mockMvc.perform(get("/api/favorites/5/references/0/thumbnail?size=small"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/favorites/5/references/9/thumbnail"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

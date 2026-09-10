@@ -6,6 +6,7 @@ import com.gs.ais.model.entity.Session;
 import com.gs.ais.model.enums.MessageRole;
 import com.gs.ais.model.enums.MessageType;
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.repository.SessionRepository;
 import com.gs.ais.service.GeneratedImageFileService;
@@ -51,6 +52,9 @@ class ReferenceFileUrlsSoftDeleteIntegrationTests {
     @Autowired
     private SessionRepository sessionRepository;
 
+    @Autowired
+    private FavoriteRepository favoriteRepository;
+
     @TempDir
     Path tempDir;
 
@@ -78,7 +82,7 @@ class ReferenceFileUrlsSoftDeleteIntegrationTests {
                 .withProperty("app.base-dir", tempDir.toString())
                 .withProperty("app.upload-dir", "uploads"));
         GeneratedImageFileService service = new GeneratedImageFileService(
-                messageRepository, attachmentRepository, storagePaths);
+                messageRepository, attachmentRepository, favoriteRepository, storagePaths);
 
         Path image = tempDir.resolve("uploads/generated/x.png");
         Files.createDirectories(image.getParent());

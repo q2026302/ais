@@ -2,12 +2,15 @@ package com.gs.ais.controller;
 
 import com.gs.ais.config.StoragePaths;
 import com.gs.ais.model.entity.Attachment;
+import com.gs.ais.model.entity.Favorite;
 import com.gs.ais.model.entity.Message;
 import com.gs.ais.repository.AttachmentRepository;
+import com.gs.ais.repository.FavoriteRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.security.ResourceUrlSigner;
 import com.gs.ais.service.ResourceAccessService;
 import com.gs.ais.util.PureThumbnail;
+import com.gs.ais.util.ReferenceFileUrls;
 import com.gs.ais.util.ThumbnailSize;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -52,6 +55,7 @@ public class ImageController {
 
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
+    private final FavoriteRepository favoriteRepository;
     private final ResourceAccessService resourceAccessService;
     private final ResourceUrlSigner resourceUrlSigner;
     private final Path uploadDir;
@@ -60,11 +64,13 @@ public class ImageController {
     public ImageController(
             MessageRepository messageRepository,
             AttachmentRepository attachmentRepository,
+            FavoriteRepository favoriteRepository,
             ResourceAccessService resourceAccessService,
             ResourceUrlSigner resourceUrlSigner,
             StoragePaths storagePaths) {
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
+        this.favoriteRepository = favoriteRepository;
         this.resourceAccessService = resourceAccessService;
         this.resourceUrlSigner = resourceUrlSigner;
         this.uploadDir = storagePaths.uploadDir();
@@ -150,6 +156,75 @@ public class ImageController {
 
         String relative = fileUrl.substring(ATTACHMENT_URL_PREFIX.length());
         return serveThumbnail(attachmentDir, relative, sizeParam, request);
+    }
+
+    /**
+     * Thumbnail of a saved work's image. Resolved from the favourite snapshot
+     * (not the source message) so it keeps working after the message/session are
+     * deleted. Ownership follows the favourite record.
+     */
+    @GetMapping("/api/favorites/{id}/thumbnail")
+    public ResponseEntity<Resource> favoriteThumbnail(
+            @PathVariable("id") Long id,
+            @RequestParam(name = "size", defaultValue = "small") String sizeParam,
+            HttpServletRequest request) {
+        Favorite favorite = favoriteRepository.findById(id).orElse(null);
+        if (favorite == null || !resourceAccessService.canAccessFavorite(favorite)) {
+            return ResponseEntity.notFound().build();
+        }
+        StoredResource resource = resolveStoredResource(favorite.getImageUrl());
+        if (resource == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return serveThumbnail(resource.root(), resource.relative(), sizeParam, request);
+    }
+
+    /**
+     * Thumbnail of one reference image captured in a saved-work snapshot. The
+     * index addresses the newline-separated {@code reference_file_urls} order.
+     */
+    @GetMapping("/api/favorites/{id}/references/{index}/thumbnail")
+    public ResponseEntity<Resource> favoriteReferenceThumbnail(
+            @PathVariable("id") Long id,
+            @PathVariable("index") int index,
+            @RequestParam(name = "size", defaultValue = "small") String sizeParam,
+            HttpServletRequest request) {
+        Favorite favorite = favoriteRepository.findById(id).orElse(null);
+        if (favorite == null || !resourceAccessService.canAccessFavorite(favorite)) {
+            return ResponseEntity.notFound().build();
+        }
+        var references = ReferenceFileUrls.split(favorite.getReferenceFileUrls());
+        if (index < 0 || index >= references.size()) {
+            return ResponseEntity.notFound().build();
+        }
+        StoredResource resource = resolveStoredResource(references.get(index));
+        if (resource == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return serveThumbnail(resource.root(), resource.relative(), sizeParam, request);
+    }
+
+    /**
+     * Maps a raw (signature/query-less) snapshot path to its storage root and
+     * relative path. Only the two known resource prefixes are accepted.
+     */
+    private StoredResource resolveStoredResource(String rawUrl) {
+        String path = ReferenceFileUrls.stripQuery(rawUrl);
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        if (path.startsWith(IMAGE_URL_PREFIX)) {
+            String relative = path.substring(IMAGE_URL_PREFIX.length());
+            return relative.isBlank() || relative.contains("..") ? null : new StoredResource(uploadDir, relative);
+        }
+        if (path.startsWith(ATTACHMENT_URL_PREFIX)) {
+            String relative = path.substring(ATTACHMENT_URL_PREFIX.length());
+            return relative.isBlank() || relative.contains("..") ? null : new StoredResource(attachmentDir, relative);
+        }
+        return null;
+    }
+
+    private record StoredResource(Path root, String relative) {
     }
 
     private ResponseEntity<Resource> serveFile(Path rootDir, String relative,

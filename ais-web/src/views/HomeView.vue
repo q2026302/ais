@@ -3,19 +3,21 @@ import { computed, ref, onMounted, onActivated, onDeactivated, nextTick, watch, 
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Menu, RefreshRight } from '@element-plus/icons-vue'
 import { useSessionStore } from '@/stores/session'
+import { useFavoriteStore } from '@/stores/favorite'
 import SessionSidebar from '@/components/SessionSidebar.vue'
 import ChatMessage from '@/components/ChatMessage.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import ModelSelector from '@/components/ModelSelector.vue'
 import DrawDialog from '@/components/DrawDialog.vue'
 import RegenerateDialog from '@/components/RegenerateDialog.vue'
-import ImageGallery from '@/components/ImageGallery.vue'
+import WorksLibrary from '@/components/WorksLibrary.vue'
 import type { Message, ModelProvider, UploadResponse, DrawReference } from '@/types'
 import { referenceFromUpload } from '@/utils/historyReference'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import { userDefaultsApi } from '@/api/billing'
 
 const store = useSessionStore()
+const favoriteStore = useFavoriteStore()
 const messagesContainer = ref<HTMLElement | null>(null)
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
 const sending = ref(false)
@@ -33,7 +35,12 @@ const drawInitialQuality = ref('auto')
 const drawInitialFormat = ref('png')
 const drawSmartParseInitialPrompt = ref(false)
 const showScrollToBottom = ref(false)
-const viewMode = ref<'conversation' | 'gallery'>('conversation')
+/**
+ * Top-level view: 对话 (conversation) or 作品库 (work library). The library is a
+ * cross-session, user-level aggregation of favourites — not the current
+ * session's generated images.
+ */
+const viewMode = ref<'conversation' | 'works'>('conversation')
 const savedScrollTop = ref(0)
 const initialized = ref(false)
 const sidebarOpen = ref(false)
@@ -136,6 +143,11 @@ onDeactivated(() => {
 onActivated(async () => {
   if (!initialized.value) return
   await store.fetchProviders()
+  // The work library is a separate data source; refresh it when the kept-alive
+  // HomeView becomes visible again so other devices' changes show up.
+  if (viewMode.value === 'works') {
+    favoriteStore.fetchFavorites(0).catch(() => { /* keep the last good page */ })
+  }
   await nextTick()
   if (messagesContainer.value) {
     messagesContainer.value.scrollTop = savedScrollTop.value
@@ -558,6 +570,39 @@ function handleCopy(content: string) {
   // copy is handled inside ChatMessage, just a hook for potential future use
 }
 
+/** Switch the top-level view from the sidebar (会话 / 作品库). */
+function handleViewSelect(view: 'conversation' | 'works') {
+  viewMode.value = view
+}
+
+/** Save / unsave a generated image from the chat message actions (current user's own record). */
+async function handleToggleFavorite(messageId: number, favorited: boolean, favoriteId: number | null) {
+  try {
+    if (favorited) {
+      await favoriteStore.addFavorite(messageId)
+      ElMessage.success('已收藏到作品库')
+    } else {
+      const recordId = favoriteId ?? favoriteStore.favoriteIdFor(messageId)
+      if (recordId == null) {
+        ElMessage.error('收藏记录已失效，请刷新后重试')
+        return
+      }
+      await favoriteStore.removeFavorite({ id: recordId, messageId, userId: favoriteStore.currentUserId, own: true })
+      ElMessage.success('已取消收藏')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '收藏操作失败')
+  }
+}
+
+/** Jump back to the originating session of a saved work (when it still exists). */
+async function handleOpenWorksSession(sessionId: number) {
+  viewMode.value = 'conversation'
+  await store.selectSession(sessionId)
+  await nextTick()
+  scrollToBottom()
+}
+
 async function handleChatProviderChange(id: number | null) {
   chatProviderId.value = id
   if (store.activeSessionId) {
@@ -595,7 +640,12 @@ async function forceRefresh() {
 <template>
   <!-- Avoid fullscreen Element Plus mask while waiting for the model — it feels like a white screen. -->
   <div class="home-view" :class="{ 'is-busy': store.loading || sending }">
-    <SessionSidebar :mobile-open="sidebarOpen" @close="sidebarOpen = false" />
+    <SessionSidebar
+      :mobile-open="sidebarOpen"
+      :active-view="viewMode"
+      @close="sidebarOpen = false"
+      @select-view="handleViewSelect"
+    />
     <div class="chat-area" :class="{ 'composer-fullscreen': composerFullscreen }">
       <!-- Chat header with view and model controls -->
       <div class="chat-header">
@@ -608,11 +658,12 @@ async function forceRefresh() {
           @click="sidebarOpen = true"
         />
         <div class="chat-heading">
-          <span class="chat-eyebrow">创作空间</span>
-          <span class="chat-title">{{ activeSessionTitle }}</span>
+          <span class="chat-eyebrow">{{ viewMode === 'works' ? '作品库' : '创作空间' }}</span>
+          <span class="chat-title">{{ viewMode === 'works' ? '我的 AI 作品' : activeSessionTitle }}</span>
         </div>
         <div class="header-actions">
           <el-button
+            v-if="viewMode === 'conversation'"
             :icon="RefreshRight"
             :loading="refreshing"
             :disabled="!store.activeSessionId || store.loading || sending"
@@ -623,9 +674,10 @@ async function forceRefresh() {
           />
           <el-radio-group v-model="viewMode" size="small">
             <el-radio-button label="conversation">对话</el-radio-button>
-            <el-radio-button label="gallery">图片墙</el-radio-button>
+            <el-radio-button label="works">作品库</el-radio-button>
           </el-radio-group>
           <ModelSelector
+            v-if="viewMode === 'conversation'"
             :chat-providers="store.chatProviders"
             :image-providers="store.imageProviders"
             :active-chat-id="chatProviderId"
@@ -670,15 +722,23 @@ async function forceRefresh() {
           :message="msg"
           :chat-provider="selectedChatProvider"
           :providers="allProviders"
+          :favorited="favoriteStore.isFavorited(msg.id, msg.favorited)"
+          :favorite-id="favoriteStore.favoriteIdFor(msg.id, msg.favoriteId)"
+          :favorite-pending="favoriteStore.isPending(msg.id)"
           @edit="handleEditMessage"
           @resend="handleResend"
           @regenerate="handleRegenerate"
           @delete="handleDeleteMessage"
           @refresh="handleRefreshMessage"
           @copy="handleCopy"
+          @toggle-favorite="handleToggleFavorite"
         />
       </div>
-      <ImageGallery v-else :messages="store.messages" />
+      <WorksLibrary
+        v-else
+        :active="viewMode === 'works'"
+        @open-session="handleOpenWorksSession"
+      />
 
       <Transition name="scroll-bottom-fade">
         <button

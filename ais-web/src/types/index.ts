@@ -56,6 +56,10 @@ export interface Message {
   parentMessageId?: number | null
   edited: boolean
   deleted?: boolean
+  /** Current user's own work-library state (never another user's records). */
+  favorited?: boolean
+  /** Current user's own favourite record id; null when this user has not saved it. */
+  favoriteId?: number | null
   createdAt: string
   /** Advances on content/status updates; auto-unread uses coalesce(updatedAt, createdAt). */
   updatedAt?: string | null
@@ -350,6 +354,40 @@ export interface PageResponse<T> {
   totalPages: number
   number: number
   size: number
+}
+
+/** One reference image captured in a saved-work snapshot. */
+export interface FavoriteReferenceImage {
+  fileUrl: string
+  /** Signed thumbnail URL; append ?size=small|medium at render time. */
+  thumbnailUrl?: string | null
+}
+
+/**
+ * A saved work (作品库 / 收藏). Snapshot semantics: it stays complete after the
+ * source message and/or session are deleted, so never resolve its fields from
+ * `store.messages`.
+ */
+export interface Favorite {
+  id: number
+  /** Owning user id. Regular users only ever receive their own records. */
+  userId?: number | null
+  /** Owning username; the admin work library uses it to tell records apart. */
+  userName?: string | null
+  messageId: number
+  /** Source session id; `sessionAvailable` tells whether it can still be opened. */
+  sessionId: number | null
+  sessionAvailable: boolean
+  imageUrl: string
+  /** Signed thumbnail URL; append ?size=small|medium at render time. */
+  thumbnailUrl?: string | null
+  drawPrompt?: string | null
+  drawSize?: string | null
+  drawQuality?: string | null
+  drawFormat?: string | null
+  referenceImages: FavoriteReferenceImage[]
+  /** Time the work was favourited. */
+  createdAt: string
 }
 
 export interface MessageStatusResponse {
