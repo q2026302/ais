@@ -41,3 +41,7 @@ package-lock.json
 # Hermes install-cn (separate repo, not part of AIS)
 hermes-cn-install.ps1
 /hermes-install-cn/
+
+# 本地 gradle 缓存（agent 在仓库内运行 gradle 时产生）
+.gradle-home/
+.gradle-verify/
