@@ -64,6 +64,21 @@ public class Message {
     private Long chatProviderId;
 
     /**
+     * Name snapshot ({@code 名称 / 模型名}) of the model that actually produced
+     * this message, captured when the message was written. It keeps the
+     * conversation history showing the real model even after the provider is
+     * renamed or deleted. Nullable for legacy rows and rows written before the
+     * snapshot existed — the frontend then falls back to resolving
+     * {@link #chatProviderId} / {@link #drawProviderId}, and finally shows
+     * 「未记录」 rather than the currently selected model.
+     */
+    @Column(name = "chat_provider_name", length = 255)
+    private String chatProviderName;
+
+    @Column(name = "draw_provider_name", length = 255)
+    private String drawProviderName;
+
+    /**
      * Server-side file URLs referenced by a DRAW_REQUEST that reuse an existing
      * file (history generated image or existing attachment) without creating a new
      * attachment record. Stored as newline-separated context-relative paths
@@ -170,6 +185,10 @@ public class Message {
     public void setDrawProviderId(Long drawProviderId) { this.drawProviderId = drawProviderId; }
     public Long getChatProviderId() { return chatProviderId; }
     public void setChatProviderId(Long chatProviderId) { this.chatProviderId = chatProviderId; }
+    public String getChatProviderName() { return chatProviderName; }
+    public void setChatProviderName(String chatProviderName) { this.chatProviderName = chatProviderName; }
+    public String getDrawProviderName() { return drawProviderName; }
+    public void setDrawProviderName(String drawProviderName) { this.drawProviderName = drawProviderName; }
     public String getReferenceFileUrls() { return referenceFileUrls; }
     public void setReferenceFileUrls(String referenceFileUrls) { this.referenceFileUrls = referenceFileUrls; }
     public List<Attachment> getAttachments() { return attachments; }

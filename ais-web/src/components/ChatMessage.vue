@@ -6,14 +6,15 @@ import { CopyDocument, Edit, Refresh, Delete, Download, Star, StarFilled } from 
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import { getThumbnailUrl } from '@/utils/imageUrl'
 import { formatDateTimeSeconds } from '@/utils/dateTime'
+import { messageSpeakerName } from '@/utils/modelDisplay'
 import { downloadImage as downloadImageAsset } from '@/utils/downloadImage'
 import { useSignedUrlRefresh } from '@/composables/useSignedUrlRefresh'
 
 const props = defineProps<{
   message: Message
-  chatProvider?: ModelProvider | null
-  /** Optional list to resolve message.chatProviderId / drawProviderId */
-  providers?: ModelProvider[]
+  /** Provider rows used to resolve the model recorded on the message. */
+  chatProviders?: ModelProvider[]
+  imageProviders?: ModelProvider[]
   /** Current user's work-library state for this message (overrides the payload flag). */
   favorited?: boolean
   /** Current user's own favourite record id; required to cancel exactly that record. */
@@ -52,42 +53,15 @@ watch(
   () => { thumbFailed.value = false },
 )
 
-function providerLabel(provider: ModelProvider | null | undefined, fallback = 'AI') {
-  if (!provider) return fallback
-  const name = provider.name || provider.providerId
-  return provider.modelName ? `${name} / ${provider.modelName}` : name
-}
-
-function resolveMessageProvider(): ModelProvider | null {
-  const message = props.message
-  const list = props.providers || []
-  if (message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST') {
-    const drawId = message.drawProviderId
-    if (drawId != null) {
-      return list.find((item) => item.id === drawId) || null
-    }
-    return null
-  }
-  const chatId = message.chatProviderId
-  if (chatId != null) {
-    const found = list.find((item) => item.id === chatId)
-    if (found) return found
-  }
-  return props.chatProvider || null
-}
-
-const displayName = computed(() => {
-  if (props.message.role === 'USER') {
-    if (props.message.messageType === 'DRAW_REQUEST') return '绘图请求'
-    return '我'
-  }
-  const provider = resolveMessageProvider()
-  const label = providerLabel(provider, 'AI')
-  if (props.message.messageType === 'DRAW_RESPONSE') {
-    return label === 'AI' ? '[绘图] AI' : `[绘图] ${label}`
-  }
-  return label
-})
+/**
+ * Speaker / model name for this message. Resolved ONLY from what the backend
+ * recorded for the message (provider id + name snapshot), never from the
+ * current selection — see utils/modelDisplay.
+ */
+const displayName = computed(() => messageSpeakerName(props.message, {
+  chatProviders: props.chatProviders,
+  imageProviders: props.imageProviders,
+}))
 
 const messageTypeClass = computed(() => {
   const type = props.message.messageType

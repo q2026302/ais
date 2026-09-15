@@ -7,12 +7,12 @@ import { useFavoriteStore } from '@/stores/favorite'
 import SessionSidebar from '@/components/SessionSidebar.vue'
 import ChatMessage from '@/components/ChatMessage.vue'
 import ChatInput from '@/components/ChatInput.vue'
-import ModelSelector from '@/components/ModelSelector.vue'
 import DrawDialog from '@/components/DrawDialog.vue'
 import RegenerateDialog from '@/components/RegenerateDialog.vue'
 import WorksLibrary from '@/components/WorksLibrary.vue'
-import type { Message, ModelProvider, UploadResponse, DrawReference } from '@/types'
+import type { Message, ModelProvider, UploadResponse, DrawReference, DrawSettings } from '@/types'
 import { referenceFromUpload } from '@/utils/historyReference'
+import { providerLabel } from '@/utils/modelDisplay'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import { userDefaultsApi } from '@/api/billing'
 
@@ -47,6 +47,10 @@ const sidebarOpen = ref(false)
 const refreshing = ref(false)
 const composerFullscreen = ref(false)
 
+/**
+ * 会话默认对话模型（持久写入会话）。临时切换由 ChatInput 的输入框下拉框负责，
+ * 不再经由这里；顶层头部也没有独立模型下拉框。
+ */
 const chatProviderId = ref<number | null>(null)
 const imageProviderId = ref<number | null>(null)
 const defaultChatProviderId = ref<number | null>(null)
@@ -58,17 +62,29 @@ const activeSessionTitle = computed(() => {
   return session?.title || '未命名会话'
 })
 
-const selectedChatProvider = computed<ModelProvider | null>(() => {
-  if (chatProviderId.value != null) {
-    return store.chatProviders.find((provider) => provider.id === chatProviderId.value) || null
-  }
+/** 会话未显式设置时实际生效的默认（用户默认 → 系统启用项）。 */
+const fallbackChatProvider = computed<ModelProvider | null>(() => {
   if (defaultChatProviderId.value != null) {
-    return store.chatProviders.find((provider) => provider.id === defaultChatProviderId.value) || null
+    const provider = store.chatProviders.find((item) => item.id === defaultChatProviderId.value)
+    if (provider) return provider
   }
-  return store.chatProviders.find((provider) => provider.active) || null
+  return store.chatProviders.find((item) => item.active) || null
 })
 
-const allProviders = computed(() => [...store.chatProviders, ...store.imageProviders])
+const fallbackImageProvider = computed<ModelProvider | null>(() => {
+  if (defaultImageProviderId.value != null) {
+    const provider = store.imageProviders.find((item) => item.id === defaultImageProviderId.value)
+    if (provider) return provider
+  }
+  return store.imageProviders.find((item) => item.active) || null
+})
+
+const chatDefaultLabel = computed(() => providerLabel(fallbackChatProvider.value, '系统默认'))
+const imageDefaultLabel = computed(() => providerLabel(fallbackImageProvider.value, '系统默认'))
+
+/** 会话未显式设置时实际生效的模型 id（用户默认 → 系统启用项）。 */
+const resolvedChatProviderId = computed(() => chatProviderId.value ?? fallbackChatProvider.value?.id ?? null)
+const resolvedImageProviderId = computed(() => imageProviderId.value ?? fallbackImageProvider.value?.id ?? null)
 
 const regenerateTarget = computed<Message | null>(() => {
   if (regenerateTargetId.value == null) return null
@@ -80,15 +96,13 @@ const editingMessage = computed<Message | null>(() => {
   return store.messages.find((message) => message.id === editingMessageId.value) || null
 })
 
-function resolveProviderId(sessionValue: number | null | undefined, userDefault: number | null, providers: ModelProvider[]) {
-  if (sessionValue != null) return sessionValue
-  if (userDefault != null && providers.some((item) => item.id === userDefault)) return userDefault
-  return providers.find((item) => item.active)?.id ?? null
-}
-
+/**
+ * 会话配置展示的是**会话里真实记录的**默认模型：会话未显式设置时保持 null，
+ * 由「跟随默认（用户/系统默认）」选项表达，而不是把解析结果冒充成会话设置。
+ */
 function syncProviderSelectionFromSession(session: { chatProviderId: number | null; imageProviderId: number | null }) {
-  chatProviderId.value = resolveProviderId(session.chatProviderId, defaultChatProviderId.value, store.chatProviders)
-  imageProviderId.value = resolveProviderId(session.imageProviderId, defaultImageProviderId.value, store.imageProviders)
+  chatProviderId.value = session.chatProviderId ?? null
+  imageProviderId.value = session.imageProviderId ?? null
 }
 
 watch(() => store.activeSessionId, (sessionId) => {
@@ -188,14 +202,6 @@ function sessionListText() {
   }).join('\n')
 }
 
-function modelListText() {
-  if (store.chatProviders.length === 0) return '暂无可用对话模型。请先在管理页面配置模型。'
-  return store.chatProviders.map((provider) => {
-    const active = provider.id === chatProviderId.value ? '（当前会话）' : provider.active ? '（系统默认）' : ''
-    return `#${provider.id}  ${provider.name || provider.providerId} / ${provider.modelName} ${active}`
-  }).join('\n')
-}
-
 async function handleSystemCommand(payload: ChatInputPayload): Promise<boolean> {
   const command = parseChatCommand(payload.prompt)
   if (!command) return false
@@ -273,30 +279,6 @@ async function handleSystemCommand(payload: ChatInputPayload): Promise<boolean> 
         ElMessage.info('正在终止请求…')
       }
       return true
-    case 'models':
-      await store.fetchProviders()
-      await showCommandDialog('可用对话模型', modelListText())
-      return true
-    case 'model': {
-      const providerId = parseId(command.argument)
-      if (providerId == null) {
-        ElMessage.warning('用法：/model <模型ID>；可使用 /models 查看列表。')
-        return true
-      }
-      if (store.activeSessionId == null) {
-        ElMessage.warning('请先创建或切换到一个会话。')
-        return true
-      }
-      const provider = store.chatProviders.find((item) => item.id === providerId)
-      if (!provider) {
-        ElMessage.warning(`未找到对话模型 #${providerId}，可使用 /models 查看列表。`)
-        return true
-      }
-      await store.updateSessionProviders(provider.id, undefined)
-      chatProviderId.value = provider.id
-      ElMessage.success(`当前会话已切换至 ${provider.name || provider.providerId} / ${provider.modelName}`)
-      return true
-    }
     case 'draw':
       if (!command.argument) {
         ElMessage.warning('用法：/draw <绘图提示词>')
@@ -309,6 +291,12 @@ async function handleSystemCommand(payload: ChatInputPayload): Promise<boolean> 
       })
       return true
     default:
+      // 有 UI 的端不再支持 /model、/models：模型切换走会话配置（持久）或
+      // 输入框旁的临时下拉框。命令仅是纯文本渠道（飞书机器人）的手段。
+      if (command.rawName === 'model' || command.rawName === 'models') {
+        ElMessage.warning('模型切换请使用输入框旁的模型下拉框（仅本次）或齿轮「会话配置」（会话默认）。')
+        return true
+      }
       ElMessage.warning(`未知命令 /${command.rawName}；输入 /help 查看可用命令。`)
       return true
   }
@@ -384,9 +372,12 @@ function handleDraw(payload: {
   const userPrompt = payload.prompt.trim()
   drawSmartParseInitialPrompt.value = !userPrompt
   drawInitialPrompt.value = userPrompt || getLastAssistantPrompt()
-  drawInitialSize.value = payload.size || '1024x1024'
-  drawInitialQuality.value = payload.quality || 'auto'
-  drawInitialFormat.value = payload.format || 'png'
+  // 生成面板初值取**会话设置**（注册表默认值已由 store 补齐）；单次生成可在
+  // DrawDialog 里临时改，不写回会话。
+  const settings = store.drawSettings
+  drawInitialSize.value = payload.size || settings.size
+  drawInitialQuality.value = payload.quality || settings.quality
+  drawInitialFormat.value = payload.format || settings.format
   drawDialogVisible.value = true
 }
 
@@ -483,15 +474,17 @@ async function handleComposerEditSave(payload: {
   const message = store.messages.find((item) => item.id === payload.messageId)
   if (!message) return
   const isDraw = message.messageType === 'DRAW_REQUEST'
-  const resolvedChatProviderId = isDraw ? null : payload.chatProviderId
-  const resolvedImageProviderId = isDraw ? imageProviderId.value : null
+  // 编辑/再次发送同样走「临时切换」语义：对话用输入框下拉的临时选择，
+  // 绘画用会话默认绘画模型解析结果。
+  const chatProviderOverride = isDraw ? null : payload.chatProviderId
+  const imageProviderOverride = isDraw ? resolvedImageProviderId.value : null
 
   try {
     // Unified edit/resend: saving the (possibly adjusted) prompt then
     // re-triggering the response. For DRAW_REQUEST the saved content is the
     // pure prompt, which the backend mirrors into drawPrompt.
     await store.editMessage(payload.messageId, payload.content)
-    await store.resendUserMessage(payload.messageId, resolvedChatProviderId, resolvedImageProviderId)
+    await store.resendUserMessage(payload.messageId, chatProviderOverride, imageProviderOverride)
     // Only leave edit mode once both calls succeeded; on failure the composer
     // stays in edit mode with its content intact so the user can retry.
     editingMessageId.value = null
@@ -604,16 +597,42 @@ async function handleOpenWorksSession(sessionId: number) {
 }
 
 async function handleChatProviderChange(id: number | null) {
+  if (!store.activeSessionId) return
+  const previous = chatProviderId.value
+  // 只写用户真正改动的那一侧；另一侧不出现（undefined）＝保持原值，
+  // 避免把移动端刚改过的值用本地旧值覆盖回去。
   chatProviderId.value = id
-  if (store.activeSessionId) {
-    await store.updateSessionProviders(id, imageProviderId.value)
+  try {
+    await store.updateSessionProviders(id, undefined)
+    ElMessage.success('会话默认对话模型已更新')
+  } catch (e: any) {
+    chatProviderId.value = previous
+    ElMessage.error(e?.message || '保存会话默认对话模型失败，已恢复原值')
   }
 }
 
 async function handleImageProviderChange(id: number | null) {
+  if (!store.activeSessionId) return
+  const previous = imageProviderId.value
   imageProviderId.value = id
-  if (store.activeSessionId) {
-    await store.updateSessionProviders(chatProviderId.value, id)
+  try {
+    await store.updateSessionProviders(undefined, id)
+    ElMessage.success('会话默认绘画模型已更新')
+  } catch (e: any) {
+    imageProviderId.value = previous
+    ElMessage.error(e?.message || '保存会话默认绘画模型失败，已恢复原值')
+  }
+}
+
+/**
+ * 齿轮面板里的绘画参数变更 = 改**会话设置**（持久生效，稀疏合并写回后端）。
+ * 三端都走 store 的同一通道；生成面板里的临时改动不经过这里。
+ */
+async function handleDrawSettingChange(patch: Partial<DrawSettings>) {
+  try {
+    await store.updateSessionSettings({ draw: patch })
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存绘画参数失败')
   }
 }
 
@@ -676,15 +695,6 @@ async function forceRefresh() {
             <el-radio-button label="conversation">对话</el-radio-button>
             <el-radio-button label="works">作品库</el-radio-button>
           </el-radio-group>
-          <ModelSelector
-            v-if="viewMode === 'conversation'"
-            :chat-providers="store.chatProviders"
-            :image-providers="store.imageProviders"
-            :active-chat-id="chatProviderId"
-            :active-image-id="imageProviderId"
-            @update:active-chat-id="handleChatProviderChange"
-            @update:active-image-id="handleImageProviderChange"
-          />
         </div>
       </div>
 
@@ -698,19 +708,19 @@ async function forceRefresh() {
           <div class="examples">
             <div
               class="example-item"
-              @click="handleSend({ prompt: '一只橘猫坐在窗台上晒太阳，油画风格', attachmentIds: [], chatProviderId })"
+              @click="handleSend({ prompt: '一只橘猫坐在窗台上晒太阳，油画风格', attachmentIds: [], chatProviderId: resolvedChatProviderId })"
             >
               一只橘猫坐在窗台上晒太阳，油画风格
             </div>
             <div
               class="example-item"
-              @click="handleSend({ prompt: '未来城市夜景，赛博朋克风格', attachmentIds: [], chatProviderId })"
+              @click="handleSend({ prompt: '未来城市夜景，赛博朋克风格', attachmentIds: [], chatProviderId: resolvedChatProviderId })"
             >
               未来城市夜景，赛博朋克风格
             </div>
             <div
               class="example-item"
-              @click="handleSend({ prompt: '水墨画风格的山水，雾气缭绕的群山', attachmentIds: [], chatProviderId })"
+              @click="handleSend({ prompt: '水墨画风格的山水，雾气缭绕的群山', attachmentIds: [], chatProviderId: resolvedChatProviderId })"
             >
               水墨画风格的山水，雾气缭绕的群山
             </div>
@@ -720,8 +730,8 @@ async function forceRefresh() {
           v-for="msg in store.messages"
           :key="msg.id"
           :message="msg"
-          :chat-provider="selectedChatProvider"
-          :providers="allProviders"
+          :chat-providers="store.chatProviders"
+          :image-providers="store.imageProviders"
           :favorited="favoriteStore.isFavorited(msg.id, msg.favorited)"
           :favorite-id="favoriteStore.favoriteIdFor(msg.id, msg.favoriteId)"
           :favorite-pending="favoriteStore.isPending(msg.id)"
@@ -771,8 +781,14 @@ async function forceRefresh() {
         :provider-options="store.chatProviders"
         :image-providers="store.imageProviders"
         :active-session-id="store.activeSessionId"
-        :active-chat-provider-id="chatProviderId"
-        :active-image-provider-id="imageProviderId"
+        :session-chat-provider-id="chatProviderId"
+        :session-image-provider-id="imageProviderId"
+        :chat-default-label="chatDefaultLabel"
+        :image-default-label="imageDefaultLabel"
+        :image-fallback-provider-id="fallbackImageProvider?.id ?? null"
+        :session-draw-size="store.drawSettings.size"
+        :session-draw-quality="store.drawSettings.quality"
+        :session-draw-format="store.drawSettings.format"
         :history-messages="store.messages"
         :editing-message="editingMessage"
         :editing-action="editingAction"
@@ -781,7 +797,9 @@ async function forceRefresh() {
         @cancel="store.cancelActiveRequest"
         @edit-save="handleComposerEditSave"
         @edit-cancel="handleEditCancel"
+        @chat-provider-change="handleChatProviderChange"
         @image-provider-change="handleImageProviderChange"
+        @draw-setting-change="handleDrawSettingChange"
         @fullscreen-change="composerFullscreen = $event"
       />
 
@@ -795,7 +813,7 @@ async function forceRefresh() {
         :history-messages="store.messages"
         :smart-parse-initial-prompt="drawSmartParseInitialPrompt"
         :image-providers="store.imageProviders"
-        :default-image-provider-id="imageProviderId"
+        :default-image-provider-id="resolvedImageProviderId"
         :loading="sending || store.loading"
         @generate="handleDrawGenerate"
       />
@@ -806,8 +824,8 @@ async function forceRefresh() {
         :message="regenerateTarget"
         :chat-providers="store.chatProviders"
         :image-providers="store.imageProviders"
-        :default-chat-provider-id="chatProviderId"
-        :default-image-provider-id="imageProviderId"
+        :default-chat-provider-id="resolvedChatProviderId"
+        :default-image-provider-id="resolvedImageProviderId"
         :loading="store.loading"
         @confirm="handleRegenerateConfirm"
       />
@@ -971,7 +989,6 @@ async function forceRefresh() {
   .header-actions { width: auto; min-width: 0; flex: 1; justify-content: flex-end; }
 }
 @media (max-width: 620px) {
-  .header-actions :deep(.model-selector) { max-width: 170px; }
   .welcome { padding: 30px 16px; border-radius: 18px; }
   .welcome h2 { font-size: 23px; }
 }

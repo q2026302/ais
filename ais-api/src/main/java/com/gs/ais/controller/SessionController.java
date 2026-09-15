@@ -14,6 +14,7 @@ import com.gs.ais.model.entity.Message;
 import com.gs.ais.model.entity.Session;
 import com.gs.ais.model.entity.ModelProvider;
 import com.gs.ais.model.enums.MessageStatus;
+import com.gs.ais.model.enums.ProviderType;
 import com.gs.ais.repository.AppUserRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.security.AuthRole;
@@ -22,6 +23,7 @@ import com.gs.ais.service.BillingService;
 import com.gs.ais.service.FavoriteService;
 import com.gs.ais.service.ImageGenerationQueueService;
 import com.gs.ais.service.ImageGenerationService;
+import com.gs.ais.service.SessionProviderResolver;
 import com.gs.ais.service.SessionService;
 import com.gs.ais.service.OperationLogService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -57,6 +59,7 @@ public class SessionController {
     private final OperationLogService operationLogService;
     private final ResourceUrlSigner resourceUrlSigner;
     private final FavoriteService favoriteService;
+    private final SessionProviderResolver sessionProviderResolver;
 
     public SessionController(SessionService sessionService,
                              ImageGenerationService imageGenerationService,
@@ -65,7 +68,8 @@ public class SessionController {
                              BillingService billingService,
                              OperationLogService operationLogService,
                              ResourceUrlSigner resourceUrlSigner,
-                             FavoriteService favoriteService) {
+                             FavoriteService favoriteService,
+                             SessionProviderResolver sessionProviderResolver) {
         this.sessionService = sessionService;
         this.imageGenerationService = imageGenerationService;
         this.queueService = queueService;
@@ -74,6 +78,7 @@ public class SessionController {
         this.operationLogService = operationLogService;
         this.resourceUrlSigner = resourceUrlSigner;
         this.favoriteService = favoriteService;
+        this.sessionProviderResolver = sessionProviderResolver;
     }
 
     private Long getCurrentUserId() {
@@ -182,22 +187,13 @@ public class SessionController {
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
 
-        // Use user's default chat provider if session has none
-        Long resolvedChatProviderId = request.getChatProviderId();
-        if (resolvedChatProviderId == null && session.getChatProviderId() == null) {
-            Long userId = getCurrentUserId();
-            if (userId != null) {
-                resolvedChatProviderId = appUserRepository.findById(userId)
-                        .map(AppUser::getDefaultChatProviderId)
-                        .orElse(null);
-            }
-        }
-
         long chatStart = System.currentTimeMillis();
+        // 解析链（请求临时值 → 会话值 → 会话所属用户默认 → 系统启用项）在服务层统一完成，
+        // 这里原样透传请求里的临时选择。
         ImageGenerationService.ChatMessageResult result = imageGenerationService.chat(
                 id, request.getPrompt(),
                 request.getAttachmentIds(),
-                resolvedChatProviderId != null ? resolvedChatProviderId : request.getChatProviderId());
+                request.getChatProviderId());
         long chatDuration = System.currentTimeMillis() - chatStart;
 
         // Record billing for successful chat
@@ -205,18 +201,10 @@ public class SessionController {
             Long userId = getCurrentUserId();
             if (userId != null) {
                 try {
-                    // Prefer the explicit request override, then the session selection, then the active default.
-                    Long billingProviderId = resolvedChatProviderId != null
-                            ? resolvedChatProviderId
-                            : session.getChatProviderId();
-                    ModelProvider chatProvider = imageGenerationService.getProviderById(billingProviderId);
-                    if (chatProvider == null) {
-                        chatProvider = imageGenerationService.getProviderById(session.getChatProviderId());
-                    }
-                    if (chatProvider == null) {
-                        // Fall back to the same resolver path used by the chat service.
-                        chatProvider = imageGenerationService.resolveChatProviderForBilling(session.getChatProviderId());
-                    }
+                    // Same unified chain the chat call used, resolved from the session owner
+                    // (no reliance on the request's login context for the default step).
+                    ModelProvider chatProvider = sessionProviderResolver.resolveOrNull(
+                            session, request.getChatProviderId(), ProviderType.CHAT);
                     if (chatProvider != null) {
                         var usage = result.tokenUsage();
                         billingService.recordChat(chatProvider, userId, id, result.assistantMessageId(),
@@ -256,20 +244,8 @@ public class SessionController {
 
         DrawRequest safeRequest = request != null ? request : new DrawRequest();
 
-        // Resolve image provider: use session's, then user's default, then request's
-        Long imageProviderId = safeRequest.getImageProviderId();
-        if (imageProviderId == null && session.getImageProviderId() == null) {
-            Long userId = getCurrentUserId();
-            if (userId != null) {
-                imageProviderId = appUserRepository.findById(userId)
-                        .map(AppUser::getDefaultImageProviderId)
-                        .orElse(null);
-            }
-        }
-        if (imageProviderId != null) {
-            safeRequest.setImageProviderId(imageProviderId);
-        }
-
+        // 图像模型的解析（含会话所属用户默认）在队列服务里用同一条链完成，这里不再
+        // 依赖当前登录态手工回退，请求体原样透传。
         ImageGenerationService.DrawResult result = imageGenerationService.draw(id, safeRequest);
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -336,11 +312,8 @@ public class SessionController {
             Long userId = getCurrentUserId();
             if (userId != null) {
                 try {
-                    Long billingProviderId = chatProviderId != null ? chatProviderId : session.getChatProviderId();
-                    ModelProvider chatProvider = imageGenerationService.getProviderById(billingProviderId);
-                    if (chatProvider == null) {
-                        chatProvider = imageGenerationService.resolveChatProviderForBilling(session.getChatProviderId());
-                    }
+                    ModelProvider chatProvider = sessionProviderResolver.resolveOrNull(
+                            session, chatProviderId, ProviderType.CHAT);
                     if (chatProvider != null) {
                         var usage = result.tokenUsage();
                         billingService.recordChat(chatProvider, userId, id, result.messageId(),
@@ -385,14 +358,57 @@ public class SessionController {
                 "messageId", messageId != null ? messageId : -1L));
     }
 
+    /**
+     * 统一会话设置入口：会话默认模型 + 按用途分组的绘画参数。
+     *
+     * <p>请求体是自由形状的 map，服务端按 {@code SessionSettingsRegistry} 白名单
+     * 逐键合并，因此以后新增参数/分组**不需要改这个接口**：
+     * <pre>
+     * { "chatProviderId": 12, "imageProviderId": 7, "draw": { "quality": "high" } }
+     * </pre>
+     * <ul>
+     *   <li>分组内是合并语义：只覆盖传入的 key，未出现的键保持原样；</li>
+     *   <li>{@code "draw": null} 清空该分组、回注册表默认值；分组内某个 key 为
+     *       {@code null} 同样只清空该键；</li>
+     *   <li>未识别的键忽略且不报错，响应回显生效后的 {@code settings}；</li>
+     *   <li>未出现的键一律不动（{@code containsKey} 语义）。</li>
+     * </ul>
+     * 响应是带 {@code settings} 的会话对象（注册表默认值已补齐）。
+     */
+    @PatchMapping("/{id}/settings")
+    public ResponseEntity<Session> updateSessionSettings(@PathVariable Long id,
+                                                         @RequestBody(required = false) Map<String, Object> body) {
+        return applySessionSettings(id, body);
+    }
+
+    /**
+     * 兼容别名：保留既有调用方与测试。内部转调 {@link #updateSessionSettings}，
+     * 语义完全一致（会话默认模型 id 仍是独立列）。
+     */
     @PatchMapping("/{id}/providers")
     public ResponseEntity<Session> updateSessionProviders(@PathVariable Long id,
-                                                           @RequestBody Map<String, Long> body) {
+                                                          @RequestBody(required = false) Map<String, Object> body) {
+        return applySessionSettings(id, body);
+    }
+
+    private ResponseEntity<Session> applySessionSettings(Long id, Map<String, Object> body) {
+        Map<String, Object> patch = body != null ? body : Map.of();
         Session session = sessionService.getSession(id);
         checkSessionAccess(session);
-        Session updated = sessionService.updateProviders(id,
-                body.get("chatProviderId"), body.get("imageProviderId"));
+        Session updated = sessionService.updateSettings(id, patch,
+                toProviderId(patch.get("chatProviderId")),
+                toProviderId(patch.get("imageProviderId")));
         return ResponseEntity.ok(updated);
+    }
+
+    private Long toProviderId(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number number) return number.longValue();
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("模型 ID 必须是数字");
+        }
     }
 
     private void checkSessionAccess(Session session) {

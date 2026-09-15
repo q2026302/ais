@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import type { Message, ModelProvider } from '@/types'
+import { providerLabel, sessionDefaultUsageHint, temporaryUsageHint } from '@/utils/modelDisplay'
 
 const props = defineProps<{
   visible: boolean
@@ -27,6 +28,10 @@ const selectedProviderId = ref<number | null>(null)
 const isDraw = computed(() => props.message?.messageType === 'DRAW_REQUEST'
   || props.message?.messageType === 'DRAW_RESPONSE')
 const providers = computed(() => isDraw.value ? props.imageProviders : props.chatProviders)
+/** Session default this dialog would otherwise use — only for the visible hint. */
+const sessionDefaultProviderId = computed(() => isDraw.value
+  ? props.defaultImageProviderId
+  : props.defaultChatProviderId)
 
 function resolveProviderId(preferredId: number | null | undefined, options: ModelProvider[]) {
   if (preferredId != null && options.some((provider) => provider.id === preferredId)) {
@@ -34,6 +39,21 @@ function resolveProviderId(preferredId: number | null | undefined, options: Mode
   }
   return options.find((provider) => provider.active)?.id ?? null
 }
+
+/**
+ * The model this message actually used. Falls back to the session default only
+ * when the message carries no usable record (legacy rows / user messages), never
+ * to an unrelated current selection.
+ */
+function messageUsedProviderId(): number | null {
+  const message = props.message
+  if (!message) return null
+  if (isDraw.value) {
+    return message.drawProviderId ?? props.defaultImageProviderId
+  }
+  return message.chatProviderId ?? props.defaultChatProviderId
+}
+
 const dialogTitle = computed(() => {
   if (props.action === 'resend') return isDraw.value ? '再次生成图片' : '再次发送消息'
   return isDraw.value ? '重新生成图片' : '重新生成回复'
@@ -42,15 +62,24 @@ const actionLabel = computed(() => props.action === 'resend' ? '再次发送' : 
 const selectedProvider = computed(() => selectedProviderId.value == null
   ? null
   : providers.value.find((provider) => provider.id === selectedProviderId.value) || null)
+const sessionDefaultProvider = computed(() => sessionDefaultProviderId.value == null
+  ? null
+  : providers.value.find((provider) => provider.id === sessionDefaultProviderId.value) || null)
+
+/** Unified with every other temporary-switch entry point. */
+const usageText = computed(() => {
+  const selected = selectedProvider.value
+  if (!selected) return ''
+  const label = providerLabel(selected)
+  if (selectedProviderId.value === sessionDefaultProviderId.value) {
+    return sessionDefaultUsageHint(providerLabel(sessionDefaultProvider.value, '系统默认'))
+  }
+  return temporaryUsageHint(label)
+})
 
 watch(() => props.visible, (visible) => {
   if (!visible) return
-  selectedProviderId.value = isDraw.value
-    ? resolveProviderId(
-        props.message?.drawProviderId ?? props.defaultImageProviderId,
-        props.imageProviders,
-      )
-    : resolveProviderId(props.defaultChatProviderId, props.chatProviders)
+  selectedProviderId.value = resolveProviderId(messageUsedProviderId(), providers.value)
 })
 
 function handleConfirm() {
@@ -82,11 +111,11 @@ function handleConfirm() {
               <el-option
                 v-for="provider in providers"
                 :key="provider.id"
-                :label="`${provider.name || provider.providerId} / ${provider.modelName}`"
+                :label="providerLabel(provider)"
                 :value="provider.id"
               />
             </el-select>
-            <span class="field-hint">临时选择，仅影响本次操作，不修改会话默认模型。</span>
+            <span class="field-hint">默认选中这条消息当时实际使用的模型；可临时改选，仅影响本次{{ actionLabel }}，不修改会话默认模型。</span>
           </div>
         </el-form-item>
       </el-form>
@@ -98,7 +127,7 @@ function handleConfirm() {
         show-icon
       >
         <template #title>
-          本次将使用：{{ selectedProvider.name || selectedProvider.providerId }} / {{ selectedProvider.modelName }}
+          {{ usageText }}
         </template>
       </el-alert>
       <el-alert

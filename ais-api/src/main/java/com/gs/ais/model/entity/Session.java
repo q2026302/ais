@@ -1,12 +1,15 @@
 package com.gs.ais.model.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.gs.ais.settings.SessionSettingsRegistry;
 import jakarta.persistence.*;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Entity
 @Table(name = "sessions")
@@ -47,6 +50,21 @@ public class Session {
     @JsonIgnore
     @Column(name = "auto_title_enabled", nullable = false)
     private boolean autoTitleEnabled;
+
+    /**
+     * 会话级设置的**稀疏 JSON**（按用途分组，例如 {@code {"draw":{"quality":"high"}}}）。
+     *
+     * <p>通用可空 TEXT 列：以后新增绘画参数或新增其它分组都不需要改表结构
+     * （{@code ddl-auto: update} 自动建列，无需 migration）。只有显式设置过且与
+     * 注册表默认值不同的键会被写入，读取时由 {@link SessionSettingsRegistry} 补齐
+     * 默认值 —— 所以“没设置过”与“显式清空”在数据库里都是“这个键不存在”。
+     *
+     * <p>字段名与列名不同（列名固定为 {@code settings}），避免和下面回显生效值的
+     * {@code settings} 属性重名。
+     */
+    @JsonIgnore
+    @Column(name = "settings", columnDefinition = "TEXT")
+    private String settingsJson;
 
     /**
      * Not a DB column — filled when listing sessions from the latest message.
@@ -103,4 +121,26 @@ public class Session {
     public void setLastMessageAt(LocalDateTime lastMessageAt) { this.lastMessageAt = lastMessageAt; }
     public String getLastMessagePreview() { return lastMessagePreview; }
     public void setLastMessagePreview(String lastMessagePreview) { this.lastMessagePreview = lastMessagePreview; }
+
+    /**
+     * 会话读接口回显的 {@code settings}：注册表默认值 ∪ 已存储的显式值。
+     *
+     * <p>不是数据库列，直接由 {@link #settingsJson} 派生；新增注册表参数会自动
+     * 出现在这里，接口形状无需改动。未识别的键会被丢弃。
+     */
+    @JsonProperty("settings")
+    public Map<String, Object> effectiveSettings() {
+        return SessionSettingsRegistry.effective(settingsJson);
+    }
+
+    /** 持久化的稀疏 JSON 原文（可能为 {@code null}）。 */
+    @JsonIgnore
+    public String rawSettings() {
+        return settingsJson;
+    }
+
+    @JsonIgnore
+    public void setRawSettings(String settingsJson) {
+        this.settingsJson = settingsJson;
+    }
 }

@@ -3,6 +3,7 @@ package com.gs.ais.integration;
 import com.gs.ais.client.LlmClient;
 import com.gs.ais.config.StoragePaths;
 import com.gs.ais.dto.request.DrawRequest;
+import com.gs.ais.dto.response.MessageResponse;
 import com.gs.ais.dto.response.TestConnectionResponse;
 import com.gs.ais.model.ModelProviderDefaults;
 import com.gs.ais.model.entity.Attachment;
@@ -188,7 +189,72 @@ class ModelConversationAndImageIntegrationTests {
         assertEquals(11, messages.get(1).getPromptTokens());
         assertEquals(7, messages.get(1).getCompletionTokens());
         assertEquals(18, messages.get(1).getTotalTokens());
+        assertEquals(chatProvider.getId(), messages.get(1).getChatProviderId());
+        assertEquals("Integration Test CHAT / chat-test-model", messages.get(1).getChatProviderName());
         assertEquals(messages.get(0).getId(), messages.get(1).getParentMessageId());
+    }
+
+    @Test
+    void chatRecordsActualModelSnapshotAndHistoryNameSurvivesSessionDefaultChange() {
+        ModelProvider usedProvider = saveProvider(ProviderType.CHAT, "snapshot-used-model");
+        ModelProvider otherProvider = saveProvider(ProviderType.CHAT, "snapshot-other-model");
+        // 会话默认是 otherProvider；本次发送临时使用 usedProvider。
+        Session session = saveSession(otherProvider.getId(), null);
+
+        server.expect(requestTo(BASE_URL + "/chat/completions"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().string(containsString("\"model\":\"snapshot-used-model\"")))
+                .andRespond(withSuccess("""
+                        {"choices":[{"message":{"role":"assistant","content":"snapshot reply"}}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        imageGenerationService.chat(session.getId(), "记录实际使用的模型", List.of(), usedProvider.getId());
+
+        List<Message> messages = messageRepository.findBySessionIdOrderByCreatedAtAsc(session.getId());
+        Message assistant = messages.get(1);
+        assertEquals(usedProvider.getId(), assistant.getChatProviderId());
+        assertEquals("Integration Test CHAT / snapshot-used-model", assistant.getChatProviderName());
+
+        // 响应体把 id 与名称快照都暴露给前端（前端基于它显示，不回退当前选中模型）。
+        MessageResponse response = MessageResponse.from(assistant);
+        assertEquals(usedProvider.getId(), response.getChatProviderId());
+        assertEquals("Integration Test CHAT / snapshot-used-model", response.getChatProviderName());
+
+        // 之后修改会话默认模型，已发出消息的显示名不得变化。
+        sessionService.updateProviders(session.getId(), true, otherProvider.getId(), false, null);
+        flushAndClearPersistenceContext();
+        Message reloaded = messageRepository.findById(assistant.getId()).orElseThrow();
+        assertEquals(usedProvider.getId(), reloaded.getChatProviderId());
+        assertEquals("Integration Test CHAT / snapshot-used-model", reloaded.getChatProviderName());
+    }
+
+    @Test
+    void sessionDefaultModelCanBeClearedBackToUserDefault() {
+        ModelProvider chatProvider = saveProvider(ProviderType.CHAT, "clearable-default-model");
+        Session session = saveSession(chatProvider.getId(), null);
+
+        sessionService.updateProviders(session.getId(), true, null, false, null);
+        flushAndClearPersistenceContext();
+
+        Session reloaded = sessionRepository.findById(session.getId()).orElseThrow();
+        assertNull(reloaded.getChatProviderId());
+    }
+
+    @Test
+    void legacyMessageWithoutModelRecordHasNoSnapshotInsteadOfCurrentSelection() {
+        Session session = saveSession(null, null);
+        Message legacy = new Message();
+        legacy.setSession(session);
+        legacy.setRole(MessageRole.ASSISTANT);
+        legacy.setMessageType(MessageType.CHAT);
+        legacy.setStatus(MessageStatus.SUCCESS);
+        legacy.setContent("旧消息没有记录模型");
+        legacy = messageRepository.saveAndFlush(legacy);
+
+        MessageResponse response = MessageResponse.from(legacy);
+        // 前端据此显示「未记录」，绝不回退到当前选中的模型。
+        assertNull(response.getChatProviderId());
+        assertNull(response.getChatProviderName());
     }
 
     @Test
@@ -606,6 +672,7 @@ class ModelConversationAndImageIntegrationTests {
         assertEquals("high", messages.get(0).getDrawQuality());
         assertEquals("png", messages.get(0).getDrawFormat());
         assertEquals(imageProvider.getId(), messages.get(0).getDrawProviderId());
+        assertEquals("Integration Test IMAGE / gpt-image-test", messages.get(0).getDrawProviderName());
         assertTrue(messages.get(0).getContent().contains("绘画提示词：一只水彩风格的猫"));
         assertTrue(messages.get(0).getContent().contains("尺寸 1024x1024"));
         assertEquals(MessageRole.ASSISTANT, messages.get(1).getRole());
@@ -614,6 +681,8 @@ class ModelConversationAndImageIntegrationTests {
         assertEquals(result.assistantMessageId(), messages.get(1).getId());
         assertTrue(messages.get(1).getImageUrl().startsWith("/api/images/"));
         assertSavedImageExists(messages.get(1).getImageUrl());
+        assertEquals(imageProvider.getId(), messages.get(1).getDrawProviderId());
+        assertEquals("Integration Test IMAGE / gpt-image-test", messages.get(1).getDrawProviderName());
         assertEquals(messages.get(0).getId(), messages.get(1).getParentMessageId());
     }
 

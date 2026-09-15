@@ -57,6 +57,12 @@ public class MessageResponse {
     @Schema(description = "对话供应商 ID（实际生成该助手消息时使用的模型）")
     private Long chatProviderId;
 
+    @Schema(description = "对话模型名称快照（写入消息时记录；历史消息据此显示，删除/改名后仍然稳定）")
+    private String chatProviderName;
+
+    @Schema(description = "绘画模型名称快照（写入消息时记录；历史消息据此显示，删除/改名后仍然稳定）")
+    private String drawProviderName;
+
     @Schema(description = "关联的附件列表")
     private List<AttachmentResponse> attachments;
 
@@ -122,6 +128,8 @@ public class MessageResponse {
         resp.setDrawFormat(message.getDrawFormat());
         resp.setDrawProviderId(message.getDrawProviderId());
         resp.setChatProviderId(message.getChatProviderId());
+        resp.setDrawProviderName(message.getDrawProviderName());
+        resp.setChatProviderName(message.getChatProviderName());
         if (message.getAttachments() != null) {
             resp.setAttachments(message.getAttachments().stream()
                     .map(AttachmentResponse::from)
@@ -171,6 +179,10 @@ public class MessageResponse {
     public void setDrawProviderId(Long drawProviderId) { this.drawProviderId = drawProviderId; }
     public Long getChatProviderId() { return chatProviderId; }
     public void setChatProviderId(Long chatProviderId) { this.chatProviderId = chatProviderId; }
+    public String getChatProviderName() { return chatProviderName; }
+    public void setChatProviderName(String chatProviderName) { this.chatProviderName = chatProviderName; }
+    public String getDrawProviderName() { return drawProviderName; }
+    public void setDrawProviderName(String drawProviderName) { this.drawProviderName = drawProviderName; }
     public List<AttachmentResponse> getAttachments() { return attachments; }
     public void setAttachments(List<AttachmentResponse> attachments) { this.attachments = attachments; }
     public TokenUsage getTokenUsage() { return tokenUsage; }

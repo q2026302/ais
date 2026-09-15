@@ -9,6 +9,7 @@ import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.repository.SessionRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.security.AuthPrincipal;
+import com.gs.ais.settings.SessionSettingsRegistry;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -243,13 +244,51 @@ public class SessionService {
         return normalized;
     }
 
+    /** Backwards-compatible variant: only non-null values are applied. */
     public Session updateProviders(Long id, Long chatProviderId, Long imageProviderId) {
+        return updateProviders(id, chatProviderId != null, chatProviderId,
+                imageProviderId != null, imageProviderId);
+    }
+
+    /**
+     * Updates the session default models. {@code chatProvided} / {@code imageProvided}
+     * distinguish "clear back to the user/system default" (provided + null) from
+     * "leave unchanged" (not provided), which the 会话配置 UI needs.
+     */
+    public Session updateProviders(Long id,
+                                   boolean chatProvided, Long chatProviderId,
+                                   boolean imageProvided, Long imageProviderId) {
+        java.util.Map<String, Object> body = new HashMap<>();
+        if (chatProvided) body.put("chatProviderId", chatProviderId);
+        if (imageProvided) body.put("imageProviderId", imageProviderId);
+        return updateSettings(id, body, chatProviderId, imageProviderId);
+    }
+
+    /**
+     * 统一的会话设置入口（{@code PATCH /api/sessions/{id}/settings}）。
+     *
+     * <p>两类内容共用一次保存：
+     * <ul>
+     *   <li>会话默认**模型 id**：{@code chatProviderId}/{@code imageProviderId}
+     *       仍是独立列，不在 JSON 里。{@code body.containsKey} 决定是否写入，
+     *       因此“未出现 = 不动、出现且为 null = 清空回用户/系统默认”。</li>
+     *   <li>其余键交给 {@link com.gs.ais.settings.SessionSettingsRegistry} 做
+     *       分组稀疏合并：分组内只覆盖传入的 key，显式 null 清空该组/该键回
+     *       注册表默认值，未识别的键忽略。新增参数/分组不需要改这里。</li>
+     * </ul>
+     */
+    public Session updateSettings(Long id, Map<String, Object> body,
+                                  Long chatProviderId, Long imageProviderId) {
         Session session = getSession(id);
-        if (chatProviderId != null) {
+        Map<String, Object> patch = body != null ? body : Map.of();
+        if (patch.containsKey("chatProviderId")) {
             session.setChatProviderId(chatProviderId);
         }
-        if (imageProviderId != null) {
+        if (patch.containsKey("imageProviderId")) {
             session.setImageProviderId(imageProviderId);
+        }
+        if (SessionSettingsRegistry.containsGroupPatch(patch)) {
+            session.setRawSettings(SessionSettingsRegistry.merge(session.rawSettings(), patch));
         }
         return sessionRepository.save(session);
     }

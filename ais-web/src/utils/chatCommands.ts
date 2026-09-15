@@ -6,8 +6,6 @@ export type ChatCommandName =
   | 'rename'
   | 'delete'
   | 'cancel'
-  | 'models'
-  | 'model'
   | 'draw'
   | 'unknown'
 
@@ -30,8 +28,6 @@ const aliases: Record<string, Exclude<ChatCommandName, 'unknown'>> = {
   remove: 'delete',
   cancel: 'cancel',
   stop: 'cancel',
-  models: 'models',
-  model: 'model',
   draw: 'draw',
   image: 'draw',
 }
@@ -60,6 +56,6 @@ export const CHAT_COMMAND_HELP = `系统命令（命令不会发送给 AI）：
 /rename <标题>              修改当前会话标题
 /delete                     删除当前会话（需确认）
 /cancel                     终止当前生成或对话请求
-/models                     查看可用对话模型
-/model <模型ID>             切换当前会话的对话模型
-/draw <提示词>              打开绘图窗口并带入提示词`
+/draw <提示词>              打开绘图窗口并带入提示词
+
+提示：模型切换请使用输入框旁的模型下拉框（仅本次）或输入框齿轮中的会话配置（会话默认）。`

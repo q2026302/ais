@@ -17,6 +17,7 @@ import com.gs.ais.repository.AttachmentRepository;
 import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.security.AuthContext;
 import com.gs.ais.util.LlmErrorMessageUtils;
+import com.gs.ais.util.ModelProviderNames;
 import com.gs.ais.util.PureThumbnail;
 import com.gs.ais.util.ReferenceFileUrls;
 import org.slf4j.Logger;
@@ -55,6 +56,7 @@ public class ImageGenerationService {
     private final ImageGenerationQueueService imageGenerationQueueService;
     private final AppUserRepository appUserRepository;
     private final GeneratedImageFileService generatedImageFileService;
+    private final SessionProviderResolver sessionProviderResolver;
 
     private final Path uploadDir;
     private final Path attachmentDir;
@@ -70,6 +72,7 @@ public class ImageGenerationService {
                                   ImageGenerationQueueService imageGenerationQueueService,
                                   AppUserRepository appUserRepository,
                                   GeneratedImageFileService generatedImageFileService,
+                                  SessionProviderResolver sessionProviderResolver,
                                   StoragePaths storagePaths) {
         this.llmClient = llmClient;
         this.modelProviderService = modelProviderService;
@@ -82,6 +85,7 @@ public class ImageGenerationService {
         this.imageGenerationQueueService = imageGenerationQueueService;
         this.appUserRepository = appUserRepository;
         this.generatedImageFileService = generatedImageFileService;
+        this.sessionProviderResolver = sessionProviderResolver;
         this.uploadDir = storagePaths.uploadDir();
         this.attachmentDir = storagePaths.attachmentDir();
         initUploadDir();
@@ -128,18 +132,8 @@ public class ImageGenerationService {
         }
     }
 
-    private ModelProvider resolveChatProvider(Long sessionChatProviderId) {
-        if (sessionChatProviderId != null) {
-            return modelProviderService.getById(sessionChatProviderId);
-        }
-        return modelProviderService.getActiveProvider(ProviderType.CHAT);
-    }
-
-    private ModelProvider resolveImageProvider(Long sessionImageProviderId) {
-        if (sessionImageProviderId != null) {
-            return modelProviderService.getById(sessionImageProviderId);
-        }
-        return modelProviderService.getActiveProvider(ProviderType.IMAGE);
+    private ModelProvider resolveChatProvider(Session session, Long requestChatProviderId) {
+        return sessionProviderResolver.resolveChat(session, requestChatProviderId);
     }
 
     public ModelProvider getProviderById(Long providerId) {
@@ -151,21 +145,19 @@ public class ImageGenerationService {
         }
     }
 
-    /** Same resolution order as live chat/image calls — used by billing fallback paths. */
-    public ModelProvider resolveChatProviderForBilling(Long sessionChatProviderId) {
-        try {
-            return resolveChatProvider(sessionChatProviderId);
-        } catch (Exception e) {
-            return null;
-        }
+    /**
+     * Billing fallback: same resolution order as the live chat call
+     * (请求 → 会话 → 会话所属用户默认 → 系统启用项), keyed on the session owner so it
+     * works without an authenticated request context. Returns {@code null} instead of
+     * throwing when nothing is configured.
+     */
+    public ModelProvider resolveChatProviderForBilling(Session session, Long requestChatProviderId) {
+        return sessionProviderResolver.resolveOrNull(session, requestChatProviderId, ProviderType.CHAT);
     }
 
-    public ModelProvider resolveImageProviderForBilling(Long sessionImageProviderId) {
-        try {
-            return resolveImageProvider(sessionImageProviderId);
-        } catch (Exception e) {
-            return null;
-        }
+    /** Image counterpart of {@link #resolveChatProviderForBilling(Session, Long)}. */
+    public ModelProvider resolveImageProviderForBilling(Session session, Long requestImageProviderId) {
+        return sessionProviderResolver.resolveOrNull(session, requestImageProviderId, ProviderType.IMAGE);
     }
 
     // ===================== Flow A: Chat message =====================
@@ -184,8 +176,8 @@ public class ImageGenerationService {
         List<LlmClient.ReferenceImage> chatImages = loadImageAttachments(attachmentIds);
 
         // Resolve the provider before building context so its system prompt is applied.
-        ModelProvider chatProvider = resolveChatProvider(
-                chatProviderId != null ? chatProviderId : session.getChatProviderId());
+        // 统一解析链：请求临时值 → 会话值 → 会话所属用户默认 → 系统启用项。
+        ModelProvider chatProvider = resolveChatProvider(session, chatProviderId);
         // Build context before saving the current user message to avoid sending it twice.
         List<Map<String, Object>> messages = chatService.buildMessages(
                 sessionId, safeUserInput, chatProvider, chatImages);
@@ -218,6 +210,7 @@ public class ImageGenerationService {
         assistantMessage.setContent("等待回应...");
         assistantMessage.setParentMessageId(userMessage.getId());
         assistantMessage.setChatProviderId(chatProvider.getId());
+        assistantMessage.setChatProviderName(ModelProviderNames.snapshot(chatProvider));
         assistantMessage = messageRepository.save(assistantMessage);
 
         if (isFirstMessage) {
@@ -325,14 +318,31 @@ public class ImageGenerationService {
         return "绘画提示词：" + prompt + "\n输出配置：" + String.join("；", options);
     }
 
-    private void applyDrawMetadata(Message message, String prompt, DrawRequest request, Long imageProviderId) {
-        message.setDrawPrompt(prompt);
-        if (request != null) {
-            message.setDrawSize(cleanOption(request.getSize()));
-            message.setDrawQuality(cleanOption(request.getQuality()));
-            message.setDrawFormat(cleanOption(request.getFormat()));
+    /**
+     * Records which draw model will actually run on the message (id + name snapshot).
+     * Uses the same unified chain as the queue: 请求临时值 → 会话值 →
+     * 会话所属用户默认 → 系统启用项, so the recorded model matches the real call
+     * (and the frontend's 「会话默认」 display) even when the session has no explicit
+     * image model and the owner has a Profile default.
+     */
+    private void recordDrawProvider(Message message, Session session, Long requestedImageProviderId) {
+        Long recordedId = resolveDrawProviderId(session, requestedImageProviderId);
+        message.setDrawProviderId(recordedId);
+        message.setDrawProviderName(ModelProviderNames.snapshot(getProviderById(recordedId)));
+    }
+
+    /** 统一解析链的 id 形态；解析不到时保留原 id，让队列按既有失败语义处理。 */
+    private Long resolveDrawProviderId(Session session, Long requestedImageProviderId) {
+        ModelProvider provider = sessionProviderResolver.resolveOrNull(
+                session, requestedImageProviderId, ProviderType.IMAGE);
+        if (provider != null) {
+            return provider.getId();
         }
-        message.setDrawProviderId(imageProviderId);
+        return requestedImageProviderId != null ? requestedImageProviderId : sessionImageProviderId(session);
+    }
+
+    private static Long sessionImageProviderId(Session session) {
+        return session == null ? null : session.getImageProviderId();
     }
 
     private List<LlmClient.ReferenceImage> loadImageAttachments(List<Long> attachmentIds) {
@@ -459,14 +469,14 @@ public class ImageGenerationService {
             return regenerateDrawOnly(session, message, userMessage, imageProviderId);
         }
 
-        ModelProvider chatProvider = resolveChatProvider(
-                chatProviderId != null ? chatProviderId : session.getChatProviderId());
+        ModelProvider chatProvider = resolveChatProvider(session, chatProviderId);
         List<Map<String, Object>> chatMessages = chatService.buildMessagesThroughUserMessage(
                 sessionId, userMessage, chatProvider, referencesFromMessage(userMessage));
         message.setStatus(MessageStatus.PENDING);
         message.setContent("等待回应...");
         message.setErrorMessage(null);
         message.setChatProviderId(chatProvider.getId());
+        message.setChatProviderName(ModelProviderNames.snapshot(chatProvider));
         messageRepository.save(message);
         try {
             long chatStart = System.currentTimeMillis();
@@ -514,8 +524,7 @@ public class ImageGenerationService {
             return resendDrawRequest(session, userMessage, imageProviderId);
         }
 
-        ModelProvider chatProvider = resolveChatProvider(
-                chatProviderId != null ? chatProviderId : session.getChatProviderId());
+        ModelProvider chatProvider = resolveChatProvider(session, chatProviderId);
         List<Map<String, Object>> chatMessages = chatService.buildMessagesThroughUserMessage(
                 session.getId(), userMessage, chatProvider, referencesFromMessage(userMessage));
 
@@ -527,6 +536,7 @@ public class ImageGenerationService {
         assistantMessage.setContent("等待回应...");
         assistantMessage.setParentMessageId(userMessage.getId());
         assistantMessage.setChatProviderId(chatProvider.getId());
+        assistantMessage.setChatProviderName(ModelProviderNames.snapshot(chatProvider));
         assistantMessage = messageRepository.save(assistantMessage);
 
         try {
@@ -577,11 +587,12 @@ public class ImageGenerationService {
                                                Long requestedImageProviderId) {
         String prompt = userMessage.getDrawPrompt();
         if (prompt == null || prompt.isBlank()) prompt = userMessage.getContent();
-        Long imageProviderId = requestedImageProviderId != null
+        // 原消息记录的实际模型作为本次「请求值」（前端重发弹窗也是按它预选），
+        // 取不到（已删除 / 老消息无记录）则继续走统一链：会话 → 用户默认 → 系统启用。
+        Long requestedOrRecorded = requestedImageProviderId != null
                 ? requestedImageProviderId
-                : userMessage.getDrawProviderId() != null
-                    ? userMessage.getDrawProviderId()
-                    : session.getImageProviderId();
+                : userMessage.getDrawProviderId();
+        Long imageProviderId = resolveDrawProviderId(session, requestedOrRecorded);
 
         Message assistantMessage = new Message();
         assistantMessage.setSession(session);
@@ -594,7 +605,7 @@ public class ImageGenerationService {
         assistantMessage.setDrawSize(userMessage.getDrawSize());
         assistantMessage.setDrawQuality(userMessage.getDrawQuality());
         assistantMessage.setDrawFormat(userMessage.getDrawFormat());
-        assistantMessage.setDrawProviderId(imageProviderId);
+        recordDrawProvider(assistantMessage, session, requestedOrRecorded);
         assistantMessage = messageRepository.save(assistantMessage);
 
         DrawRequest request = new DrawRequest();
@@ -622,11 +633,11 @@ public class ImageGenerationService {
         String prompt = message.getDrawPrompt();
         if (prompt == null || prompt.isBlank()) prompt = userMessage.getDrawPrompt();
         if (prompt == null || prompt.isBlank()) prompt = userMessage.getContent();
-        Long imageProviderId = requestedImageProviderId != null
+        // 同 resend：该消息记录的实际模型当作请求值，取不到再走统一解析链。
+        Long requestedOrRecorded = requestedImageProviderId != null
                 ? requestedImageProviderId
-                : message.getDrawProviderId() != null
-                    ? message.getDrawProviderId()
-                    : session.getImageProviderId();
+                : message.getDrawProviderId();
+        Long imageProviderId = resolveDrawProviderId(session, requestedOrRecorded);
         String size = message.getDrawSize() != null ? message.getDrawSize() : userMessage.getDrawSize();
         String quality = message.getDrawQuality() != null ? message.getDrawQuality() : userMessage.getDrawQuality();
         String format = message.getDrawFormat() != null ? message.getDrawFormat() : userMessage.getDrawFormat();
@@ -640,7 +651,7 @@ public class ImageGenerationService {
         message.setDrawSize(size);
         message.setDrawQuality(quality);
         message.setDrawFormat(format);
-        message.setDrawProviderId(imageProviderId);
+        recordDrawProvider(message, session, requestedOrRecorded);
         messageRepository.save(message);
 
         DrawRequest request = new DrawRequest();

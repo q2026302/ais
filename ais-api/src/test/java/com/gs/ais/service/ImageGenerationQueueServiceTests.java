@@ -88,7 +88,7 @@ class ImageGenerationQueueServiceTests {
         queueService = new ImageGenerationQueueService(
                 llmClient, modelProviderService, sessionService, messageRepository,
                 attachmentRepository, attachmentService, billingService,
-                generatedImageFileService, storagePaths);
+                generatedImageFileService, mock(SessionProviderResolver.class), storagePaths);
     }
 
     @AfterEach

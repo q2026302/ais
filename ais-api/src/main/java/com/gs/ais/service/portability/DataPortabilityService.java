@@ -23,6 +23,7 @@ import com.gs.ais.repository.MessageRepository;
 import com.gs.ais.repository.ModelProviderRepository;
 import com.gs.ais.repository.SessionRepository;
 import com.gs.ais.repository.SystemModelSettingsRepository;
+import com.gs.ais.settings.SessionSettingsRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -436,6 +437,9 @@ public class DataPortabilityService {
             session.setImageProviderId(mapModelId(asLong(dto.get("imageProviderId")), modelIdMap));
             session.setExternalChannel(asString(dto.get("externalChannel")));
             session.setExternalChatId(asString(dto.get("externalChatId")));
+            // 与正常写入路径同一套白名单清洗：未知分组/键丢弃、非标量拒绝、
+            // 与默认值相同的值不落库，保证导入后 settings 形状与正常写入完全一致。
+            session.setRawSettings(SessionSettingsRegistry.sanitize(asString(dto.get("settings"))));
             Boolean autoTitle = asBoolean(dto.get("autoTitleEnabled"));
             session.setAutoTitleEnabled(autoTitle == null || autoTitle);
             if (dto.get("createdAt") != null) {
@@ -482,6 +486,8 @@ public class DataPortabilityService {
             message.setDrawFormat(asString(dto.get("drawFormat")));
             message.setDrawProviderId(mapModelId(asLong(dto.get("drawProviderId")), modelIdMap));
             message.setChatProviderId(mapModelId(asLong(dto.get("chatProviderId")), modelIdMap));
+            message.setDrawProviderName(asString(dto.get("drawProviderName")));
+            message.setChatProviderName(asString(dto.get("chatProviderName")));
             message.setPromptTokens(asInteger(dto.get("promptTokens")));
             message.setCompletionTokens(asInteger(dto.get("completionTokens")));
             message.setTotalTokens(asInteger(dto.get("totalTokens")));
@@ -602,6 +608,8 @@ public class DataPortabilityService {
         dto.put("externalChannel", session.getExternalChannel());
         dto.put("externalChatId", session.getExternalChatId());
         dto.put("autoTitleEnabled", session.isAutoTitleEnabled());
+        // 会话设置（通用 JSON 文本列）：原样导出，迁移/备份时不丢绘画参数等。
+        dto.put("settings", session.rawSettings());
         return dto;
     }
 
@@ -621,6 +629,9 @@ public class DataPortabilityService {
         dto.put("drawFormat", message.getDrawFormat());
         dto.put("drawProviderId", message.getDrawProviderId());
         dto.put("chatProviderId", message.getChatProviderId());
+        // Model name snapshots keep the history display stable across export/import.
+        dto.put("drawProviderName", message.getDrawProviderName());
+        dto.put("chatProviderName", message.getChatProviderName());
         dto.put("promptTokens", message.getPromptTokens());
         dto.put("completionTokens", message.getCompletionTokens());
         dto.put("totalTokens", message.getTotalTokens());

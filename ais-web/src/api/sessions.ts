@@ -3,6 +3,7 @@ import { getAppBasePath, resolveAppUrl } from '@/utils/appBasePath'
 import { buildReuseAttachmentRequest } from '@/utils/historyReference'
 import type {
   Session,
+  SessionSettingsPatch,
   Message,
   GenerateRequest,
   GenerateResponse,
@@ -117,6 +118,17 @@ export const sessionApi = {
     return client.delete(`/api/sessions/${sessionId}/messages/${messageId}`)
   },
 
+  /**
+   * 稀疏更新会话设置（会话默认模型 + 按用途分组的绘画参数等）。
+   *
+   * 分组内是合并语义：只覆盖传入的 key；分组显式 `null` 清空该组回默认值；
+   * 未出现的键不动。返回的会话对象带**生效后的** `settings`（默认值已补齐）。
+   */
+  updateSessionSettings(sessionId: number, data: SessionSettingsPatch): Promise<Session> {
+    return client.patch(`/api/sessions/${sessionId}/settings`, data).then((r) => r.data)
+  },
+
+  /** 兼容旧调用：`/providers` 是 `/settings` 的委托别名，语义完全一致。 */
   updateSessionProviders(sessionId: number, data: { chatProviderId?: number | null; imageProviderId?: number | null }): Promise<Session> {
     return client.patch(`/api/sessions/${sessionId}/providers`, data).then((r) => r.data)
   },

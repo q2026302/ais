@@ -4,6 +4,8 @@ import { ElMessage } from 'element-plus'
 import { Paperclip, Picture } from '@element-plus/icons-vue'
 import type { Message, ModelProvider, DrawReference } from '@/types'
 import { sessionApi } from '@/api/sessions'
+import { providerLabel, usageHint } from '@/utils/modelDisplay'
+import { drawOptionSets, imageAdapterOf, withStoredValue } from '@/utils/drawOptions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { referenceFromHistory, referenceFromUpload, referenceUrlForBackend } from '@/utils/historyReference'
 import { getAppBasePath } from '@/utils/appBasePath'
@@ -86,26 +88,26 @@ const selectedImageProvider = computed<ModelProvider | null>(() => selectedProvi
   ? null
   : props.imageProviders.find((provider) => provider.id === selectedProviderId.value) || null)
 
-const providerAdapter = computed(() => {
-  const configured = selectedImageProvider.value?.adapterType?.toUpperCase()
-  if (configured && configured !== 'AUTO') return configured
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  const providerId = selectedImageProvider.value?.providerId?.toLowerCase() || ''
-  if (providerId === 'grsai') return 'GRS_AI'
-  return model.includes('gemini') ? 'GEMINI_IMAGE' : 'OPENAI_IMAGE'
+/** 会话默认绘画模型（仅用于「本次使用」提示）。 */
+const sessionDefaultImageProvider = computed<ModelProvider | null>(() => props.defaultImageProviderId == null
+  ? null
+  : props.imageProviders.find((provider) => provider.id === props.defaultImageProviderId) || null)
+
+/** 与其它临时切换入口统一：「本次使用：X（仅本次）」/「本次使用：会话默认 Y」。 */
+const usageText = computed(() => {
+  if (!selectedImageProvider.value) return ''
+  const isSessionDefault = selectedProviderId.value === props.defaultImageProviderId
+  return usageHint({
+    temporaryLabel: isSessionDefault ? null : providerLabel(selectedImageProvider.value),
+    defaultLabel: providerLabel(sessionDefaultImageProvider.value, '系统默认'),
+  })
 })
+
+const providerAdapter = computed(() => imageAdapterOf(selectedImageProvider.value))
 const isGeminiImage = computed(() => providerAdapter.value === 'GEMINI_IMAGE')
 const isGrsaiImage = computed(() => providerAdapter.value === 'GRS_AI')
-const isNanoBananaModel = computed(() => {
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  return isGrsaiImage.value && model.includes('nano-banana')
-})
-const usesRatioOptions = computed(() => isGeminiImage.value || isNanoBananaModel.value)
-const isGptImageModel = computed(() => {
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  return (providerAdapter.value === 'OPENAI_IMAGE' || isGrsaiImage.value)
-    && (model.includes('gpt-image') || model.includes('gpt image'))
-})
+/** 生效模型的**基准**选项集（用于解析助手建议、判定是否越界）。 */
+const drawOptionBase = computed(() => drawOptionSets(selectedImageProvider.value))
 const isReferenceMode = computed(() => references.value.length > 0)
 const historyImages = computed<HistoryImageItem[]>(() => {
   const items: HistoryImageItem[] = []
@@ -139,17 +141,21 @@ const historyImages = computed<HistoryImageItem[]>(() => {
   return items.reverse()
 })
 
-const sizeOptions = computed(() => usesRatioOptions.value
-  ? ['1:1', '16:9', '9:16', '4:3', '3:4']
-  : isGptImageModel.value
-    ? ['1024x1024', '1536x1024', '1024x1536', 'auto']
-    : ['1024x1024', '512x512', '768x768', '1024x1792', '1792x1024'])
+const baseSizeOptions = computed(() => drawOptionBase.value.size)
+const baseQualityOptions = computed(() => drawOptionBase.value.quality)
+const baseFormatOptions = computed(() => drawOptionBase.value.format)
+/**
+ * 下拉框展示选项 = 基准选项集 ∪ 当前值。会话存储值即使不在当前模型的基准选项集
+ * 里也原样显示（不会被静默替换），由用户自行决定是否改选。
+ */
+const sizeOptions = computed(() => withStoredValue(baseSizeOptions.value, size.value))
+const qualityOptions = computed(() => withStoredValue(baseQualityOptions.value, quality.value))
+const formatOptions = computed(() => withStoredValue(baseFormatOptions.value, format.value))
 
-const qualityOptions = computed(() => usesRatioOptions.value
-  ? ['1K', '2K', '4K']
-  : isGptImageModel.value ? ['auto', 'low', 'medium', 'high'] : ['standard', 'hd'])
-
-const formatOptions = computed(() => usesRatioOptions.value ? ['png'] : ['png', 'jpeg', 'webp'])
+/** 会话存储的初值：原样使用，绝不因为模型选项集不同而静默改写。 */
+function initialStoredValue(value: string | undefined): string {
+  return (value || '').trim()
+}
 
 watch(() => props.visible, (visible) => {
   if (!visible) {
@@ -166,24 +172,20 @@ watch(() => props.visible, (visible) => {
   references.value = [...props.initialReferences]
   historyImportingId.value = null
   historySelectedIds.value = []
-  size.value = normalizeOption(parsed.size, sizeOptions.value)
-    || normalizeOption(props.initialSize, sizeOptions.value)
-    || (usesRatioOptions.value ? '1:1' : '1024x1024')
-  quality.value = normalizeQualityOption(parsed.quality, qualityOptions.value)
-    || normalizeQualityOption(props.initialQuality, qualityOptions.value)
-    || (usesRatioOptions.value ? '1K' : isGptImageModel.value ? 'auto' : 'standard')
-  format.value = normalizeOption(parsed.format, formatOptions.value)
-    || normalizeOption(props.initialFormat, formatOptions.value)
+  // 助手建议里的参数属于「解析建议」：不在基准选项集里就忽略；
+  // 会话存储值则原样保留，只在确实为空时才回落到基准默认。
+  size.value = normalizeOption(parsed.size, baseSizeOptions.value)
+    || initialStoredValue(props.initialSize)
+    || baseSizeOptions.value[0]
+    || '1024x1024'
+  quality.value = normalizeQualityOption(parsed.quality, baseQualityOptions.value)
+    || initialStoredValue(props.initialQuality)
+    || baseQualityOptions.value[0]
+    || 'auto'
+  format.value = normalizeOption(parsed.format, baseFormatOptions.value)
+    || initialStoredValue(props.initialFormat)
     || 'png'
 }, { immediate: true })
-
-watch(selectedProviderId, () => {
-  size.value = normalizeOption(size.value, sizeOptions.value)
-    || (usesRatioOptions.value ? '1:1' : '1024x1024')
-  quality.value = normalizeQualityOption(quality.value, qualityOptions.value)
-    || (usesRatioOptions.value ? '1K' : isGptImageModel.value ? 'auto' : 'standard')
-  format.value = normalizeOption(format.value, formatOptions.value) || 'png'
-})
 
 function normalizeOption(value: string | undefined, options: string[]) {
   if (!value) return ''
@@ -287,7 +289,7 @@ function isConfigOrAdviceLine(line: string) {
 }
 
 function extractSize(text: string) {
-  const option = sizeOptions.value.find((item) => item !== 'auto' && text.includes(item))
+  const option = baseSizeOptions.value.find((item) => item !== 'auto' && text.includes(item))
   if (option) return option
   const match = text.match(/(?:尺寸|大小|分辨率|画幅|size)?\s*[：:]?\s*(auto|\d{3,4}\s*[x×*]\s*\d{3,4})/i)
   return match?.[1]?.replace(/\s+/g, '').replace(/[×*]/g, 'x')
@@ -494,8 +496,8 @@ function handleGenerate() {
           class="provider-alert"
         >
           <template #title>
-            将使用：{{ selectedImageProvider.name || selectedImageProvider.providerId }} / {{ selectedImageProvider.modelName }}（{{ isGrsaiImage ? 'Grsai' : isGeminiImage ? 'Gemini Image' : 'OpenAI Images' }}）
-          </template>
+          {{ usageText }}（{{ isGrsaiImage ? 'Grsai' : isGeminiImage ? 'Gemini Image' : 'OpenAI Images' }}）
+        </template>
         </el-alert>
         <el-alert
           v-else

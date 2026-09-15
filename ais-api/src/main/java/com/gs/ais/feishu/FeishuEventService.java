@@ -16,6 +16,7 @@ import com.gs.ais.service.ImageGenerationService;
 import com.gs.ais.service.ModelProviderService;
 import com.gs.ais.service.SessionService;
 import com.gs.ais.util.LlmErrorMessageUtils;
+import com.gs.ais.util.ModelProviderNames;
 import com.lark.oapi.service.im.v1.model.EventMessage;
 import com.lark.oapi.service.im.v1.model.EventSender;
 import com.lark.oapi.service.im.v1.model.P2MessageReceiveV1;
@@ -63,6 +64,8 @@ public class FeishuEventService {
             • 直接发送文字：与 AI 对话
             • 发送“绘图：一只橘猫……”或“/draw 一只橘猫……”：生成图片
             • 发送图片：AI 会结合图片进行对话；图片也可以与绘图指令一起作为参考图
+            • 发送“/models”：查看可用对话模型
+            • 发送“/model <模型ID>”：切换当前会话的对话模型；“/model default”恢复系统默认
             • 发送“帮助”或“/help”：查看本说明
             """;
 
@@ -285,6 +288,16 @@ public class FeishuEventService {
                 feishuApiClient.replyText(messageId, HELP_TEXT);
                 return;
             }
+            // 文本渠道没有图形界面，命令是切/看模型的唯一手段。
+            if (isModelsCommand(incoming.text())) {
+                replyChatModelList(messageId);
+                return;
+            }
+            Optional<String> modelArgument = parseModelCommand(incoming.text());
+            if (modelArgument.isPresent()) {
+                replyModelSwitch(messageId, chatId, modelArgument.get());
+                return;
+            }
             if (!"text".equals(messageType) && !"image".equals(messageType) && !"post".equals(messageType)) {
                 feishuApiClient.replyText(messageId, "暂不支持该消息类型。请发送文字、图片，或使用“绘图：提示词”。");
                 return;
@@ -322,13 +335,13 @@ public class FeishuEventService {
             if (result.status() == MessageStatus.SUCCESS) {
                 try {
                     Session persistedSession = sessionService.getSession(session.getId());
-                    Long providerId = persistedSession.getChatProviderId();
-                    ModelProvider provider = providerId != null
-                            ? modelProviderService.getById(providerId)
-                            : null;
-                    if (provider == null) {
-                        provider = modelProviderService.getActiveProvider(ProviderType.CHAT);
-                    }
+                    // 计费兜底与本次真实调用走同一套解析链，且都从**会话归属**出发：
+                    // 会话默认 → 会话所属用户默认 → 系统启用项。飞书文本消息没有
+                    // 请求级临时模型，所以第一环（请求临时值）传入的恒为 null。
+                    // resolveChatProviderForBilling = SessionProviderResolver.resolveOrNull，
+                    // 全部落空时返回 null（不抛异常），因此这里跳过计费记录。
+                    ModelProvider provider = imageGenerationService
+                            .resolveChatProviderForBilling(persistedSession, null);
                     if (provider != null && persistedSession.getUserId() != null) {
                         var usage = result.tokenUsage();
                         billingService.recordChat(provider, persistedSession.getUserId(), persistedSession.getId(),
@@ -504,6 +517,105 @@ public class FeishuEventService {
         if (text == null) return false;
         String command = text.trim().toLowerCase();
         return List.of("帮助", "help", "/help", "使用说明").contains(command);
+    }
+
+    /** {@code /models} / {@code 模型列表}: list the chat models usable in this channel. */
+    static boolean isModelsCommand(String text) {
+        if (text == null) return false;
+        String command = text.trim().toLowerCase();
+        return List.of("/models", "模型列表").contains(command);
+    }
+
+    /**
+     * {@code /model <ID>} (and its reset form {@code /model default}). The returned
+     * optional is present for every /model invocation; the value is the raw argument
+     * (empty when omitted) so the caller can reply with usage instead of treating
+     * the message as a prompt.
+     */
+    static Optional<String> parseModelCommand(String text) {
+        if (text == null) return Optional.empty();
+        String value = text.trim();
+        String lower = value.toLowerCase();
+        if (lower.equals("/model")) return Optional.of("");
+        if (lower.startsWith("/model ")) return Optional.of(value.substring(7).stripLeading());
+        return Optional.empty();
+    }
+
+    /**
+     * 飞书渠道的模型切换走既有「会话模型写入」能力（{@link SessionService#updateProviders}），
+     * 不另建模型状态。
+     */
+    private void replyModelSwitch(String messageId, String chatId, String argument) {
+        Session session = sessionService.getOrCreateExternalSession(FEISHU_CHANNEL, chatId);
+        String value = argument == null ? "" : argument.trim();
+        if (value.isEmpty()) {
+            Session current = sessionService.getSession(session.getId());
+            feishuApiClient.replyText(messageId,
+                    "当前会话对话模型：" + describeSessionChatModel(current)
+                            + "\n用法：/model <模型ID> 切换；/models 查看可用模型；/model default 恢复系统默认。");
+            return;
+        }
+        if (isDefaultModelArgument(value)) {
+            sessionService.updateProviders(session.getId(), true, null, false, null);
+            feishuApiClient.replyText(messageId, "已将当前会话对话模型恢复为系统默认。");
+            return;
+        }
+        Long providerId = parseProviderId(value);
+        ModelProvider provider = providerId == null ? null : findChatProvider(providerId);
+        if (provider == null) {
+            feishuApiClient.replyText(messageId, "未找到对话模型 " + value + "。发送 /models 查看可用模型。");
+            return;
+        }
+        sessionService.updateProviders(session.getId(), true, provider.getId(), false, null);
+        feishuApiClient.replyText(messageId, "已切换当前会话对话模型：" + ModelProviderNames.snapshot(provider));
+    }
+
+    private void replyChatModelList(String messageId) {
+        List<ModelProvider> providers = modelProviderService.getAll(ProviderType.CHAT);
+        if (providers.isEmpty()) {
+            feishuApiClient.replyText(messageId, "暂无可用对话模型，请先在管理后台配置模型。");
+            return;
+        }
+        StringBuilder text = new StringBuilder("可用对话模型：\n");
+        for (ModelProvider provider : providers) {
+            text.append('#').append(provider.getId()).append("  ")
+                    .append(ModelProviderNames.snapshot(provider));
+            if (provider.isActive()) text.append("（系统默认）");
+            text.append('\n');
+        }
+        text.append("发送 /model <模型ID> 切换当前会话模型；/model default 恢复系统默认。");
+        feishuApiClient.replyText(messageId, text.toString());
+    }
+
+    private String describeSessionChatModel(Session session) {
+        Long providerId = session == null ? null : session.getChatProviderId();
+        ModelProvider provider = providerId == null ? null : findChatProvider(providerId);
+        if (provider != null) return ModelProviderNames.snapshot(provider);
+        ModelProvider systemDefault = modelProviderService.getActiveProvider(ProviderType.CHAT);
+        String label = ModelProviderNames.snapshot(systemDefault);
+        return label == null ? "系统默认（未配置）" : "系统默认（" + label + "）";
+    }
+
+    private ModelProvider findChatProvider(Long providerId) {
+        try {
+            ModelProvider provider = modelProviderService.getById(providerId);
+            return provider != null && provider.getType() == ProviderType.CHAT ? provider : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Long parseProviderId(String value) {
+        String digits = value.startsWith("#") ? value.substring(1) : value;
+        try {
+            return Long.valueOf(digits.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static boolean isDefaultModelArgument(String value) {
+        return List.of("default", "默认", "系统默认", "auto", "0").contains(value.toLowerCase());
     }
 
     private String failureText(String error, String fallback) {

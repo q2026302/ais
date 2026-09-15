@@ -1,10 +1,25 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Session, Message, ModelProvider, DrawRequest, DrawReference, UploadResponse, Attachment, MessageStatusResponse } from '@/types'
+import type {
+  Session,
+  SessionSettings,
+  SessionSettingsPatch,
+  DrawSettings,
+  Message,
+  ModelProvider,
+  DrawRequest,
+  DrawReference,
+  UploadResponse,
+  Attachment,
+  MessageStatusResponse,
+} from '@/types'
 import { sessionApi } from '@/api/sessions'
 import { providerApi } from '@/api/providers'
+import { userDefaultsApi } from '@/api/billing'
 import { useFavoriteStore } from '@/stores/favorite'
 import { parseApiDate } from '@/utils/dateTime'
+import { providerLabel } from '@/utils/modelDisplay'
+import { defaultSessionSettings, resolveDrawSettings } from '@/utils/sessionSettings'
 
 const PINNED_STORAGE_KEY = 'ais_pinned'
 const UNREAD_STORAGE_KEY = 'ais_unread'
@@ -81,6 +96,28 @@ export const useSessionStore = defineStore('session', () => {
 
   const chatProviders = ref<ModelProvider[]>([])
   const imageProviders = ref<ModelProvider[]>([])
+  /**
+   * User-level default models (Profile → 默认模型). Only used to resolve the model
+   * name for a not-yet-returned placeholder bubble so it matches what the backend
+   * will actually call (会话默认 → 用户默认 → 系统启用项).
+   */
+  const defaultChatProviderId = ref<number | null>(null)
+  const defaultImageProviderId = ref<number | null>(null)
+
+  const activeSession = computed<Session | null>(() =>
+    sessions.value.find((item) => item.id === activeSessionId.value) || null)
+
+  /**
+   * 当前会话的**生效设置**（后端注册表默认值已补齐）。
+   *
+   * 会话未加载 / 旧后端没返回 `settings` 时回退前端镜像的注册表默认值，因此
+   * 消费方（齿轮面板、生成面板初值）永远拿到一份完整设置，不需要各自判空。
+   */
+  const activeSessionSettings = computed<SessionSettings>(() =>
+    activeSession.value?.settings ?? defaultSessionSettings())
+
+  /** 当前会话生效的绘画参数（尺寸 / 质量 / 格式），三端共用同一来源。 */
+  const drawSettings = computed<DrawSettings>(() => resolveDrawSettings(activeSession.value?.settings))
 
   // Local-only pin / unread state (persisted in localStorage)
   // pinnedSessions order: newest pin first (index 0)
@@ -516,6 +553,43 @@ export const useSessionStore = defineStore('session', () => {
     } catch (e) {
       console.error('Failed to fetch providers', e)
     }
+    try {
+      const defaults = await userDefaultsApi.get()
+      defaultChatProviderId.value = defaults.defaultChatProviderId ?? null
+      defaultImageProviderId.value = defaults.defaultImageProviderId ?? null
+    } catch {
+      // Keep the last known defaults; the resolver still falls back to the active provider.
+    }
+  }
+
+  /**
+   * The model the backend will actually call for the next request, in the same
+   * order as {@code ImageGenerationService.resolveChatProvider}/{@code resolveImageProvider}
+   * plus the controller's user-default fallback:
+   * 临时覆盖 → 会话默认 → 用户默认 → 系统启用项.
+   */
+  function resolveProviderForDisplay(
+    providers: ModelProvider[],
+    overrideId: number | null | undefined,
+    sessionProviderId: number | null,
+    userDefaultProviderId: number | null,
+  ): ModelProvider | null {
+    for (const id of [overrideId, sessionProviderId, userDefaultProviderId]) {
+      if (id == null) continue
+      const provider = providers.find((item) => item.id === id)
+      if (provider) return provider
+    }
+    return providers.find((item) => item.active) || null
+  }
+
+  function resolveChatProviderForDisplay(overrideId?: number | null): ModelProvider | null {
+    return resolveProviderForDisplay(
+      chatProviders.value, overrideId, activeSession.value?.chatProviderId ?? null, defaultChatProviderId.value)
+  }
+
+  function resolveImageProviderForDisplay(overrideId?: number | null): ModelProvider | null {
+    return resolveProviderForDisplay(
+      imageProviders.value, overrideId, activeSession.value?.imageProviderId ?? null, defaultImageProviderId.value)
   }
 
   async function createSession(title?: string) {
@@ -708,7 +782,17 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  function addChatPlaceholder(prompt: string, attachmentFiles: UploadResponse[] = []) {
+  /**
+   * Optimistic placeholder for a chat send. The assistant bubble records the model
+   * that is about to be called (临时覆盖 → 会话默认 → 用户默认 → 系统启用项) so the
+   * pending / failed bubble names the real model instead of 「未记录」. Once the
+   * server payload arrives it replaces these rows and its own snapshot wins.
+   */
+  function addChatPlaceholder(
+    prompt: string,
+    attachmentFiles: UploadResponse[] = [],
+    chatProvider: ModelProvider | null = null,
+  ) {
     const now = new Date().toISOString()
     const tempBase = -Date.now()
     messages.value.push({
@@ -735,6 +819,9 @@ export const useSessionStore = defineStore('session', () => {
       parentMessageId: tempBase,
       edited: false,
       createdAt: now,
+      ...(chatProvider
+        ? { chatProviderId: chatProvider.id, chatProviderName: providerLabel(chatProvider) }
+        : {}),
     })
     return tempBase - 1
   }
@@ -756,7 +843,7 @@ export const useSessionStore = defineStore('session', () => {
     const sessionId = activeSessionId.value
     if (sessionId == null || !isViewingSession(sessionId)) return
     loading.value = true
-    const tempAssistantId = addChatPlaceholder(prompt, attachmentFiles)
+    const tempAssistantId = addChatPlaceholder(prompt, attachmentFiles, resolveChatProviderForDisplay(chatProviderId))
     const controller = beginOperation(sessionId, 'CHAT', tempAssistantId, '正在等待模型回应，可随时终止')
     try {
       const result = await sessionApi.chat(sessionId, {
@@ -804,9 +891,21 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  function addDrawPlaceholder(request: DrawRequest, referenceFiles: DrawReference[] = []) {
+  /**
+   * Optimistic placeholder for a draw send. Both rows record the draw model that is
+   * about to be called (临时覆盖 → 会话默认 → 用户默认 → 系统启用项) so the pending /
+   * failed assistant bubble names the real model instead of 「未记录」. The server
+   * payload replaces these rows once it arrives.
+   */
+  function addDrawPlaceholder(
+    request: DrawRequest,
+    referenceFiles: DrawReference[] = [],
+    imageProvider: ModelProvider | null = null,
+  ) {
     const now = new Date().toISOString()
     const tempBase = -Date.now()
+    const resolvedProviderId = imageProvider?.id ?? request.imageProviderId ?? null
+    const resolvedProviderName = imageProvider ? providerLabel(imageProvider) : null
     const optionParts = [
       request.size ? `尺寸 ${request.size}` : '',
       request.quality ? `质量 ${request.quality}` : '',
@@ -827,7 +926,8 @@ export const useSessionStore = defineStore('session', () => {
       drawSize: request.size,
       drawQuality: request.quality,
       drawFormat: request.format,
-      drawProviderId: request.imageProviderId ?? null,
+      drawProviderId: resolvedProviderId,
+      drawProviderName: resolvedProviderName,
       attachments: referenceFiles.map((ref, index) => drawReferenceToAttachment(ref, index)),
       tokenUsage: null,
       edited: false,
@@ -844,7 +944,8 @@ export const useSessionStore = defineStore('session', () => {
       drawSize: request.size,
       drawQuality: request.quality,
       drawFormat: request.format,
-      drawProviderId: request.imageProviderId ?? null,
+      drawProviderId: resolvedProviderId,
+      drawProviderName: resolvedProviderName,
       attachments: [],
       tokenUsage: null,
       parentMessageId: tempBase,
@@ -961,7 +1062,7 @@ export const useSessionStore = defineStore('session', () => {
     const sessionId = activeSessionId.value
     if (sessionId == null || !isViewingSession(sessionId)) return
     loading.value = true
-    const tempAssistantId = addDrawPlaceholder(request, referenceFiles)
+    const tempAssistantId = addDrawPlaceholder(request, referenceFiles, resolveImageProviderForDisplay(request.imageProviderId))
     const controller = beginOperation(
       sessionId,
       'DRAW',
@@ -1107,8 +1208,15 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  function addResendPlaceholder(userMessage: Message) {
+  /**
+   * Optimistic placeholder for a resend. Records the model this resend will call
+   * (临时覆盖 → 会话默认 → 用户默认 → 系统启用项) so the bubble names the real model
+   * instead of 「未记录」; the server payload replaces it once it arrives.
+   */
+  function addResendPlaceholder(userMessage: Message, displayProvider: ModelProvider | null = null) {
     const isDraw = userMessage.messageType === 'DRAW_REQUEST'
+    const displayProviderId = displayProvider?.id ?? null
+    const displayProviderName = displayProvider ? providerLabel(displayProvider) : null
     const placeholder: Message = {
       id: -Date.now(),
       role: 'ASSISTANT',
@@ -1120,7 +1228,10 @@ export const useSessionStore = defineStore('session', () => {
       drawSize: userMessage.drawSize,
       drawQuality: userMessage.drawQuality,
       drawFormat: userMessage.drawFormat,
-      drawProviderId: userMessage.drawProviderId,
+      drawProviderId: isDraw ? (displayProviderId ?? userMessage.drawProviderId) : userMessage.drawProviderId,
+      drawProviderName: isDraw ? displayProviderName : undefined,
+      chatProviderId: isDraw ? undefined : displayProviderId,
+      chatProviderName: isDraw ? undefined : displayProviderName,
       attachments: [],
       tokenUsage: null,
       parentMessageId: userMessage.id,
@@ -1157,7 +1268,10 @@ export const useSessionStore = defineStore('session', () => {
     if (!userMessage || userMessage.role !== 'USER') return
 
     const isDraw = userMessage.messageType === 'DRAW_REQUEST'
-    const placeholder = addResendPlaceholder(userMessage)
+    const displayProvider = isDraw
+      ? resolveImageProviderForDisplay(imageProviderId)
+      : resolveChatProviderForDisplay(chatProviderId)
+    const placeholder = addResendPlaceholder(userMessage, displayProvider)
     loading.value = true
     const controller = beginOperation(
       sessionId,
@@ -1215,11 +1329,44 @@ export const useSessionStore = defineStore('session', () => {
     return responses.map((r) => r.id)
   }
 
+  /**
+   * 会话设置写入通道（PC / 移动 PWA / H5 共用）。
+   *
+   * 后端返回的是合并 + 默认值补齐后的会话，所以只就地更新列表里对应会话的
+   * settings / 默认模型字段，避免整表刷新导致的消息重载、滚动跳动与竞态。
+   */
+  async function updateSessionSettings(patch: SessionSettingsPatch) {
+    const id = activeSessionId.value
+    if (id == null) return null
+    const updated = await sessionApi.updateSessionSettings(id, patch)
+    const index = sessions.value.findIndex((item) => item.id === id)
+    if (index >= 0) {
+      const current = sessions.value[index]!
+      sessions.value[index] = {
+        ...current,
+        settings: updated.settings ?? current.settings,
+        chatProviderId: updated.chatProviderId,
+        imageProviderId: updated.imageProviderId,
+      }
+    }
+    return updated
+  }
+
+  /**
+   * 会话默认模型写入通道（PC / 移动 PWA / H5 共用）。
+   *
+   * `undefined` = 该键不出现 = 保持原值；`null` = 显式清空回用户/系统默认。
+   * 只写调用方真正改动的那一侧，未改动的一侧不写入，避免多端互相覆盖。
+   *
+   * 与绘画设置一样**就地更新**列表里的会话（不重新拉取会话列表、不重新加载当前
+   * 会话），避免消息区闪动、滚动位置丢失与竞态。
+   */
   async function updateSessionProviders(chatProviderId?: number | null, imageProviderId?: number | null) {
-    if (!activeSessionId.value) return
-    await sessionApi.updateSessionProviders(activeSessionId.value, { chatProviderId, imageProviderId })
-    await fetchSessions()
-    await selectSession(activeSessionId.value)
+    const patch: SessionSettingsPatch = {}
+    if (chatProviderId !== undefined) patch.chatProviderId = chatProviderId
+    if (imageProviderId !== undefined) patch.imageProviderId = imageProviderId
+    if (Object.keys(patch).length === 0) return
+    await updateSessionSettings(patch)
   }
 
   return {
@@ -1235,6 +1382,8 @@ export const useSessionStore = defineStore('session', () => {
     operationStartedAt,
     chatProviders,
     imageProviders,
+    activeSessionSettings,
+    drawSettings,
     pollingIntervals,
     polledMessageStatuses,
     pinnedSessions,
@@ -1254,6 +1403,7 @@ export const useSessionStore = defineStore('session', () => {
     regenerateMessage,
     deleteMessage,
     uploadFiles,
+    updateSessionSettings,
     updateSessionProviders,
     cancelActiveRequest,
     forceRefreshSession,

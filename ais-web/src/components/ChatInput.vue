@@ -14,8 +14,12 @@ import {
   Setting,
   View,
 } from '@element-plus/icons-vue'
-import type { Message, ModelProvider, UploadResponse, DrawReference } from '@/types'
+import type { Message, ModelProvider, UploadResponse, DrawReference, DrawSettings } from '@/types'
 import { sessionApi } from '@/api/sessions'
+import SessionConfigPanel from '@/components/SessionConfigPanel.vue'
+import TempModelSelect from '@/components/TempModelSelect.vue'
+import { providerLabel } from '@/utils/modelDisplay'
+import { drawOptionSets, drawOptionWarnings, withStoredValue } from '@/utils/drawOptions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { referenceFromHistory, referenceFromUpload, referenceUrlForBackend } from '@/utils/historyReference'
 import { getAppBasePath } from '@/utils/appBasePath'
@@ -28,8 +32,28 @@ const props = defineProps<{
   providerOptions: ModelProvider[]
   imageProviders: ModelProvider[]
   activeSessionId: number | null
-  activeChatProviderId: number | null
-  activeImageProviderId: number | null
+  /** 会话默认对话模型 id（持久）；null 表示跟随用户/系统默认。 */
+  sessionChatProviderId: number | null
+  /** 会话默认绘画模型 id（持久）；null 表示跟随用户/系统默认。 */
+  sessionImageProviderId: number | null
+  /** 会话默认对话模型未显式设置时的展示名。 */
+  chatDefaultLabel?: string
+  /** 会话默认绘画模型未显式设置时的展示名。 */
+  imageDefaultLabel?: string
+  /**
+   * 会话未显式设置绘画模型时**实际生效**的用户/系统默认模型 id
+   * （会话默认 → 用户默认 → 系统启用项 的第三、四环）。
+   * 绘画选项集必须按它推导，否则「跟随默认」时会把 Gemini 的合法 `16:9` 当成
+   * OpenAI 选项处理并静默改写。
+   */
+  imageFallbackProviderId?: number | null
+  /**
+   * 会话设置里的绘画参数（生效值，已在 store 里按注册表补齐默认值）。
+   * 齿轮面板读写它，生成面板用它做初值。三端同一来源。
+   */
+  sessionDrawSize: string
+  sessionDrawQuality: string
+  sessionDrawFormat: string
   historyMessages?: Message[]
   editingMessage?: Message | null
   editingAction?: 'edit' | 'resend' | null
@@ -41,26 +65,31 @@ const emit = defineEmits<{
   cancel: []
   editSave: [payload: { messageId: number; content: string; chatProviderId: number | null; action: 'edit' | 'resend' }]
   editCancel: []
+  /** 会话默认对话模型变更（写入会话，持久生效）。 */
+  chatProviderChange: [id: number | null]
+  /** 会话默认绘画模型变更（写入会话，持久生效）。 */
   imageProviderChange: [id: number | null]
+  /** 会话绘画参数变更（写入会话，持久生效，稀疏合并）。 */
+  drawSettingChange: [patch: Partial<DrawSettings>]
   fullscreenChange: [value: boolean]
 }>()
 
 const { recoverImage } = useSignedUrlRefresh()
 
 const inputText = ref('')
-const selectedProviderId = ref<number | null>(null)
+/**
+ * 对话框内下拉框的临时选择：只影响本次发送，发送后重置为 null（跟随会话默认）。
+ * 它与会话配置里的「会话默认对话模型」是两件事。
+ */
+const temporaryChatProviderId = ref<number | null>(null)
 const pendingAttachments = ref<UploadResponse[]>([])
 /** History references (draw mode only): reused server-side files, no new attachment. */
 const historyReferences = ref<DrawReference[]>([])
 const uploading = ref(false)
 const mode = ref<'chat' | 'draw'>('chat')
 const fullscreenInput = ref(false)
-const settingsVisible = ref(false)
-const drawSettingsVisible = ref(false)
-const drawModelVisible = ref(false)
-const drawSize = ref('1024x1024')
-const drawQuality = ref('auto')
-const drawFormat = ref('png')
+/** 齿轮 = 会话配置（会话默认模型 + 绘画参数），三端含义一致。 */
+const sessionConfigVisible = ref(false)
 const referenceVisible = ref(false)
 const referenceAdding = ref(false)
 const previewVisible = ref(false)
@@ -91,53 +120,35 @@ const composerItems = computed<DrawReference[]>(() => [
   ...pendingAttachments.value.map(referenceFromUpload),
   ...historyReferences.value,
 ])
-const defaultProviderId = computed(() => {
-  if (
-    props.activeChatProviderId != null
-    && props.providerOptions.some((provider) => provider.id === props.activeChatProviderId)
-  ) {
-    return props.activeChatProviderId
-  }
-  return props.providerOptions.find((provider) => provider.active)?.id ?? null
-})
-const selectedProviderLabel = computed(() => {
-  const provider = props.providerOptions.find((item) => item.id === selectedProviderId.value)
-  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认'
+// 会话默认对话模型的展示名（未显式设置时回落到用户/系统默认）。
+const sessionChatDefaultLabel = computed(() => {
+  const provider = props.providerOptions.find((item) => item.id === props.sessionChatProviderId)
+  return provider
+    ? providerLabel(provider)
+    : (props.chatDefaultLabel || '系统默认')
 })
 
-// Draw settings: mirror the mobile draw-settings drawer. The option sets depend
-// on the resolved image provider's adapter (Gemini / Grsai Nano Banana / GPT).
-const selectedImageProvider = computed<ModelProvider | null>(() => {
-  if (props.activeImageProviderId == null) return null
-  return props.imageProviders.find((provider) => provider.id === props.activeImageProviderId) || null
+// Draw settings: option sets come from the draw model that will ACTUALLY run
+// (会话默认 → 用户默认 → 系统启用项), never from "did the session set one".
+// 会话存储值只用于展示与提交，选项集校正绝不改写它。
+const effectiveImageProvider = computed<ModelProvider | null>(() => {
+  const id = props.sessionImageProviderId ?? props.imageFallbackProviderId ?? null
+  if (id == null) return null
+  return props.imageProviders.find((provider) => provider.id === id) || null
 })
-const imageAdapter = computed(() => {
-  const configured = selectedImageProvider.value?.adapterType?.toUpperCase()
-  if (configured && configured !== 'AUTO') return configured
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  const providerId = selectedImageProvider.value?.providerId?.toLowerCase() || ''
-  if (providerId === 'grsai') return 'GRS_AI'
-  return model.includes('gemini') ? 'GEMINI_IMAGE' : 'OPENAI_IMAGE'
-})
-const usesRatioOptions = computed(() => imageAdapter.value === 'GEMINI_IMAGE'
-  || (imageAdapter.value === 'GRS_AI' && (selectedImageProvider.value?.modelName || '').toLowerCase().includes('nano-banana')))
-const isGptImageModel = computed(() => {
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  return (imageAdapter.value === 'OPENAI_IMAGE' || imageAdapter.value === 'GRS_AI')
-    && (model.includes('gpt-image') || model.includes('gpt image'))
-})
-const drawSizeOptions = computed(() => usesRatioOptions.value
-  ? ['1:1', '16:9', '9:16', '4:3', '3:4']
-  : isGptImageModel.value
-    ? ['1024x1024', '1536x1024', '1024x1536', 'auto']
-    : ['1024x1024', '512x512', '768x768', '1024x1792', '1792x1024'])
-const drawQualityOptions = computed(() => usesRatioOptions.value
-  ? ['1K', '2K', '4K']
-  : isGptImageModel.value ? ['auto', 'low', 'medium', 'high'] : ['standard', 'hd'])
-const drawFormatOptions = computed(() => usesRatioOptions.value ? ['png'] : ['png', 'jpeg', 'webp'])
-const drawProviderLabel = computed(() => {
-  const provider = selectedImageProvider.value
-  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认'
+const drawOptionBase = computed(() => drawOptionSets(effectiveImageProvider.value))
+/** 面板下拉选项 = 基准选项集 ∪ 会话存储值，保证显示的就是会话里存的值。 */
+const drawSizeOptions = computed(() => withStoredValue(drawOptionBase.value.size, props.sessionDrawSize))
+const drawQualityOptions = computed(() => withStoredValue(drawOptionBase.value.quality, props.sessionDrawQuality))
+const drawFormatOptions = computed(() => withStoredValue(drawOptionBase.value.format, props.sessionDrawFormat))
+const drawOptionHints = computed(() => drawOptionWarnings({
+  size: props.sessionDrawSize,
+  quality: props.sessionDrawQuality,
+  format: props.sessionDrawFormat,
+}, drawOptionBase.value))
+const sessionImageDefaultLabel = computed(() => {
+  const provider = effectiveImageProvider.value
+  return provider ? providerLabel(provider) : (props.imageDefaultLabel || '系统默认')
 })
 
 interface HistoryImageItem {
@@ -197,32 +208,25 @@ const referencePreviewItems = computed(() =>
 )
 const referencePreviewUrls = computed(() => selectedHistoryItems.value.map((item) => item.url))
 
+// 临时切换只作用于「本次发送」：切会话/切模式后回到会话默认。
 watch(
-  () => [props.activeSessionId, defaultProviderId.value] as const,
-  ([, providerId]) => {
-    selectedProviderId.value = providerId
+  () => [props.activeSessionId, mode.value] as const,
+  () => {
+    temporaryChatProviderId.value = null
   },
-  { immediate: true },
 )
 
-// Close any open composer drawers when switching sessions (PC: 参考图/模型
-// 选择框切会话后必须关闭，否则会被对话窗口挡住且无法关闭).
+// Close any open composer drawers when switching sessions (PC: 参考图/会话配置
+// 切会话后必须关闭，否则会被对话窗口挡住且无法关闭).
 watch(
   () => props.activeSessionId,
   () => {
-    settingsVisible.value = false
+    sessionConfigVisible.value = false
     referenceVisible.value = false
-    drawSettingsVisible.value = false
-    drawModelVisible.value = false
     fullscreenInput.value = false
     resetReferencePanel()
-    backfillDrawSettingsFromHistory()
   },
 )
-
-// Keep draw params valid when the resolved image provider (and thus its option
-// set) changes, e.g. after switching the model in the header or the drawer.
-watch([() => props.activeImageProviderId, () => props.imageProviders.length], syncDrawOptions)
 
 watch(inputText, () => {
   void nextTick(() => autoResizeTextarea())
@@ -362,50 +366,21 @@ function openLocalFilePicker() {
   localFileInputRef.value?.click()
 }
 
+/**
+ * 齿轮 = 会话配置（三端含义一致）：会话默认对话模型、会话默认绘画模型、绘画参数。
+ * 与模式无关；临时切换由对话框内的模型下拉框负责。
+ */
 function openSettingsPanel() {
-  if (mode.value === 'draw') {
-    // Painting mode: open only the parameter drawer (size/quality/format),
-    // never the DrawDialog / send flow.
-    openDrawSettings()
-    return
-  }
-  settingsVisible.value = true
+  sessionConfigVisible.value = true
 }
 
-function openDrawSettings() {
-  syncDrawOptions()
-  drawSettingsVisible.value = true
-}
-
-function openDrawModelPicker() {
-  drawSettingsVisible.value = false
-  drawModelVisible.value = true
-}
-
-function selectImageProvider(id: number | null) {
-  emit('imageProviderChange', id)
-  drawModelVisible.value = false
-  syncDrawOptions()
-}
-
-function syncDrawOptions() {
-  if (!drawSizeOptions.value.includes(drawSize.value)) drawSize.value = usesRatioOptions.value ? '1:1' : '1024x1024'
-  if (!drawQualityOptions.value.includes(drawQuality.value)) drawQuality.value = usesRatioOptions.value ? '1K' : isGptImageModel.value ? 'auto' : 'standard'
-  if (!drawFormatOptions.value.includes(drawFormat.value)) drawFormat.value = 'png'
-}
-
-function backfillDrawSettingsFromHistory() {
-  const messages = props.historyMessages || []
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    if (message?.messageType === 'DRAW_REQUEST') {
-      if (message.drawSize) drawSize.value = message.drawSize
-      if (message.drawQuality) drawQuality.value = message.drawQuality
-      if (message.drawFormat) drawFormat.value = message.drawFormat
-      break
-    }
-  }
-  syncDrawOptions()
+/**
+ * 齿轮面板里改绘画参数 = 改**会话设置**（持久生效，稀疏合并写回后端）。
+ * 这里**不做本地乐观赋值**：面板绑定的就是会话存储值，写入成功由 store 回流，
+ * 失败时值保持原样（即自动回滚），不会出现「界面已改、实际没保存」。
+ */
+function handleDrawSettingChange(patch: Partial<DrawSettings>) {
+  emit('drawSettingChange', patch)
 }
 
 function toggleMode() {
@@ -429,7 +404,8 @@ function handleSend() {
     return
   }
   if (!canSend.value || props.loading) return
-  const chatProviderId = selectedProviderId.value
+  // 临时选择的模型只随这一次发送走，发送后回到会话默认。
+  const chatProviderId = temporaryChatProviderId.value
   if (mode.value === 'draw') {
     emit('draw', {
       prompt: inputText.value.trim(),
@@ -437,9 +413,9 @@ function handleSend() {
       referenceUrls: historyReferences.value.map((ref) => referenceUrlForBackend(ref.url, getAppBasePath())),
       references: [...composerItems.value],
       chatProviderId,
-      size: drawSize.value,
-      quality: drawQuality.value,
-      format: drawFormat.value,
+      size: props.sessionDrawSize,
+      quality: props.sessionDrawQuality,
+      format: props.sessionDrawFormat,
     })
     return
   }
@@ -452,7 +428,7 @@ function handleSend() {
   emit('send', payload)
   inputText.value = ''
   pendingAttachments.value = []
-  selectedProviderId.value = defaultProviderId.value
+  temporaryChatProviderId.value = null
   fullscreenInput.value = false
 }
 
@@ -462,7 +438,7 @@ function handleEditSend() {
   emit('editSave', {
     messageId: props.editingMessage.id,
     content,
-    chatProviderId: selectedProviderId.value,
+    chatProviderId: temporaryChatProviderId.value,
     action: props.editingAction ?? 'edit',
   })
 }
@@ -650,6 +626,23 @@ defineExpose({ clearDraft })
       />
     </div>
 
+    <!-- 临时切换（仅本次）：对话模型下拉框 + 可见提示。绘画的临时模型在绘画面板中选择。 -->
+    <div v-if="!fullscreenInput && !isEditing" class="composer-temp-row">
+      <TempModelSelect
+        v-if="mode === 'chat'"
+        :providers="providerOptions"
+        :model-value="temporaryChatProviderId"
+        :default-provider-id="sessionChatProviderId"
+        :default-label="sessionChatDefaultLabel"
+        :disabled="loading"
+        select-label="临时切换对话模型"
+        @update:model-value="temporaryChatProviderId = $event"
+      />
+      <span v-else class="composer-temp-note">
+        绘画模型与绘画参数：会话默认在齿轮「会话配置」中，本次临时选择在「生成」后的绘画面板中。
+      </span>
+    </div>
+
     <div v-if="!fullscreenInput" class="composer-toolbar" role="toolbar" aria-label="创作工具">
       <template v-if="!isEditing">
         <button
@@ -714,8 +707,8 @@ defineExpose({ clearDraft })
         <button
           class="tool-btn"
           type="button"
-          :title="mode === 'draw' ? '绘画设置' : `对话模型 · ${selectedProviderLabel}`"
-          :aria-label="mode === 'draw' ? '绘画设置' : '选择对话模型'"
+          title="会话配置（会话默认模型与绘画参数）"
+          aria-label="会话配置"
           @click="openSettingsPanel"
         >
           <el-icon><Setting /></el-icon>
@@ -807,10 +800,10 @@ defineExpose({ clearDraft })
     </div>
 
     <el-drawer
-      v-model="drawSettingsVisible"
+      v-model="sessionConfigVisible"
       direction="btt"
       size="auto"
-      class="desktop-composer-drawer draw-settings-composer-drawer"
+      class="desktop-composer-drawer session-config-composer-drawer"
       modal-class="desktop-composer-overlay"
       :append-to-body="true"
       :with-header="false"
@@ -818,127 +811,43 @@ defineExpose({ clearDraft })
     >
       <div class="drawer-title">
         <div>
-          <strong>绘画设置</strong>
-          <span>调整尺寸、质量与格式 · 当前模型 {{ drawProviderLabel }}</span>
+          <strong>会话配置</strong>
+          <span>会话默认对话模型 / 绘画模型 / 绘画参数</span>
         </div>
         <button
           type="button"
-          class="drawer-title-close draw-model-switch"
-          aria-label="换模型"
-          title="换模型"
-          @click="openDrawModelPicker"
+          class="drawer-title-close"
+          aria-label="关闭"
+          title="关闭"
+          @click="sessionConfigVisible = false"
         >
-          换模型
+          <el-icon><Close /></el-icon>
         </button>
       </div>
-      <div class="draw-settings-fields">
-        <label>
-          <span>尺寸 / 比例</span>
-          <el-select v-model="drawSize" aria-label="绘画尺寸或比例">
-            <el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" />
-          </el-select>
-        </label>
-        <label>
-          <span>质量</span>
-          <el-select v-model="drawQuality" aria-label="绘画质量">
-            <el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" />
-          </el-select>
-        </label>
-        <label>
-          <span>格式</span>
-          <el-select v-model="drawFormat" aria-label="图片格式">
-            <el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" />
-          </el-select>
-        </label>
-      </div>
-    </el-drawer>
-
-    <el-drawer
-      v-model="drawModelVisible"
-      direction="btt"
-      size="auto"
-      class="desktop-composer-drawer model-composer-drawer"
-      modal-class="desktop-composer-overlay"
-      :append-to-body="true"
-      :with-header="false"
-      :z-index="2102"
-    >
-      <div class="drawer-title">
-        <div>
-          <strong>选择绘画模型</strong>
-          <span>模型选择会保存到当前会话</span>
-        </div>
-      </div>
-      <div class="model-list">
-        <button
-          type="button"
-          class="model-row"
-          :class="{ active: activeImageProviderId == null }"
-          @click="selectImageProvider(null)"
-        >
-          <span>
-            <strong>系统默认模型</strong>
-            <small>使用后台或会话默认配置</small>
-          </span>
-        </button>
-        <button
-          v-for="provider in imageProviders"
-          :key="provider.id"
-          type="button"
-          class="model-row"
-          :class="{ active: provider.id === activeImageProviderId }"
-          @click="selectImageProvider(provider.id)"
-        >
-          <span>
-            <strong>{{ provider.name || provider.providerId }}</strong>
-            <small>#{{ provider.id }} · {{ provider.modelName }}</small>
-          </span>
-        </button>
-      </div>
-    </el-drawer>
-
-    <el-drawer
-      v-model="settingsVisible"
-      direction="btt"
-      size="auto"
-      class="desktop-composer-drawer model-composer-drawer"
-      modal-class="desktop-composer-overlay"
-      :append-to-body="true"
-      :with-header="false"
-      :z-index="2101"
-    >
-      <div class="drawer-title">
-        <div>
-          <strong>选择对话模型</strong>
-          <span>仅影响下一次发送，不会改写会话默认模型</span>
-        </div>
-      </div>
-      <div class="model-list">
-        <button
-          type="button"
-          class="model-row"
-          :class="{ active: selectedProviderId == null }"
-          @click="selectedProviderId = null; settingsVisible = false"
-        >
-          <span>
-            <strong>系统默认模型</strong>
-            <small>使用后台或会话默认配置</small>
-          </span>
-        </button>
-        <button
-          v-for="provider in providerOptions"
-          :key="provider.id"
-          type="button"
-          class="model-row"
-          :class="{ active: provider.id === selectedProviderId }"
-          @click="selectedProviderId = provider.id; settingsVisible = false"
-        >
-          <span>
-            <strong>{{ provider.name || provider.providerId }}</strong>
-            <small>#{{ provider.id }} · {{ provider.modelName }}</small>
-          </span>
-        </button>
-      </div>
+      <SessionConfigPanel
+        class="session-config-panel"
+        :chat-providers="providerOptions"
+        :image-providers="imageProviders"
+        :chat-provider-id="sessionChatProviderId"
+        :image-provider-id="sessionImageProviderId"
+        :chat-default-label="chatDefaultLabel"
+        :image-default-label="imageDefaultLabel"
+        :draw-size="sessionDrawSize"
+        :draw-quality="sessionDrawQuality"
+        :draw-format="sessionDrawFormat"
+        :draw-size-options="drawSizeOptions"
+        :draw-quality-options="drawQualityOptions"
+        :draw-format-options="drawFormatOptions"
+        :draw-option-hints="drawOptionHints"
+        :has-draw-panel="true"
+        :disabled="loading"
+        :disabled-reason="activeSessionId == null ? '还没有会话：发送第一条消息创建会话后，这里的设置才能保存。' : undefined"
+        @update:chat-provider-id="emit('chatProviderChange', $event)"
+        @update:image-provider-id="emit('imageProviderChange', $event)"
+        @update:draw-size="handleDrawSettingChange({ size: $event })"
+        @update:draw-quality="handleDrawSettingChange({ quality: $event })"
+        @update:draw-format="handleDrawSettingChange({ format: $event })"
+      />
     </el-drawer>
 
     <el-drawer
@@ -1140,6 +1049,21 @@ defineExpose({ clearDraft })
   background: transparent;
 }
 .composer-main textarea::placeholder { color: #a1a9b8; }
+
+.composer-temp-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 2px;
+}
+.composer-temp-note {
+  color: #929bad;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.session-config-panel { padding-top: 14px; }
 
 .composer-toolbar {
   display: flex;

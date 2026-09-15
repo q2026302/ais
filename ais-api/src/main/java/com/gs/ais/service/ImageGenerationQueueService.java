@@ -8,6 +8,7 @@ import com.gs.ais.model.entity.*;
 import com.gs.ais.model.enums.*;
 import com.gs.ais.repository.*;
 import com.gs.ais.util.LlmErrorMessageUtils;
+import com.gs.ais.util.ModelProviderNames;
 import com.gs.ais.util.PureThumbnail;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -43,6 +44,7 @@ public class ImageGenerationQueueService {
     private final AttachmentService attachmentService;
     private final BillingService billingService;
     private final GeneratedImageFileService generatedImageFileService;
+    private final SessionProviderResolver sessionProviderResolver;
     private final Path uploadDir;
     private final Path attachmentDir;
 
@@ -69,6 +71,7 @@ public class ImageGenerationQueueService {
                                        AttachmentService attachmentService,
                                        BillingService billingService,
                                        GeneratedImageFileService generatedImageFileService,
+                                       SessionProviderResolver sessionProviderResolver,
                                        StoragePaths storagePaths) {
         this.llmClient = llmClient;
         this.modelProviderService = modelProviderService;
@@ -78,6 +81,7 @@ public class ImageGenerationQueueService {
         this.attachmentService = attachmentService;
         this.billingService = billingService;
         this.generatedImageFileService = generatedImageFileService;
+        this.sessionProviderResolver = sessionProviderResolver;
         this.uploadDir = storagePaths.uploadDir();
         this.attachmentDir = storagePaths.attachmentDir();
         initUploadDir();
@@ -155,9 +159,14 @@ public class ImageGenerationQueueService {
         prompt = prompt.trim();
 
         boolean isFirstMessage = messageRepository.findBySessionIdOrderByCreatedAtAsc(sessionId).isEmpty();
-        Long imageProviderId = safeRequest.getImageProviderId() != null
-                ? safeRequest.getImageProviderId()
-                : session.getImageProviderId();
+        // 统一解析链：请求临时值 → 会话值 → 会话所属用户默认 → 系统启用项。
+        // 在这里（请求线程内、事务提交前）就解析成实际 provider id，消息快照、
+        // 队列 key / 并发度、以及随后的 processDraw 都基于同一个答案。
+        ModelProvider imageProvider = sessionProviderResolver.resolveOrNull(
+                session, safeRequest.getImageProviderId(), ProviderType.IMAGE);
+        Long imageProviderId = imageProvider != null
+                ? imageProvider.getId()
+                : resolveDrawProviderIdFallback(session, safeRequest.getImageProviderId());
 
         // Resolve existing-file references up front (still on the request thread, so
         // AuthContext is available for access checks). This neither creates an
@@ -171,7 +180,7 @@ public class ImageGenerationQueueService {
         userMessage.setMessageType(MessageType.DRAW_REQUEST);
         userMessage.setStatus(MessageStatus.SUCCESS);
         userMessage.setContent(buildDrawMessageContent(prompt, safeRequest));
-        applyDrawMetadata(userMessage, prompt, safeRequest, imageProviderId);
+        applyDrawMetadata(userMessage, prompt, safeRequest, imageProvider, imageProviderId);
         userMessage.setReferenceFileUrls(joinReferenceUrls(safeRequest.getReferenceUrls()));
         userMessage = messageRepository.save(userMessage);
         attachRequestAttachments(userMessage, safeRequest.getAttachmentIds());
@@ -183,7 +192,7 @@ public class ImageGenerationQueueService {
         assistantMessage.setStatus(MessageStatus.PENDING);
         assistantMessage.setContent("图片生成中...");
         assistantMessage.setParentMessageId(userMessage.getId());
-        applyDrawMetadata(assistantMessage, prompt, safeRequest, imageProviderId);
+        applyDrawMetadata(assistantMessage, prompt, safeRequest, imageProvider, imageProviderId);
         assistantMessage = messageRepository.save(assistantMessage);
 
         if (isFirstMessage) {
@@ -266,7 +275,10 @@ public class ImageGenerationQueueService {
                 if (wasCancelled(assistantMessageId)) return;
 
                 List<LlmClient.ReferenceImage> referenceImages = loadReferenceImages(userMessageId, resolvedReferences);
-                ModelProvider imageProvider = resolveImageProvider(imageProviderId);
+                // 同一条统一解析链的再解析：正常情况 id 已在 submitDraw 解析完毕，
+                // 若提交后该 provider 被删除，这里仍会回退到 会话 → 用户默认 → 系统启用项。
+                ModelProvider imageProvider = sessionProviderResolver.resolve(
+                        session, imageProviderId, ProviderType.IMAGE);
                 LlmClient.ImageGenerationOptions options = new LlmClient.ImageGenerationOptions(
                         cleanOption(request.getSize()),
                         cleanOption(request.getQuality()),
@@ -525,14 +537,29 @@ public class ImageGenerationQueueService {
         return "绘画提示词：" + prompt + "\n输出配置：" + String.join("；", options);
     }
 
-    private void applyDrawMetadata(Message message, String prompt, DrawRequest request, Long imageProviderId) {
+    /**
+     * Writes the draw request metadata and the model snapshot. {@code imageProvider}
+     * is the provider already resolved through the unified chain in {@link #submitDraw}
+     * (请求 → 会话 → 会话所属用户默认 → 系统启用项), so the message names the model that
+     * will really run instead of 「未记录」.
+     */
+    private void applyDrawMetadata(Message message, String prompt, DrawRequest request,
+                                   ModelProvider imageProvider, Long imageProviderId) {
         message.setDrawPrompt(prompt);
         if (request != null) {
             message.setDrawSize(cleanOption(request.getSize()));
             message.setDrawQuality(cleanOption(request.getQuality()));
             message.setDrawFormat(cleanOption(request.getFormat()));
         }
-        message.setDrawProviderId(imageProviderId);
+        message.setDrawProviderId(imageProvider != null ? imageProvider.getId() : imageProviderId);
+        message.setDrawProviderName(ModelProviderNames.snapshot(imageProvider));
+    }
+
+    /** 解析链全部落空时保留原 id，让 processDraw 按既有失败语义处理。 */
+    private static Long resolveDrawProviderIdFallback(Session session, Long requestedImageProviderId) {
+        return requestedImageProviderId != null
+                ? requestedImageProviderId
+                : session != null ? session.getImageProviderId() : null;
     }
 
     private List<LlmClient.ReferenceImage> loadReferenceImages(Long messageId,
@@ -648,12 +675,5 @@ public class ImageGenerationQueueService {
             }
         }
         return defaultMaxConcurrent > 0 ? defaultMaxConcurrent : 1;
-    }
-
-    private ModelProvider resolveImageProvider(Long imageProviderId) {
-        if (imageProviderId != null) {
-            return modelProviderService.getById(imageProviderId);
-        }
-        return modelProviderService.getActiveProvider(ProviderType.IMAGE);
     }
 }

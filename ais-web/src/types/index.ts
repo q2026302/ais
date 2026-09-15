@@ -8,6 +8,44 @@ export interface Session {
   updatedAt: string
   lastMessageAt?: string
   lastMessagePreview?: string
+  /**
+   * 会话级设置（后端 `sessions.settings` 通用 JSON 列的**生效值**：注册表默认值
+   * 已由后端补齐，未识别的键已被丢弃）。首批内容：
+   * `{ draw: { size, quality, format } }`。
+   *
+   * 新增参数/分组时后端只需注册表加一项，这里通过索引签名保持前向兼容。
+   */
+  settings?: SessionSettings | null
+}
+
+/** 绘画参数分组（后端 `draw` 组的参数注册表）。 */
+export interface DrawSettings {
+  size: string
+  quality: string
+  format: string
+}
+
+/**
+ * 会话设置：`draw` 是已知分组；未知分组由后端注册表决定，前端原样保存、不解读，
+ * 这样后端新增用途分组时前端不需要跟着改类型或接口。
+ */
+export interface SessionSettings {
+  draw: DrawSettings
+  [group: string]: unknown
+}
+
+/**
+ * 稀疏更新补丁（`PATCH /api/sessions/{id}/settings`）：
+ * - 分组内只覆盖传入的 key（合并语义）；
+ * - 分组显式 `null` 清空该组、回注册表默认值；
+ * - 未出现的键一律不动；
+ * - 未知键由后端忽略，不会报错。
+ */
+export interface SessionSettingsPatch {
+  chatProviderId?: number | null
+  imageProviderId?: number | null
+  draw?: Partial<DrawSettings> | null
+  [group: string]: unknown
 }
 
 export interface Attachment {
@@ -51,6 +89,14 @@ export interface Message {
   drawFormat?: string | null
   drawProviderId?: number | null
   chatProviderId?: number | null
+  /**
+   * Name snapshot of the model that actually produced this message, captured at
+   * write time. Lets history keep showing the real model even after the provider
+   * is renamed or deleted; null for legacy rows (frontend then falls back to
+   * resolving `chatProviderId`/`drawProviderId`, and finally to 「未记录」).
+   */
+  chatProviderName?: string | null
+  drawProviderName?: string | null
   attachments: Attachment[]
   tokenUsage: TokenUsage | null
   parentMessageId?: number | null

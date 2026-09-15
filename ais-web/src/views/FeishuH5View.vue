@@ -21,11 +21,16 @@ import { sessionApi } from '@/api/sessions'
 import { adminApi, type OperationLog } from '@/api/admin'
 import { usersApi, type ManagedUser } from '@/api/users'
 import { userDefaultsApi } from '@/api/billing'
-import type { Message, ModelProvider, Session, UploadResponse } from '@/types'
+import type { Message, ModelProvider, Session, UploadResponse, DrawSettings } from '@/types'
 import { referenceFromUpload } from '@/utils/historyReference'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
+import SessionConfigPanel from '@/components/SessionConfigPanel.vue'
+import TempModelSelect from '@/components/TempModelSelect.vue'
+import RegenerateDialog from '@/components/RegenerateDialog.vue'
+import { messageSpeakerName as resolveMessageSpeakerName, providerLabel } from '@/utils/modelDisplay'
+import { drawOptionSets, drawOptionWarnings, withStoredValue } from '@/utils/drawOptions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { downloadImage as downloadImageAsset, isRestrictedWebView, shareImage as shareImageAsset } from '@/utils/downloadImage'
 import { formatDateTime, formatTimeHm } from '@/utils/dateTime'
@@ -71,9 +76,13 @@ const mobileOperationLogs = ref<OperationLog[]>([])
 const mobileLogsLoading = ref(false)
 const referenceVisible = ref(false)
 const referenceImportingId = ref<number | null>(null)
-const modelVisible = ref(false)
-const drawSettingsVisible = ref(false)
-const drawOptionsExpanded = ref(false)
+/** 齿轮 / 会话配置（三端含义一致）。 */
+const sessionConfigVisible = ref(false)
+/** 对话框内下拉框的临时选择：仅本次发送 / 本次生成。 */
+const tempChatProviderId = ref<number | null>(null)
+const tempImageProviderId = ref<number | null>(null)
+const regenerateDialogVisible = ref(false)
+const regenerateTargetId = ref<number | null>(null)
 const imageViewerVisible = ref(false)
 const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
@@ -104,9 +113,14 @@ const selectedChatProviderId = ref<number | null>(null)
 const defaultChatProviderId = ref<number | null>(null)
 const defaultImageProviderId = ref<number | null>(null)
 const selectedImageProviderId = ref<number | null>(null)
-const drawSize = ref('1024x1024')
-const drawQuality = ref('auto')
-const drawFormat = ref('png')
+/**
+ * 绘画参数直接读**会话存储值**（store.drawSettings，注册表默认值已补齐）：
+ * 唯一来源，不做本地工作副本，也不按选项集静默校正。写入成功后 store 回流，
+ * 失败时值不变（即自动回滚）。
+ */
+const drawSize = computed(() => store.drawSettings.size)
+const drawQuality = computed(() => store.drawSettings.quality)
+const drawFormat = computed(() => store.drawSettings.format)
 const originalTitle = document.title
 
 interface DeferredInstallPromptEvent extends Event {
@@ -185,42 +199,68 @@ const historyImages = computed<HistoryImageItem[]>(() => {
   }
   return items.reverse()
 })
-const currentProviders = computed(() => mode.value === 'chat' ? store.chatProviders : store.imageProviders)
-const selectedProviderId = computed(() => mode.value === 'chat' ? selectedChatProviderId.value : selectedImageProviderId.value)
-const selectedProvider = computed<ModelProvider | null>(() => currentProviders.value.find((item) => item.id === selectedProviderId.value) || null)
-const selectedImageProvider = computed<ModelProvider | null>(() => {
-  if (selectedImageProviderId.value == null) return null
-  return store.imageProviders.find((provider) => provider.id === selectedImageProviderId.value) || null
+/**
+ * 绘画选项集必须按**实际生效的绘画模型**推导：会话默认 → 用户默认 → 系统启用项
+ * （resolvedImageProvider 已按该顺序解析）。只看「系统启用项」会在会话跟随默认时
+ * 把 Gemini 的合法 `16:9` 当成 OpenAI 选项处理。
+ */
+const drawOptionBase = computed(() => drawOptionSets(resolvedImageProvider.value))
+/** 下拉选项 = 基准选项集 ∪ 会话存储值，保证显示的就是会话里存的值。 */
+const drawSizeOptions = computed(() => withStoredValue(drawOptionBase.value.size, drawSize.value))
+const drawQualityOptions = computed(() => withStoredValue(drawOptionBase.value.quality, drawQuality.value))
+const drawFormatOptions = computed(() => withStoredValue(drawOptionBase.value.format, drawFormat.value))
+const drawOptionHints = computed(() => drawOptionWarnings({
+  size: drawSize.value,
+  quality: drawQuality.value,
+  format: drawFormat.value,
+}, drawOptionBase.value))
+
+/** 会话未显式设置时实际生效的默认（用户默认 → 系统启用项）。 */
+const fallbackChatProvider = computed<ModelProvider | null>(() => {
+  if (defaultChatProviderId.value != null) {
+    const provider = store.chatProviders.find((item) => item.id === defaultChatProviderId.value)
+    if (provider) return provider
+  }
+  return store.chatProviders.find((item) => item.active) || null
 })
-const imageAdapter = computed(() => {
-  const configured = selectedImageProvider.value?.adapterType?.toUpperCase()
-  if (configured && configured !== 'AUTO') return configured
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  const providerId = selectedImageProvider.value?.providerId?.toLowerCase() || ''
-  if (providerId === 'grsai') return 'GRS_AI'
-  return model.includes('gemini') ? 'GEMINI_IMAGE' : 'OPENAI_IMAGE'
+const fallbackImageProvider = computed<ModelProvider | null>(() => {
+  if (defaultImageProviderId.value != null) {
+    const provider = store.imageProviders.find((item) => item.id === defaultImageProviderId.value)
+    if (provider) return provider
+  }
+  return store.imageProviders.find((item) => item.active) || null
 })
-const usesRatioOptions = computed(() => imageAdapter.value === 'GEMINI_IMAGE' || (imageAdapter.value === 'GRS_AI' && (selectedImageProvider.value?.modelName || '').toLowerCase().includes('nano-banana')))
-const isGptImageModel = computed(() => {
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  return (imageAdapter.value === 'OPENAI_IMAGE' || imageAdapter.value === 'GRS_AI') && (model.includes('gpt-image') || model.includes('gpt image'))
-})
-const drawSizeOptions = computed(() => usesRatioOptions.value ? ['1:1', '16:9', '9:16', '4:3', '3:4'] : isGptImageModel.value ? ['1024x1024', '1536x1024', '1024x1536', 'auto'] : ['1024x1024', '512x512', '768x768', '1024x1792', '1792x1024'])
-const drawQualityOptions = computed(() => usesRatioOptions.value ? ['1K', '2K', '4K'] : isGptImageModel.value ? ['auto', 'low', 'medium', 'high'] : ['standard', 'hd'])
-const drawFormatOptions = computed(() => usesRatioOptions.value ? ['png'] : ['png', 'jpeg', 'webp'])
-const selectedProviderLabel = computed(() => {
-  const provider = selectedProvider.value
-  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认模型'
-})
-const selectedChatProviderLabel = computed(() => {
-  const provider = selectedChatProviderId.value == null
-    ? null
-    : store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
-  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认模型'
-})
-const selectedChatProvider = computed<ModelProvider | null>(() => {
-  if (selectedChatProviderId.value == null) return null
-  return store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
+const chatDefaultLabel = computed(() => providerLabel(fallbackChatProvider.value, '系统默认'))
+const imageDefaultLabel = computed(() => providerLabel(fallbackImageProvider.value, '系统默认'))
+const resolvedChatProviderId = computed(() => selectedChatProviderId.value ?? fallbackChatProvider.value?.id ?? null)
+const resolvedImageProviderId = computed(() => selectedImageProviderId.value ?? fallbackImageProvider.value?.id ?? null)
+const resolvedChatProvider = computed<ModelProvider | null>(() => selectedChatProviderId.value == null
+  ? fallbackChatProvider.value
+  : store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null)
+const resolvedImageProvider = computed<ModelProvider | null>(() => selectedImageProviderId.value == null
+  ? fallbackImageProvider.value
+  : store.imageProviders.find((item) => item.id === selectedImageProviderId.value) || null)
+/** 状态条展示会话默认模型（持久值解析结果）。 */
+const selectedProviderLabel = computed(() => providerLabel(
+  mode.value === 'chat' ? resolvedChatProvider.value : resolvedImageProvider.value,
+  '系统默认',
+))
+const selectedChatProviderLabel = computed(() => providerLabel(resolvedChatProvider.value, '系统默认'))
+
+/** 对话框内临时切换：对话/绘画共用同一个下拉框，按模式切换数据源。 */
+const tempProviders = computed(() => mode.value === 'chat' ? store.chatProviders : store.imageProviders)
+const tempDefaultProvider = computed<ModelProvider | null>(() => mode.value === 'chat'
+  ? resolvedChatProvider.value
+  : resolvedImageProvider.value)
+// 「会话默认（X）」里的 X：取该会话实际生效的默认模型（会话默认 → 用户默认 → 系统启用项），
+// 而不是无条件显示用户/系统默认，否则会出现「显示 B、实际跑 A」。
+const tempDefaultLabel = computed(() => providerLabel(tempDefaultProvider.value, '系统默认'))
+const tempProviderId = computed<number | null>({
+  get: () => mode.value === 'chat' ? tempChatProviderId.value : tempImageProviderId.value,
+  set: (value) => {
+    if (mode.value === 'chat') tempChatProviderId.value = value
+    else tempImageProviderId.value = value
+  },
 })
 const referenceImageCount = computed(() => pendingAttachments.value.filter((attachment) => isImageAttachment(attachment.contentType)).length)
 const editingMessage = computed(() => editTargetId.value == null ? null : store.messages.find((message) => message.id === editTargetId.value) || null)
@@ -246,46 +286,43 @@ const mobileActionLabels: Record<string, string> = {
   ADMIN_MODEL_DEFAULTS_UPDATE: '更新默认模型',
 }
 
-function defaultProviderId(providers: ModelProvider[]) { return providers.find((item) => item.active)?.id ?? null }
-function resolveProviderId(sessionValue: number | null | undefined, userDefault: number | null, providers: ModelProvider[]) {
-  if (sessionValue != null) return sessionValue
-  if (userDefault != null && providers.some((item) => item.id === userDefault)) return userDefault
-  return defaultProviderId(providers)
-}
+/**
+ * 会话配置展示的是**会话里真实记录的**默认模型；会话未显式设置时保持 null，
+ * 由「跟随默认」表达，而不是把解析结果冒充成会话设置。临时选择一并重置。
+ */
 function syncProviderSelection() {
-  selectedChatProviderId.value = resolveProviderId(activeSession.value?.chatProviderId, defaultChatProviderId.value, store.chatProviders)
-  selectedImageProviderId.value = resolveProviderId(activeSession.value?.imageProviderId, defaultImageProviderId.value, store.imageProviders)
-}
-function providerDisplayName(provider: ModelProvider | null | undefined, fallback = 'AI') {
-  if (!provider) return fallback
-  const name = provider.name || provider.providerId
-  return provider.modelName ? `${name} / ${provider.modelName}` : name
+  selectedChatProviderId.value = activeSession.value?.chatProviderId ?? null
+  selectedImageProviderId.value = activeSession.value?.imageProviderId ?? null
+  tempChatProviderId.value = null
+  tempImageProviderId.value = null
 }
 function messageSpeakerName(message: Message) {
-  if (message.role === 'USER') {
-    return message.messageType === 'DRAW_REQUEST' ? '绘图请求' : '我'
-  }
-  if (message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST') {
-    const provider = message.drawProviderId != null
-      ? store.imageProviders.find((item) => item.id === message.drawProviderId) || null
-      : null
-    const label = providerDisplayName(provider, 'AI')
-    return label === 'AI' ? '[绘图] AI' : `[绘图] ${label}`
-  }
-  const provider = message.chatProviderId != null
-    ? store.chatProviders.find((item) => item.id === message.chatProviderId) || null
-    : selectedChatProvider.value
-  return providerDisplayName(provider, 'AI')
+  return resolveMessageSpeakerName(message, {
+    chatProviders: store.chatProviders,
+    imageProviders: store.imageProviders,
+  })
 }
 function messageTypeClass(message: Message) {
   if (message.messageType === 'DRAW_REQUEST') return 'msg-type-draw-request'
   if (message.messageType === 'DRAW_RESPONSE') return 'msg-type-draw-response'
   return 'msg-type-chat'
 }
-function syncDrawOptions() {
-  if (!drawSizeOptions.value.includes(drawSize.value)) drawSize.value = usesRatioOptions.value ? '1:1' : '1024x1024'
-  if (!drawQualityOptions.value.includes(drawQuality.value)) drawQuality.value = usesRatioOptions.value ? '1K' : isGptImageModel.value ? 'auto' : 'standard'
-  if (!drawFormatOptions.value.includes(drawFormat.value)) drawFormat.value = 'png'
+
+/**
+ * 齿轮面板里改绘画参数 = 改会话设置（持久生效，稀疏合并写回后端）。
+ * 不做本地乐观赋值：面板绑定会话存储值，写入成功由 store 回流，失败保持原值
+ * （即自动回滚）并给出可见提示。
+ */
+async function changeDrawSetting(patch: Partial<DrawSettings>) {
+  if (!store.activeSessionId) {
+    ElMessage.warning('还没有会话：发送第一条消息创建会话后即可保存。')
+    return
+  }
+  try {
+    await store.updateSessionSettings({ draw: patch })
+  } catch (error: any) {
+    ElMessage.error(error?.message || '保存绘画参数失败，已恢复原值')
+  }
 }
 async function scrollToBottom() { await nextTick(); if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight }
 
@@ -431,31 +468,6 @@ async function handleSystemCommand(prompt: string, attachments: UploadResponse[]
         ElMessage.info('正在终止请求…')
       }
       return { handled: true }
-    case 'models':
-      await store.fetchProviders()
-      mode.value = 'chat'
-      modelVisible.value = true
-      return { handled: true }
-    case 'model': {
-      const providerId = parseId(command.argument)
-      if (providerId == null) {
-        ElMessage.warning('用法：/model <模型ID>；可使用 /models 查看列表。')
-        return { handled: true }
-      }
-      if (store.activeSessionId == null) {
-        ElMessage.warning('请先创建或切换到一个会话。')
-        return { handled: true }
-      }
-      const provider = store.chatProviders.find((item) => item.id === providerId)
-      if (!provider) {
-        ElMessage.warning(`未找到对话模型 #${providerId}，可使用 /models 查看列表。`)
-        return { handled: true }
-      }
-      await store.updateSessionProviders(provider.id, undefined)
-      selectedChatProviderId.value = provider.id
-      ElMessage.success(`当前会话已切换至 ${provider.name || provider.providerId} / ${provider.modelName}`)
-      return { handled: true }
-    }
     case 'draw':
       if (!command.argument) {
         ElMessage.warning('用法：/draw <绘图提示词>')
@@ -466,6 +478,12 @@ async function handleSystemCommand(prompt: string, attachments: UploadResponse[]
       inputText.value = command.argument
       return { handled: true, keepDraft: true }
     default:
+      // 有 UI 的端不再支持 /model、/models：模型切换走齿轮「会话配置」（会话默认）
+      // 或对话框内的临时下拉框。命令仅是纯文本渠道（飞书机器人）的手段。
+      if (command.rawName === 'model' || command.rawName === 'models') {
+        ElMessage.warning('模型切换请使用输入框旁的模型下拉框（仅本次）或「会话配置」（会话默认）。')
+        return { handled: true }
+      }
       ElMessage.warning(`未知命令 /${command.rawName}；输入 /help 查看可用命令。`)
       return { handled: true, keepDraft: true }
   }
@@ -487,8 +505,12 @@ async function handleSubmit() {
   if (!(await ensureSession())) return
   inputText.value = ''; pendingAttachments.value = []
   try {
-    if (mode.value === 'draw') await store.draw({ prompt, attachmentIds: attachments.map((item) => item.id), imageProviderId: selectedImageProviderId.value, size: drawSize.value, quality: drawQuality.value, format: drawFormat.value }, attachments.map(referenceFromUpload))
-    else await store.chat(prompt, attachments.map((item) => item.id), selectedChatProviderId.value, attachments)
+    // 临时切换只影响这一次：null 表示跟随会话默认。
+    if (mode.value === 'draw') await store.draw({ prompt, attachmentIds: attachments.map((item) => item.id), imageProviderId: tempImageProviderId.value, size: drawSize.value, quality: drawQuality.value, format: drawFormat.value }, attachments.map(referenceFromUpload))
+    else await store.chat(prompt, attachments.map((item) => item.id), tempChatProviderId.value, attachments)
+    // 发送后回到会话默认。
+    tempChatProviderId.value = null
+    tempImageProviderId.value = null
     await scrollToBottom()
   } catch (error: any) { if (error?.name !== 'CanceledError') ElMessage.error(error.message || '请求失败，请稍后重试') }
 }
@@ -549,17 +571,43 @@ async function selectHistoryImage(item: HistoryImageItem) {
     referenceImportingId.value = null
   }
 }
-async function selectModel(id: number | null) {
-  if (mode.value === 'chat') selectedChatProviderId.value = id
-  else selectedImageProviderId.value = id
-  modelVisible.value = false
-  syncDrawOptions()
-  if (!store.activeSessionId) return
+/** 会话配置：写入会话默认对话模型（持久）。失败回滚到写入前的值。 */
+async function selectSessionChatProvider(id: number | null) {
+  if (!store.activeSessionId) {
+    ElMessage.warning('还没有会话：发送第一条消息创建会话后即可保存。')
+    return
+  }
+  const previous = selectedChatProviderId.value
+  selectedChatProviderId.value = id
   try {
-    await store.updateSessionProviders(mode.value === 'chat' ? id : undefined, mode.value === 'draw' ? id : undefined)
-    ElMessage.success('当前会话模型已更新')
+    await persistSessionProviders(id, undefined)
+  } catch {
+    selectedChatProviderId.value = previous
+  }
+}
+
+/** 会话配置：写入会话默认绘画模型（持久）。失败回滚到写入前的值。 */
+async function selectSessionImageProvider(id: number | null) {
+  if (!store.activeSessionId) {
+    ElMessage.warning('还没有会话：发送第一条消息创建会话后即可保存。')
+    return
+  }
+  const previous = selectedImageProviderId.value
+  selectedImageProviderId.value = id
+  try {
+    await persistSessionProviders(undefined, id)
+  } catch {
+    selectedImageProviderId.value = previous
+  }
+}
+
+async function persistSessionProviders(chatProviderId?: number | null, imageProviderId?: number | null) {
+  try {
+    await store.updateSessionProviders(chatProviderId, imageProviderId)
+    ElMessage.success('会话默认模型已更新')
   } catch (error: any) {
-    ElMessage.error(error.message || '保存模型选择失败')
+    ElMessage.error(error?.message || '保存模型选择失败，已恢复原值')
+    throw error
   }
 }
 function isImageAttachment(contentType: string) { return contentType.startsWith('image/') }
@@ -866,11 +914,27 @@ async function refreshMessages() {
     ElMessage.error(error.message || '刷新会话失败')
   }
 }
-async function resendMessage(message: Message) {
+/** 重新生成 / 再次发送统一走弹窗：默认选中消息当时实际使用的模型，可临时改选。 */
+function resendMessage(message: Message) {
   if (store.loading) return
+  regenerateTargetId.value = message.id
+  regenerateDialogVisible.value = true
+}
+
+const regenerateTarget = computed(() => regenerateTargetId.value == null
+  ? null
+  : store.messages.find((item) => item.id === regenerateTargetId.value) || null)
+
+async function confirmRegenerate(payload: { chatProviderId: number | null; imageProviderId: number | null }) {
+  const target = regenerateTarget.value
+  if (!target) return
   try {
-    if (message.role === 'USER') await store.resendUserMessage(message.id, selectedChatProviderId.value, selectedImageProviderId.value)
-    else await store.regenerateMessage(message.id, selectedChatProviderId.value, selectedImageProviderId.value)
+    if (target.role === 'USER') {
+      await store.resendUserMessage(target.id, payload.chatProviderId, payload.imageProviderId)
+    } else {
+      await store.regenerateMessage(target.id, payload.chatProviderId, payload.imageProviderId)
+    }
+    regenerateDialogVisible.value = false
     await scrollToBottom()
   } catch (error: any) {
     if (error?.name !== 'CanceledError') ElMessage.error(error.message || '重新生成失败')
@@ -911,14 +975,10 @@ function openReferencePicker() {
   referenceVisible.value = true
 }
 
-function openModelPicker() {
+/** 会话配置入口（状态条 / 创作工具里的模型按钮都指向它，三端含义一致）。 */
+function openSettingsPanel() {
   composerExtraVisible.value = false
-  modelVisible.value = true
-}
-
-function openDrawSettings() {
-  composerExtraVisible.value = false
-  drawSettingsVisible.value = true
+  sessionConfigVisible.value = true
 }
 
 function openReferenceShortcut() {
@@ -1023,15 +1083,10 @@ watch(() => store.activeSessionId, () => {
 })
 watch(inputText, () => void nextTick(() => autoResizeTextarea()))
 watch(mode, () => {
-  if (mode.value === 'chat' && selectedChatProviderId.value == null) {
-    selectedChatProviderId.value = resolveProviderId(null, defaultChatProviderId.value, store.chatProviders)
-  }
-  if (mode.value === 'draw' && selectedImageProviderId.value == null) {
-    selectedImageProviderId.value = resolveProviderId(null, defaultImageProviderId.value, store.imageProviders)
-  }
-  syncDrawOptions()
+  // 切换对话/绘画时，上一次的临时选择不跨模式复用。
+  tempChatProviderId.value = null
+  tempImageProviderId.value = null
 })
-watch([selectedImageProviderId, () => store.imageProviders.length], syncDrawOptions)
 function applyViewportState(state: VisualViewportState) {
   keyboardOpen.value = state.keyboardOpen
 }
@@ -1205,7 +1260,8 @@ onBeforeUnmount(() => {
                 <img :src="attachment.fileUrl" alt="消息图片" loading="lazy">
               </button>
               <a v-else class="message-file" :href="attachment.fileUrl" target="_blank" rel="noopener"><Paperclip /> {{ attachment.originalName }}</a>
-            </template>
+            
+          </template>
           </div>
           <CollapsibleMessageText v-if="messageText(message) && message.status !== 'PENDING'" class="message-content" :content="messageText(message)" />
           <div v-if="message.status === 'PENDING'" class="message-loading" role="status" aria-live="polite">
@@ -1286,16 +1342,16 @@ onBeforeUnmount(() => {
         <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
       </div>
       <section v-if="mode === 'draw'" class="draw-status-bar" aria-label="当前绘画设置">
-        <button type="button" class="draw-status-chip draw-status-model" :title="selectedProviderLabel" :aria-label="`当前绘画模型：${selectedProviderLabel}，点击切换模型`" @click="openModelPicker">
+        <button type="button" class="draw-status-chip draw-status-model" :title="selectedProviderLabel" :aria-label="`会话默认绘画模型：${selectedProviderLabel}，点击打开会话配置`" @click="openSettingsPanel">
           <MagicStick aria-hidden="true" />
           <span>模型</span>
           <strong>{{ selectedProviderLabel }}</strong>
         </button>
-        <button type="button" class="draw-status-chip" :title="`当前尺寸或比例：${drawSize}`" :aria-label="`当前尺寸或比例：${drawSize}，点击设置`" @click="openDrawSettings">
+        <button type="button" class="draw-status-chip" :title="`当前尺寸或比例：${drawSize}`" :aria-label="`当前尺寸或比例：${drawSize}，点击打开会话配置`" @click="openSettingsPanel">
           <span>尺寸</span>
           <strong>{{ drawSize }}</strong>
         </button>
-        <button type="button" class="draw-status-chip" :title="`当前质量：${drawQuality}`" :aria-label="`当前质量：${drawQuality}，点击设置`" @click="openDrawSettings">
+        <button type="button" class="draw-status-chip" :title="`当前质量：${drawQuality}`" :aria-label="`当前质量：${drawQuality}，点击打开会话配置`" @click="openSettingsPanel">
           <span>质量</span>
           <strong>{{ drawQuality }}</strong>
         </button>
@@ -1306,7 +1362,7 @@ onBeforeUnmount(() => {
         </button>
       </section>
       <section v-else class="draw-status-bar chat-status-bar" aria-label="当前对话模型">
-        <button type="button" class="draw-status-chip draw-status-model" :title="selectedChatProviderLabel" :aria-label="`当前对话模型：${selectedChatProviderLabel}，点击切换模型`" @click="openModelPicker">
+        <button type="button" class="draw-status-chip draw-status-model" :title="selectedChatProviderLabel" :aria-label="`会话默认对话模型：${selectedChatProviderLabel}，点击打开会话配置`" @click="openSettingsPanel">
           <MagicStick aria-hidden="true" />
           <span>对话模型</span>
           <strong>{{ selectedChatProviderLabel }}</strong>
@@ -1318,6 +1374,17 @@ onBeforeUnmount(() => {
           <div v-else class="attachment-file-icon"><Paperclip /><small>{{ attachment.originalName }}</small></div>
           <button type="button" aria-label="移除附件" @click="removeAttachment(attachment.id)"><Close /></button>
         </div>
+      </div>
+      <!-- 临时切换（仅本次）：发送后回到会话默认。 -->
+      <div class="composer-temp-row">
+        <TempModelSelect
+          v-model="tempProviderId"
+          :providers="tempProviders"
+          :default-provider-id="tempDefaultProvider?.id ?? null"
+          :default-label="tempDefaultLabel"
+          :disabled="store.loading"
+          :select-label="mode === 'chat' ? '临时切换对话模型' : '临时切换绘画模型'"
+        />
       </div>
       <div class="composer-main">
         <input ref="fileInputRef" type="file" :accept="mode === 'draw' ? 'image/*' : 'image/*,.pdf,.doc,.docx,.txt'" multiple hidden @change="handleFileChange">
@@ -1380,11 +1447,11 @@ onBeforeUnmount(() => {
     </div>
 
     <el-drawer v-model="composerExtraVisible" direction="btt" size="auto" class="h5-drawer composer-extra-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>创作工具</strong><span>附件、参考图、模型和参数都在这里</span></div></div>
+      <div class="drawer-title compact"><div><strong>创作工具</strong><span>附件、参考图和会话配置都在这里</span></div></div>
       <div class="composer-extra-grid">
         <button type="button" @click="openFilePicker"><UploadFilled /><span>添加附件</span><small>{{ mode === 'draw' ? '上传参考图' : '图片或文档' }}</small></button>
         <button type="button" :disabled="!historyImages.length" @click="openReferencePicker"><Clock /><span>历史图</span><small>选择已有作品</small></button>
-        <button type="button" @click="openModelPicker"><MagicStick /><span>模型</span><small>{{ selectedProviderLabel }}</small></button>
+        <button type="button" @click="openSettingsPanel"><Setting /><span>会话配置</span><small>默认模型与绘画参数</small></button>
         <button type="button" @click="toggleFullscreenInput(); composerExtraVisible = false"><FullScreen /><span>扩展输入</span><small>全屏编辑内容</small></button>
       </div>
       <div class="mode-picker">
@@ -1394,23 +1461,33 @@ onBeforeUnmount(() => {
           <button :class="{ active: mode === 'chat' }" type="button" @click="mode = 'chat'"><ChatDotRound /> 对话</button>
         </div>
       </div>
-      <div v-if="mode === 'draw'" class="drawer-draw-options">
-        <span>绘画参数</span>
-        <div class="draw-options-inline-fields">
-          <label><span>尺寸</span><el-select v-model="drawSize"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
-          <label><span>质量</span><el-select v-model="drawQuality"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-          <label><span>格式</span><el-select v-model="drawFormat"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-        </div>
-      </div>
     </el-drawer>
 
-    <el-drawer v-model="drawSettingsVisible" direction="btt" size="auto" class="h5-drawer draw-settings-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>绘画设置</strong><span>快速调整尺寸、质量与格式</span></div></div>
-      <div class="draw-settings-fields">
-        <label><span>尺寸 / 比例</span><el-select v-model="drawSize" aria-label="绘画尺寸或比例"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
-        <label><span>质量</span><el-select v-model="drawQuality" aria-label="绘画质量"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-        <label><span>格式</span><el-select v-model="drawFormat" aria-label="图片格式"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-      </div>
+    <el-drawer v-model="sessionConfigVisible" direction="btt" size="auto" class="h5-drawer session-config-drawer" :with-header="false">
+      <div class="drawer-title compact"><div><strong>会话配置</strong><span>会话默认对话模型 / 绘画模型 / 绘画参数</span></div></div>
+      <SessionConfigPanel
+        :chat-providers="store.chatProviders"
+        :image-providers="store.imageProviders"
+        :chat-provider-id="selectedChatProviderId"
+        :image-provider-id="selectedImageProviderId"
+        :chat-default-label="chatDefaultLabel"
+        :image-default-label="imageDefaultLabel"
+        :draw-size="drawSize"
+        :draw-quality="drawQuality"
+        :draw-format="drawFormat"
+        :draw-size-options="drawSizeOptions"
+        :draw-quality-options="drawQualityOptions"
+        :draw-format-options="drawFormatOptions"
+        :draw-option-hints="drawOptionHints"
+        :has-draw-panel="false"
+        :disabled="store.loading"
+        :disabled-reason="store.activeSessionId == null ? '还没有会话：发送第一条消息创建会话后，这里的设置才能保存。' : undefined"
+        @update:chat-provider-id="selectSessionChatProvider"
+        @update:image-provider-id="selectSessionImageProvider"
+        @update:draw-size="changeDrawSetting({ size: $event })"
+        @update:draw-quality="changeDrawSetting({ quality: $event })"
+        @update:draw-format="changeDrawSetting({ format: $event })"
+      />
     </el-drawer>
 
     <el-drawer v-model="historyVisible" direction="btt" size="72%" class="h5-drawer" :with-header="false">
@@ -1459,13 +1536,6 @@ onBeforeUnmount(() => {
           <span v-if="referenceImportingId === item.messageId" class="history-reference-status">添加中…</span>
           <small>{{ item.label }}</small>
         </button>
-      </div>
-    </el-drawer>
-    <el-drawer v-model="modelVisible" direction="btt" size="68%" class="h5-drawer model-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>选择{{ mode === 'draw' ? '绘画' : '对话' }}模型</strong><span>模型选择会保存到当前会话</span></div></div>
-      <div class="model-list">
-        <button class="model-row" :class="{ active: selectedProviderId === null }" type="button" @click="selectModel(null)"><span><strong>系统默认模型</strong><small>使用后台配置的默认模型</small></span><span v-if="selectedProviderId === null" class="model-check" aria-hidden="true"><Check /></span></button>
-        <button v-for="provider in currentProviders" :key="provider.id" class="model-row" :class="{ active: provider.id === selectedProviderId }" type="button" @click="selectModel(provider.id)"><span><strong>{{ provider.name || provider.providerId }}</strong><small>#{{ provider.id }} · {{ provider.modelName }}</small></span><span v-if="provider.id === selectedProviderId" class="model-check" aria-hidden="true"><Check /></span></button>
       </div>
     </el-drawer>
     <el-drawer v-model="editVisible" direction="btt" size="auto" class="h5-drawer edit-drawer" :with-header="false">
@@ -1552,6 +1622,18 @@ onBeforeUnmount(() => {
       </Transition>
     </Teleport>
     <MobileImageViewer v-model:visible="imageViewerVisible" :images="imageViewerImages" :initial-index="imageViewerIndex" />
+
+    <RegenerateDialog
+      v-model:visible="regenerateDialogVisible"
+      :action="regenerateTarget?.role === 'USER' ? 'resend' : 'regenerate'"
+      :message="regenerateTarget"
+      :chat-providers="store.chatProviders"
+      :image-providers="store.imageProviders"
+      :default-chat-provider-id="resolvedChatProviderId"
+      :default-image-provider-id="resolvedImageProviderId"
+      :loading="store.loading"
+      @confirm="confirmRegenerate"
+    />
   </main>
 </template>
 
@@ -1912,6 +1994,7 @@ onBeforeUnmount(() => {
 .attachment-preview > button :deep(svg) { width: 10px; }
 .attachment-file-icon { display: flex; width: 50px; height: 50px; align-items: center; justify-content: center; flex-direction: column; gap: 2px; overflow: hidden; color: #6372d4; border: 1px solid #e3e7f4; border-radius: 11px; background: #f1f3ff; }
 .attachment-file-icon small { max-width: 42px; overflow: hidden; color: #77819a; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.composer-temp-row { display: flex; min-width: 0; align-items: center; margin: 0 2px 7px; }
 .composer-main { display: flex; min-height: 50px; align-items: flex-end; gap: 7px; padding: 6px 7px 6px 12px; border: 1px solid #dfe4ee; border-radius: 16px; background: #f7f9fc; transition: border-color .18s, box-shadow .18s; }
 .composer-main:focus-within { border-color: #aeb8ed; box-shadow: 0 0 0 3px rgba(83, 103, 232, .08); }
 .composer-main textarea { flex: 1; min-width: 0; max-height: 112px; padding: 8px 0 6px; color: #35415d; font: inherit; font-size: 14px; line-height: 1.45; resize: none; border: 0; outline: 0; background: transparent; }

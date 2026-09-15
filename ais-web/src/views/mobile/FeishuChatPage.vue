@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Camera,
   ChatDotRound,
-  Check,
   Close,
   Collection,
   CopyDocument,
@@ -30,10 +29,15 @@ import { useSessionStore } from '@/stores/session'
 import { useFavoriteStore } from '@/stores/favorite'
 import { sessionApi } from '@/api/sessions'
 import { userDefaultsApi } from '@/api/billing'
-import type { Message, ModelProvider, UploadResponse, Attachment, DrawReference } from '@/types'
+import type { Message, ModelProvider, UploadResponse, Attachment, DrawReference, DrawSettings } from '@/types'
 import { CHAT_COMMAND_HELP, parseChatCommand } from '@/utils/chatCommands'
 import CollapsibleMessageText from '@/components/CollapsibleMessageText.vue'
 import MobileImageViewer from '@/components/MobileImageViewer.vue'
+import SessionConfigPanel from '@/components/SessionConfigPanel.vue'
+import TempModelSelect from '@/components/TempModelSelect.vue'
+import RegenerateDialog from '@/components/RegenerateDialog.vue'
+import { messageSpeakerName as resolveMessageSpeakerName, providerLabel } from '@/utils/modelDisplay'
+import { drawOptionSets, drawOptionWarnings, withStoredValue } from '@/utils/drawOptions'
 import { getAttachmentThumbnailUrl, getThumbnailUrl } from '@/utils/imageUrl'
 import { referenceFromHistory, referenceFromUpload, referenceUrlForBackend } from '@/utils/historyReference'
 import { getAppBasePath } from '@/utils/appBasePath'
@@ -83,8 +87,13 @@ const referenceUseOriginal = ref(false)
 const selectedHistoryIds = ref<string[]>([])
 const referenceFullscreen = ref(false)
 const referenceSourceTab = ref<'history'>('history')
-const modelVisible = ref(false)
-const drawSettingsVisible = ref(false)
+/** 齿轮 = 会话配置（会话默认模型 + 绘画参数），三端含义一致。 */
+const sessionConfigVisible = ref(false)
+/** 对话框内下拉框的临时选择：仅本次发送 / 本次生成。 */
+const tempChatProviderId = ref<number | null>(null)
+const tempImageProviderId = ref<number | null>(null)
+const regenerateDialogVisible = ref(false)
+const regenerateTargetId = ref<number | null>(null)
 const imageViewerVisible = ref(false)
 const imageViewerImages = ref<string[]>([])
 const imageViewerIndex = ref(0)
@@ -98,9 +107,14 @@ const selectedChatProviderId = ref<number | null>(null)
 const defaultChatProviderId = ref<number | null>(null)
 const defaultImageProviderId = ref<number | null>(null)
 const selectedImageProviderId = ref<number | null>(null)
-const drawSize = ref('1024x1024')
-const drawQuality = ref('auto')
-const drawFormat = ref('png')
+/**
+ * 绘画参数直接读**会话存储值**（store.drawSettings，注册表默认值已补齐）：
+ * 唯一来源，不做本地工作副本，也不按选项集静默校正。写入成功后 store 回流，
+ * 失败时值不变（即自动回滚）。
+ */
+const drawSize = computed(() => store.drawSettings.size)
+const drawQuality = computed(() => store.drawSettings.quality)
+const drawFormat = computed(() => store.drawSettings.format)
 const originalTitle = document.title
 const isDev = import.meta.env.DEV
 let disposed = false
@@ -213,42 +227,63 @@ const historyImages = computed<HistoryImageItem[]>(() => {
   return items.reverse()
 })
 
-const currentProviders = computed(() => mode.value === 'chat' ? store.chatProviders : store.imageProviders)
-const selectedProviderId = computed(() => mode.value === 'chat' ? selectedChatProviderId.value : selectedImageProviderId.value)
-const selectedProvider = computed<ModelProvider | null>(() => currentProviders.value.find((item) => item.id === selectedProviderId.value) || null)
-const selectedImageProvider = computed<ModelProvider | null>(() => {
-  if (selectedImageProviderId.value == null) return null
-  return store.imageProviders.find((provider) => provider.id === selectedImageProviderId.value) || null
+/**
+ * 绘画选项集必须按**实际生效的绘画模型**推导：会话默认 → 用户默认 → 系统启用项
+ * （resolvedImageProvider 已按该顺序解析）。只看「系统启用项」会在会话跟随默认时
+ * 把 Gemini 的合法 `16:9` 当成 OpenAI 选项处理。
+ */
+const drawOptionBase = computed(() => drawOptionSets(resolvedImageProvider.value))
+/** 下拉选项 = 基准选项集 ∪ 会话存储值，保证显示的就是会话里存的值。 */
+const drawSizeOptions = computed(() => withStoredValue(drawOptionBase.value.size, drawSize.value))
+const drawQualityOptions = computed(() => withStoredValue(drawOptionBase.value.quality, drawQuality.value))
+const drawFormatOptions = computed(() => withStoredValue(drawOptionBase.value.format, drawFormat.value))
+const drawOptionHints = computed(() => drawOptionWarnings({
+  size: drawSize.value,
+  quality: drawQuality.value,
+  format: drawFormat.value,
+}, drawOptionBase.value))
+
+/** 会话未显式设置时实际生效的默认（用户默认 → 系统启用项）。 */
+const fallbackChatProvider = computed<ModelProvider | null>(() => {
+  if (defaultChatProviderId.value != null) {
+    const provider = store.chatProviders.find((item) => item.id === defaultChatProviderId.value)
+    if (provider) return provider
+  }
+  return store.chatProviders.find((item) => item.active) || null
 })
-const imageAdapter = computed(() => {
-  const configured = selectedImageProvider.value?.adapterType?.toUpperCase()
-  if (configured && configured !== 'AUTO') return configured
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  const providerId = selectedImageProvider.value?.providerId?.toLowerCase() || ''
-  if (providerId === 'grsai') return 'GRS_AI'
-  return model.includes('gemini') ? 'GEMINI_IMAGE' : 'OPENAI_IMAGE'
+const fallbackImageProvider = computed<ModelProvider | null>(() => {
+  if (defaultImageProviderId.value != null) {
+    const provider = store.imageProviders.find((item) => item.id === defaultImageProviderId.value)
+    if (provider) return provider
+  }
+  return store.imageProviders.find((item) => item.active) || null
 })
-const usesRatioOptions = computed(() => imageAdapter.value === 'GEMINI_IMAGE' || (imageAdapter.value === 'GRS_AI' && (selectedImageProvider.value?.modelName || '').toLowerCase().includes('nano-banana')))
-const isGptImageModel = computed(() => {
-  const model = selectedImageProvider.value?.modelName?.toLowerCase() || ''
-  return (imageAdapter.value === 'OPENAI_IMAGE' || imageAdapter.value === 'GRS_AI') && (model.includes('gpt-image') || model.includes('gpt image'))
-})
-const drawSizeOptions = computed(() => usesRatioOptions.value ? ['1:1', '16:9', '9:16', '4:3', '3:4'] : isGptImageModel.value ? ['1024x1024', '1536x1024', '1024x1536', 'auto'] : ['1024x1024', '512x512', '768x768', '1024x1792', '1792x1024'])
-const drawQualityOptions = computed(() => usesRatioOptions.value ? ['1K', '2K', '4K'] : isGptImageModel.value ? ['auto', 'low', 'medium', 'high'] : ['standard', 'hd'])
-const drawFormatOptions = computed(() => usesRatioOptions.value ? ['png'] : ['png', 'jpeg', 'webp'])
-const selectedProviderLabel = computed(() => {
-  const provider = selectedProvider.value
-  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认'
-})
-const selectedChatProviderLabel = computed(() => {
-  const provider = selectedChatProviderId.value == null
-    ? null
-    : store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
-  return provider ? `${provider.name || provider.providerId} / ${provider.modelName}` : '系统默认'
-})
-const selectedChatProvider = computed<ModelProvider | null>(() => {
-  if (selectedChatProviderId.value == null) return null
-  return store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null
+const chatDefaultLabel = computed(() => providerLabel(fallbackChatProvider.value, '系统默认'))
+const imageDefaultLabel = computed(() => providerLabel(fallbackImageProvider.value, '系统默认'))
+/** 会话未显式设置时实际生效的模型 id（用于发送与重生成默认值）。 */
+const resolvedChatProviderId = computed(() => selectedChatProviderId.value ?? fallbackChatProvider.value?.id ?? null)
+const resolvedImageProviderId = computed(() => selectedImageProviderId.value ?? fallbackImageProvider.value?.id ?? null)
+const resolvedChatProvider = computed<ModelProvider | null>(() => selectedChatProviderId.value == null
+  ? fallbackChatProvider.value
+  : store.chatProviders.find((item) => item.id === selectedChatProviderId.value) || null)
+const resolvedImageProvider = computed<ModelProvider | null>(() => selectedImageProviderId.value == null
+  ? fallbackImageProvider.value
+  : store.imageProviders.find((item) => item.id === selectedImageProviderId.value) || null)
+
+/** 对话框内临时切换：对话/绘画共用同一个下拉框，按模式切换数据源。 */
+const tempProviders = computed(() => mode.value === 'chat' ? store.chatProviders : store.imageProviders)
+const tempDefaultProvider = computed<ModelProvider | null>(() => mode.value === 'chat'
+  ? resolvedChatProvider.value
+  : resolvedImageProvider.value)
+// 「会话默认（X）」里的 X：取该会话实际生效的默认模型（会话默认 → 用户默认 → 系统启用项），
+// 而不是无条件显示用户/系统默认，否则会出现「显示 B、实际跑 A」。
+const tempDefaultLabel = computed(() => providerLabel(tempDefaultProvider.value, '系统默认'))
+const tempProviderId = computed<number | null>({
+  get: () => mode.value === 'chat' ? tempChatProviderId.value : tempImageProviderId.value,
+  set: (value) => {
+    if (mode.value === 'chat') tempChatProviderId.value = value
+    else tempImageProviderId.value = value
+  },
 })
 const referenceImageCount = computed(() => pendingAttachments.value.filter((item) => item.contentType?.startsWith('image/')).length + historyReferences.value.length)
 /** Merged draft references (uploads + history) for the composer strip. */
@@ -277,48 +312,43 @@ const referencePreviewItems = computed(() =>
   })),
 )
 
-function defaultProviderId(providers: ModelProvider[]) {
-  return providers.find((item) => item.active)?.id ?? null
-}
-function resolveProviderId(sessionValue: number | null | undefined, userDefault: number | null, providers: ModelProvider[]) {
-  if (sessionValue != null) return sessionValue
-  if (userDefault != null && providers.some((item) => item.id === userDefault)) return userDefault
-  return defaultProviderId(providers)
-}
+/**
+ * 会话配置展示的是**会话里真实记录的**默认模型；会话未显式设置时保持 null，
+ * 由「跟随默认」表达，而不是把解析结果冒充成会话设置。临时选择一并重置。
+ */
 function syncProviderSelection() {
-  selectedChatProviderId.value = resolveProviderId(activeSession.value?.chatProviderId, defaultChatProviderId.value, store.chatProviders)
-  selectedImageProviderId.value = resolveProviderId(activeSession.value?.imageProviderId, defaultImageProviderId.value, store.imageProviders)
-}
-function providerDisplayName(provider: ModelProvider | null | undefined, fallback = 'AI') {
-  if (!provider) return fallback
-  const name = provider.name || provider.providerId
-  return provider.modelName ? `${name} / ${provider.modelName}` : name
+  selectedChatProviderId.value = activeSession.value?.chatProviderId ?? null
+  selectedImageProviderId.value = activeSession.value?.imageProviderId ?? null
+  tempChatProviderId.value = null
+  tempImageProviderId.value = null
 }
 function messageSpeakerName(message: Message) {
-  if (message.role === 'USER') {
-    return message.messageType === 'DRAW_REQUEST' ? '绘图请求' : '我'
-  }
-  if (message.messageType === 'DRAW_RESPONSE' || message.messageType === 'DRAW_REQUEST') {
-    const provider = message.drawProviderId != null
-      ? store.imageProviders.find((item) => item.id === message.drawProviderId) || null
-      : null
-    const label = providerDisplayName(provider, 'AI')
-    return label === 'AI' ? '[绘图] AI' : `[绘图] ${label}`
-  }
-  const provider = message.chatProviderId != null
-    ? store.chatProviders.find((item) => item.id === message.chatProviderId) || null
-    : selectedChatProvider.value
-  return providerDisplayName(provider, 'AI')
+  return resolveMessageSpeakerName(message, {
+    chatProviders: store.chatProviders,
+    imageProviders: store.imageProviders,
+  })
 }
 function messageTypeClass(message: Message) {
   if (message.messageType === 'DRAW_REQUEST') return 'msg-type-draw-request'
   if (message.messageType === 'DRAW_RESPONSE') return 'msg-type-draw-response'
   return 'msg-type-chat'
 }
-function syncDrawOptions() {
-  if (!drawSizeOptions.value.includes(drawSize.value)) drawSize.value = usesRatioOptions.value ? '1:1' : '1024x1024'
-  if (!drawQualityOptions.value.includes(drawQuality.value)) drawQuality.value = usesRatioOptions.value ? '1K' : isGptImageModel.value ? 'auto' : 'standard'
-  if (!drawFormatOptions.value.includes(drawFormat.value)) drawFormat.value = 'png'
+
+/**
+ * 齿轮面板里改绘画参数 = 改会话设置（持久生效，稀疏合并写回后端）。
+ * 不做本地乐观赋值：面板绑定会话存储值，写入成功由 store 回流，失败保持原值
+ * （即自动回滚）并给出可见提示。
+ */
+async function changeDrawSetting(patch: Partial<DrawSettings>) {
+  if (!store.activeSessionId) {
+    ElMessage.warning('还没有会话：发送第一条消息创建会话后即可保存。')
+    return
+  }
+  try {
+    await store.updateSessionSettings({ draw: patch })
+  } catch (error: any) {
+    ElMessage.error(error?.message || '保存绘画参数失败，已恢复原值')
+  }
 }
 async function scrollToBottom() {
   await nextTick()
@@ -395,7 +425,6 @@ async function initialize() {
     }
     if (!isCurrentSelection(generation)) return
     syncProviderSelection()
-    syncDrawOptions()
     await scrollToBottom()
   } catch (error: any) {
     if (!disposed) ElMessage.error(error.message || '初始化创作页面失败')
@@ -547,31 +576,6 @@ async function handleSystemCommand(prompt: string, attachments: UploadResponse[]
         ElMessage.info('正在终止请求…')
       }
       return { handled: true }
-    case 'models':
-      await store.fetchProviders()
-      mode.value = 'chat'
-      modelVisible.value = true
-      return { handled: true }
-    case 'model': {
-      const providerId = parseId(command.argument)
-      if (providerId == null) {
-        ElMessage.warning('用法：/model <模型ID>；可使用 /models 查看列表。')
-        return { handled: true }
-      }
-      if (store.activeSessionId == null) {
-        ElMessage.warning('请先创建或切换到一个会话。')
-        return { handled: true }
-      }
-      const provider = store.chatProviders.find((item) => item.id === providerId)
-      if (!provider) {
-        ElMessage.warning(`未找到对话模型 #${providerId}，可使用 /models 查看列表。`)
-        return { handled: true }
-      }
-      await store.updateSessionProviders(provider.id, undefined)
-      selectedChatProviderId.value = provider.id
-      ElMessage.success(`当前会话已切换至 ${provider.name || provider.providerId} / ${provider.modelName}`)
-      return { handled: true }
-    }
     case 'draw':
       if (!command.argument) {
         ElMessage.warning('用法：/draw <绘图提示词>')
@@ -581,6 +585,12 @@ async function handleSystemCommand(prompt: string, attachments: UploadResponse[]
       inputText.value = command.argument
       return { handled: true, keepDraft: true }
     default:
+      // 有 UI 的端不再支持 /model、/models：模型切换走齿轮「会话配置」（会话默认）
+      // 或对话框内的临时下拉框。命令仅是纯文本渠道（飞书机器人）的手段。
+      if (command.rawName === 'model' || command.rawName === 'models') {
+        ElMessage.warning('模型切换请使用输入框旁的模型下拉框（仅本次）或齿轮「会话配置」（会话默认）。')
+        return { handled: true }
+      }
       ElMessage.warning(`未知命令 /${command.rawName}；输入 /help 查看可用命令。`)
       return { handled: true, keepDraft: true }
   }
@@ -617,19 +627,23 @@ async function handleSubmit() {
   pendingAttachments.value = []
   historyReferences.value = []
   try {
+    // 临时切换只影响这一次：null 表示跟随会话默认。
     if (mode.value === 'draw') {
       await store.draw({
         prompt,
         attachmentIds: attachments.map((item) => item.id),
         referenceUrls: historyRefs.map((ref) => referenceUrlForBackend(ref.url, getAppBasePath())),
-        imageProviderId: selectedImageProviderId.value,
+        imageProviderId: tempImageProviderId.value,
         size: drawSize.value,
         quality: drawQuality.value,
         format: drawFormat.value,
       }, [...attachments.map(referenceFromUpload), ...historyRefs])
     } else {
-      await store.chat(prompt, attachments.map((item) => item.id), selectedChatProviderId.value, attachments)
+      await store.chat(prompt, attachments.map((item) => item.id), tempChatProviderId.value, attachments)
     }
+    // 发送后回到会话默认。
+    tempChatProviderId.value = null
+    tempImageProviderId.value = null
     await scrollToBottom()
   } catch (error: any) {
     if (error?.name !== 'CanceledError') ElMessage.error(error.message || '请求失败，请稍后重试')
@@ -650,9 +664,9 @@ function toggleMode() {
   historyReferences.value = []
 }
 
+/** 齿轮 = 会话配置，与模式无关（三端一致）。面板直接绑定会话存储值。 */
 function openSettingsPanel() {
-  if (mode.value === 'draw') openDrawSettings()
-  else openModelPicker()
+  sessionConfigVisible.value = true
 }
 
 const refreshing = ref(false)
@@ -939,17 +953,43 @@ async function confirmReferenceSelection() {
   }
 }
 
-async function selectModel(id: number | null) {
-  if (mode.value === 'chat') selectedChatProviderId.value = id
-  else selectedImageProviderId.value = id
-  modelVisible.value = false
-  syncDrawOptions()
-  if (!store.activeSessionId) return
+/** 会话配置：写入会话默认对话模型（持久）。失败回滚到写入前的值。 */
+async function selectSessionChatProvider(id: number | null) {
+  if (!store.activeSessionId) {
+    ElMessage.warning('还没有会话：发送第一条消息创建会话后即可保存。')
+    return
+  }
+  const previous = selectedChatProviderId.value
+  selectedChatProviderId.value = id
   try {
-    await store.updateSessionProviders(mode.value === 'chat' ? id : undefined, mode.value === 'draw' ? id : undefined)
-    ElMessage.success('当前会话模型已更新')
+    await persistSessionProviders(id, undefined)
+  } catch {
+    selectedChatProviderId.value = previous
+  }
+}
+
+/** 会话配置：写入会话默认绘画模型（持久）。失败回滚到写入前的值。 */
+async function selectSessionImageProvider(id: number | null) {
+  if (!store.activeSessionId) {
+    ElMessage.warning('还没有会话：发送第一条消息创建会话后即可保存。')
+    return
+  }
+  const previous = selectedImageProviderId.value
+  selectedImageProviderId.value = id
+  try {
+    await persistSessionProviders(undefined, id)
+  } catch {
+    selectedImageProviderId.value = previous
+  }
+}
+
+async function persistSessionProviders(chatProviderId?: number | null, imageProviderId?: number | null) {
+  try {
+    await store.updateSessionProviders(chatProviderId, imageProviderId)
+    ElMessage.success('会话默认模型已更新')
   } catch (error: any) {
-    ElMessage.error(error.message || '保存模型选择失败')
+    ElMessage.error(error?.message || '保存模型选择失败，已恢复原值')
+    throw error
   }
 }
 
@@ -1081,8 +1121,9 @@ async function handleEditSend() {
     return
   }
   const isDraw = message.messageType === 'DRAW_REQUEST'
-  const chatProviderId = isDraw ? null : selectedChatProviderId.value
-  const imageProviderId = isDraw ? selectedImageProviderId.value : null
+  // 临时切换语义：对话用输入框下拉的临时选择，绘画用本次临时选择的绘画模型。
+  const chatProviderId = isDraw ? null : tempChatProviderId.value
+  const imageProviderId = isDraw ? tempImageProviderId.value : null
 
   try {
     // Unified edit/resend: save the (possibly adjusted) prompt then re-trigger.
@@ -1093,6 +1134,8 @@ async function handleEditSend() {
     editingMessageId.value = null
     editingAction.value = null
     inputText.value = ''
+    tempChatProviderId.value = null
+    tempImageProviderId.value = null
     await scrollToBottom()
   } catch (error: any) {
     if (error?.name !== 'CanceledError') ElMessage.error(error.message || '重新发送失败，可重新点击发送重试')
@@ -1183,8 +1226,21 @@ async function resendMessage(message: Message) {
     startComposerEditing(message, 'resend')
     return
   }
+  // 重新生成走统一的弹窗：默认选中这条消息当时实际使用的模型，可临时改选。
+  regenerateTargetId.value = message.id
+  regenerateDialogVisible.value = true
+}
+
+const regenerateTarget = computed(() => regenerateTargetId.value == null
+  ? null
+  : store.messages.find((item) => item.id === regenerateTargetId.value) || null)
+
+async function confirmRegenerate(payload: { chatProviderId: number | null; imageProviderId: number | null }) {
+  const target = regenerateTarget.value
+  if (!target) return
   try {
-    await store.regenerateMessage(message.id, selectedChatProviderId.value, selectedImageProviderId.value)
+    await store.regenerateMessage(target.id, payload.chatProviderId, payload.imageProviderId)
+    regenerateDialogVisible.value = false
     await scrollToBottom()
   } catch (error: any) {
     if (error?.name !== 'CanceledError') ElMessage.error(error.message || '重新生成失败')
@@ -1193,14 +1249,6 @@ async function resendMessage(message: Message) {
 
 function formatTime(value: string) {
   return formatTimeHm(value, '')
-}
-
-function openModelPicker() {
-  modelVisible.value = true
-}
-
-function openDrawSettings() {
-  drawSettingsVisible.value = true
 }
 
 /** 🖼 reference button: panel with camera/album direct-add + multi-select history grid. */
@@ -1235,15 +1283,10 @@ watch(() => store.activeSessionId, syncProviderSelection)
 watch(() => store.activeSessionId, resetComposerDraft)
 watch(inputText, () => void nextTick(() => autoResizeTextarea()))
 watch(mode, () => {
-  if (mode.value === 'chat' && selectedChatProviderId.value == null) {
-    selectedChatProviderId.value = resolveProviderId(null, defaultChatProviderId.value, store.chatProviders)
-  }
-  if (mode.value === 'draw' && selectedImageProviderId.value == null) {
-    selectedImageProviderId.value = resolveProviderId(null, defaultImageProviderId.value, store.imageProviders)
-  }
-  syncDrawOptions()
+  // 切换对话/绘画时，上一次的临时选择不跨模式复用。
+  tempChatProviderId.value = null
+  tempImageProviderId.value = null
 })
-watch([selectedImageProviderId, () => store.imageProviders.length], syncDrawOptions)
 
 watch(
   () => route.params.id,
@@ -1578,6 +1621,17 @@ const debugInfo = computed(() => {
           <FullScreen aria-hidden="true" />
         </button>
       </div>
+      <!-- 临时切换（仅本次）：发送后回到会话默认。 -->
+      <div v-if="!isEditing" class="composer-temp-row">
+        <TempModelSelect
+          v-model="tempProviderId"
+          :providers="tempProviders"
+          :default-provider-id="tempDefaultProvider?.id ?? null"
+          :default-label="tempDefaultLabel"
+          :disabled="store.loading"
+          :select-label="mode === 'chat' ? '临时切换对话模型' : '临时切换绘画模型'"
+        />
+      </div>
       <div class="composer-toolbar" role="toolbar" aria-label="创作工具">
         <template v-if="!isEditing">
           <button
@@ -1628,8 +1682,8 @@ const debugInfo = computed(() => {
           <button
             class="tool-btn"
             type="button"
-            :aria-label="mode === 'draw' ? '绘画设置' : '选择对话模型'"
-            :title="mode === 'draw' ? `设置 · ${drawSize} · ${drawQuality}` : `模型 · ${selectedChatProviderLabel}`"
+            aria-label="会话配置"
+            title="会话配置（会话默认模型与绘画参数）"
             @click="openSettingsPanel"
           >
             <Setting aria-hidden="true" />
@@ -1683,201 +1737,36 @@ const debugInfo = computed(() => {
       flush above the keyboard. Nav returns on blur / keyboard close.
     -->
 
-    <el-drawer v-model="drawSettingsVisible" direction="btt" size="auto" class="h5-drawer draw-settings-drawer" :with-header="false">
+    <el-drawer v-model="sessionConfigVisible" direction="btt" size="auto" class="h5-drawer session-config-drawer" :with-header="false">
       <div class="drawer-title compact">
         <div>
-          <strong>绘画设置</strong>
-          <span>调整尺寸、质量与格式 · 当前模型 {{ selectedProviderLabel }}</span>
-        </div>
-        <button type="button" @click="openModelPicker(); drawSettingsVisible = false">换模型</button>
-      </div>
-      <div class="draw-settings-fields">
-        <label><span>尺寸 / 比例</span><el-select v-model="drawSize" aria-label="绘画尺寸或比例"><el-option v-for="option in drawSizeOptions" :key="option" :label="option" :value="option" /></el-select></label>
-        <label><span>质量</span><el-select v-model="drawQuality" aria-label="绘画质量"><el-option v-for="option in drawQualityOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-        <label><span>格式</span><el-select v-model="drawFormat" aria-label="图片格式"><el-option v-for="option in drawFormatOptions" :key="option" :label="option.toUpperCase()" :value="option" /></el-select></label>
-      </div>
-    </el-drawer>
-
-    <el-drawer
-      v-model="referenceVisible"
-      direction="btt"
-      size="auto"
-      class="h5-drawer reference-drawer"
-      :class="{ 'reference-fullscreen': referenceFullscreen }"
-      :with-header="false"
-      @closed="resetReferencePanel"
-    >
-      <div class="drawer-title compact">
-        <div>
-          <strong>添加参考图</strong>
-          <span>相机 / 相册直接添加，历史图片多选后确认</span>
+          <strong>会话配置</strong>
+          <span>会话默认对话模型 / 绘画模型 / 绘画参数</span>
         </div>
       </div>
-      <div class="reference-panel">
-        <div class="reference-body">
-          <aside class="reference-side-rail" aria-label="图片来源">
-            <label
-              class="reference-side-action"
-              :class="{ disabled: store.loading || uploading || referenceAdding }"
-              title="拍照"
-              aria-label="拍照"
-              @click="triggerCamera"
-            >
-              <Camera aria-hidden="true" />
-              <span>相机</span>
-              <input
-                ref="cameraInputRef"
-                type="file"
-                class="reference-side-file-input"
-                accept="image/*"
-                capture="environment"
-                :disabled="store.loading || uploading || referenceAdding"
-                @pointerdown="onFileInputPrimeStart"
-                @touchstart="onFileInputPrimeStart"
-                @pointerup="onFileInputPrime"
-                @touchend="onFileInputPrime"
-                @click="onFileInputClick"
-                @change="handleImagePick"
-              >
-            </label>
-            <label
-              class="reference-side-action"
-              :class="{ disabled: store.loading || uploading || referenceAdding }"
-              title="从相册选择"
-              aria-label="从相册选择"
-              @click="triggerAlbum"
-            >
-              <Picture aria-hidden="true" />
-              <span>相册</span>
-              <input
-                ref="albumInputRef"
-                type="file"
-                class="reference-side-file-input"
-                accept="image/*"
-                multiple
-                :disabled="store.loading || uploading || referenceAdding"
-                @pointerdown="onFileInputPrimeStart"
-                @touchstart="onFileInputPrimeStart"
-                @pointerup="onFileInputPrime"
-                @touchend="onFileInputPrime"
-                @click="onFileInputClick"
-                @change="handleImagePick"
-              >
-            </label>
-            <button
-              type="button"
-              class="reference-side-action"
-              :class="{ active: referenceSourceTab === 'history' }"
-              :aria-pressed="referenceSourceTab === 'history'"
-              title="历史图片"
-              aria-label="历史图片"
-              @click="showHistoryGrid"
-            >
-              <Collection aria-hidden="true" />
-              <span>历史图</span>
-            </button>
-          </aside>
-          <div class="reference-main">
-            <div class="reference-main-header">
-              <span class="reference-main-title">历史图片</span>
-              <button
-                type="button"
-                class="fullscreen-toggle"
-                :title="referenceFullscreen ? '退出全屏' : '展开全屏'"
-                :aria-label="referenceFullscreen ? '退出全屏' : '展开全屏'"
-                @click="toggleReferenceFullscreen"
-              >
-                <FullScreen v-if="!referenceFullscreen" aria-hidden="true" />
-                <template v-else>
-                  <Crop aria-hidden="true" />
-                  <span>退出</span>
-                </template>
-              </button>
-            </div>
-            <template v-if="historyImages.length">
-              <div class="history-reference-grid">
-                <button
-                  v-for="item in historyImages"
-                  :key="item.id"
-                  type="button"
-                  class="history-reference-tile"
-                  :class="{ selected: isHistorySelected(item.id) }"
-                  :disabled="referenceAdding || store.loading"
-                  :aria-pressed="isHistorySelected(item.id)"
-                  @click="toggleHistorySelection(item)"
-                >
-                  <el-image :src="historyTileUrl(item)" fit="cover" @error="onHistoryThumbError(item)" />
-                  <span class="history-check" :class="{ checked: isHistorySelected(item.id) }" aria-hidden="true">
-                    <Check v-if="isHistorySelected(item.id)" />
-                  </span>
-                </button>
-              </div>
-            </template>
-            <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先用左侧相机或相册添加。</p>
-          </div>
-        </div>
-        <div class="reference-footer">
-          <el-tooltip
-            v-if="showOriginalCheckbox"
-            content="仅对历史作品生效；本地图片始终为原图"
-            placement="top"
-            :show-after="200"
-          >
-            <label class="reference-original">
-              <input v-model="referenceUseOriginal" type="checkbox">
-              <span>原图</span>
-            </label>
-          </el-tooltip>
-          <div class="reference-preview-strip" aria-label="已选参考图">
-            <template v-if="referencePreviewItems.length">
-              <div
-                v-for="(item, index) in referencePreviewItems"
-                :key="item.id"
-                class="reference-preview-chip"
-              >
-                <el-image :src="item.url" fit="cover" />
-                <em v-if="index === 0 && referenceSelectionCount > 1" class="reference-preview-count">{{ referenceSelectionCount }}</em>
-                <button
-                  type="button"
-                  class="reference-preview-remove"
-                  aria-label="移除已选图片"
-                  @click.stop="removeHistorySelection(item.id)"
-                >
-                  <Close />
-                </button>
-              </div>
-            </template>
-            <span v-else class="reference-preview-empty">未选择图片</span>
-          </div>
-          <button
-            type="button"
-            class="reference-preview-btn"
-            :disabled="!referenceSelectionCount"
-            title="预览已选图片"
-            @click="openReferencePreview"
-          >
-            <View aria-hidden="true" />
-            <span>预览</span>
-          </button>
-          <button
-            type="button"
-            class="reference-add-btn"
-            :class="{ active: canConfirmReference }"
-            :disabled="!canConfirmReference"
-            @click="confirmReferenceSelection"
-          >
-            {{ referenceAdding ? '添加中…' : '添加' }}
-          </button>
-        </div>
-      </div>
-    </el-drawer>
-
-    <el-drawer v-model="modelVisible" direction="btt" size="68%" class="h5-drawer model-drawer" :with-header="false">
-      <div class="drawer-title compact"><div><strong>选择{{ mode === 'draw' ? '绘画' : '对话' }}模型</strong><span>模型选择会保存到当前会话</span></div></div>
-      <div class="model-list">
-        <button class="model-row" :class="{ active: selectedProviderId === null }" type="button" @click="selectModel(null)"><span><strong>系统默认模型</strong><small>使用后台配置的默认模型</small></span><span v-if="selectedProviderId === null" class="model-check" aria-hidden="true"><Check /></span></button>
-        <button v-for="provider in currentProviders" :key="provider.id" class="model-row" :class="{ active: provider.id === selectedProviderId }" type="button" @click="selectModel(provider.id)"><span><strong>{{ provider.name || provider.providerId }}</strong><small>#{{ provider.id }} · {{ provider.modelName }}</small></span><span v-if="provider.id === selectedProviderId" class="model-check" aria-hidden="true"><Check /></span></button>
-      </div>
+      <SessionConfigPanel
+        :chat-providers="store.chatProviders"
+        :image-providers="store.imageProviders"
+        :chat-provider-id="selectedChatProviderId"
+        :image-provider-id="selectedImageProviderId"
+        :chat-default-label="chatDefaultLabel"
+        :image-default-label="imageDefaultLabel"
+        :draw-size="drawSize"
+        :draw-quality="drawQuality"
+        :draw-format="drawFormat"
+        :draw-size-options="drawSizeOptions"
+        :draw-quality-options="drawQualityOptions"
+        :draw-format-options="drawFormatOptions"
+        :draw-option-hints="drawOptionHints"
+        :has-draw-panel="false"
+        :disabled="store.loading"
+        :disabled-reason="store.activeSessionId == null ? '还没有会话：发送第一条消息创建会话后，这里的设置才能保存。' : undefined"
+        @update:chat-provider-id="selectSessionChatProvider"
+        @update:image-provider-id="selectSessionImageProvider"
+        @update:draw-size="changeDrawSetting({ size: $event })"
+        @update:draw-quality="changeDrawSetting({ quality: $event })"
+        @update:draw-format="changeDrawSetting({ format: $event })"
+      />
     </el-drawer>
 
     <el-drawer v-model="imageActionVisible" direction="btt" size="auto" class="h5-drawer action-drawer" :with-header="false">
@@ -1968,6 +1857,18 @@ const debugInfo = computed(() => {
       <div><code>{{ debugInfo.ex }}</code></div>
     </div>
   </main>
+
+  <RegenerateDialog
+    v-model:visible="regenerateDialogVisible"
+    :action="regenerateTarget?.role === 'USER' ? 'resend' : 'regenerate'"
+    :message="regenerateTarget"
+    :chat-providers="store.chatProviders"
+    :image-providers="store.imageProviders"
+    :default-chat-provider-id="resolvedChatProviderId"
+    :default-image-provider-id="resolvedImageProviderId"
+    :loading="store.loading"
+    @confirm="confirmRegenerate"
+  />
 </template>
 
 <style scoped>
@@ -2292,6 +2193,12 @@ const debugInfo = computed(() => {
   background: rgba(255, 255, 255, .96);
   box-shadow: 0 -8px 24px rgba(42, 54, 93, .055);
   backdrop-filter: blur(18px);
+}
+.composer-temp-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  margin: 2px 2px 6px;
 }
 .composer-toolbar {
   display: flex;
