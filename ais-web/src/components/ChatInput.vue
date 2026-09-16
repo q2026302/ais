@@ -96,6 +96,10 @@ const previewVisible = ref(false)
 // PC 输入区浮层层级收口，自上而下：预览浮层 > el-drawer > 抽屉遮罩。
 // 各抽屉虽通过 :z-index 传值(2100~2102)，但都被全局
 // `.desktop-composer-drawer.el-drawer { z-index: 3001 !important }` 统一收口为 3001。
+// 注意：显式 :z-index 不会推进 Element Plus 的弹层自增计数器（基数 2000），
+// 所以抽屉内 el-select 之类被 teleport 到 body 的候选列表只会拿到 2000 出头，
+// 会被收口后的抽屉盖住。抽屉内下拉必须用 popper-class 显式抬层，见
+// SessionConfigPanel.vue 的 `.el-popper.session-config-select-popper`（3100）。
 // 预览浮层必须稳定高于所有抽屉，故固定为更高的常量；后续新增抽屉只要沿用
 // `.desktop-composer-drawer` 类（或被收口到 ≤ 3001），预览就仍在其上，不会回归。
 const PREVIEW_Z_INDEX = 4000

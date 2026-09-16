@@ -78,6 +78,7 @@ const note = computed(() => {
         :model-value="chatProviderId"
         :disabled="controlsDisabled"
         class="session-config__control"
+        popper-class="session-config-select-popper"
         aria-label="会话默认对话模型"
         @update:model-value="emit('update:chatProviderId', $event ?? null)"
       >
@@ -97,6 +98,7 @@ const note = computed(() => {
         :model-value="imageProviderId"
         :disabled="controlsDisabled"
         class="session-config__control"
+        popper-class="session-config-select-popper"
         aria-label="会话默认绘画模型"
         @update:model-value="emit('update:imageProviderId', $event ?? null)"
       >
@@ -118,6 +120,7 @@ const note = computed(() => {
           <el-select
             :model-value="drawSize"
             :disabled="controlsDisabled"
+            popper-class="session-config-select-popper"
             aria-label="绘画尺寸或比例"
             @update:model-value="emit('update:drawSize', $event)"
           >
@@ -129,6 +132,7 @@ const note = computed(() => {
           <el-select
             :model-value="drawQuality"
             :disabled="controlsDisabled"
+            popper-class="session-config-select-popper"
             aria-label="绘画质量"
             @update:model-value="emit('update:drawQuality', $event)"
           >
@@ -145,6 +149,7 @@ const note = computed(() => {
           <el-select
             :model-value="drawFormat"
             :disabled="controlsDisabled"
+            popper-class="session-config-select-popper"
             aria-label="图片格式"
             @update:model-value="emit('update:drawFormat', $event)"
           >
@@ -207,5 +212,28 @@ const note = computed(() => {
   color: #a86a00;
   font-size: 12px;
   line-height: 1.5;
+}
+</style>
+
+<!--
+  非 scoped：el-select 的候选列表被 teleport 到 body，脱离本组件作用域，
+  必须用全局选择器覆盖。
+-->
+<style>
+/*
+  层级收口原因（PC 端被面板遮挡的根因）：PC 的 ChatInput 抽屉为了让抽屉压住
+  页面内容，用 `z-index: 3001 !important` 手工把 el-drawer 抬到了 3001，遮罩
+  则固定在 3000；但 Element Plus 的弹层 z-index 依赖内部自增计数器
+  （`useZIndex`，基数 2000），而 `:z-index` 显式传值的抽屉**不会**推进该计数器，
+  于是抽屉内 el-select 的候选列表只拿到 2000 出头，被 3001 的面板盖住 ——
+  这正是「PC 展开下拉看不见候选、移动端正常」的差异所在（移动端抽屉未手工抬层，
+  自增层级天然高于面板）。
+
+  这里给本面板全部 5 个下拉的候选列表一个高于 PC 抽屉(3001)/遮罩(3000)、
+  低于参考图预览浮层(4000) 的固定层级，三端共用；移动端抽屉自增层级在 2001
+  左右，因此该值同样高于移动端面板，行为保持一致、不回归。
+*/
+.el-popper.session-config-select-popper {
+  z-index: 3100 !important;
 }
 </style>
