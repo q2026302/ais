@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Camera,
   ChatDotRound,
+  Check,
   Close,
   Collection,
   CopyDocument,
@@ -1767,6 +1768,180 @@ const debugInfo = computed(() => {
         @update:draw-quality="changeDrawSetting({ quality: $event })"
         @update:draw-format="changeDrawSetting({ format: $event })"
       />
+    </el-drawer>
+
+    <el-drawer
+      v-model="referenceVisible"
+      direction="btt"
+      size="auto"
+      class="h5-drawer reference-drawer"
+      :class="{ 'reference-fullscreen': referenceFullscreen }"
+      :with-header="false"
+      @closed="resetReferencePanel"
+    >
+      <div class="drawer-title compact">
+        <div>
+          <strong>添加参考图</strong>
+          <span>相机 / 相册直接添加，历史图片多选后确认</span>
+        </div>
+      </div>
+      <div class="reference-panel">
+        <div class="reference-body">
+          <aside class="reference-side-rail" aria-label="图片来源">
+            <label
+              class="reference-side-action"
+              :class="{ disabled: store.loading || uploading || referenceAdding }"
+              title="拍照"
+              aria-label="拍照"
+              @click="triggerCamera"
+            >
+              <Camera aria-hidden="true" />
+              <span>相机</span>
+              <input
+                ref="cameraInputRef"
+                type="file"
+                class="reference-side-file-input"
+                accept="image/*"
+                capture="environment"
+                :disabled="store.loading || uploading || referenceAdding"
+                @pointerdown="onFileInputPrimeStart"
+                @touchstart="onFileInputPrimeStart"
+                @pointerup="onFileInputPrime"
+                @touchend="onFileInputPrime"
+                @click="onFileInputClick"
+                @change="handleImagePick"
+              >
+            </label>
+            <label
+              class="reference-side-action"
+              :class="{ disabled: store.loading || uploading || referenceAdding }"
+              title="从相册选择"
+              aria-label="从相册选择"
+              @click="triggerAlbum"
+            >
+              <Picture aria-hidden="true" />
+              <span>相册</span>
+              <input
+                ref="albumInputRef"
+                type="file"
+                class="reference-side-file-input"
+                accept="image/*"
+                multiple
+                :disabled="store.loading || uploading || referenceAdding"
+                @pointerdown="onFileInputPrimeStart"
+                @touchstart="onFileInputPrimeStart"
+                @pointerup="onFileInputPrime"
+                @touchend="onFileInputPrime"
+                @click="onFileInputClick"
+                @change="handleImagePick"
+              >
+            </label>
+            <button
+              type="button"
+              class="reference-side-action"
+              :class="{ active: referenceSourceTab === 'history' }"
+              :aria-pressed="referenceSourceTab === 'history'"
+              title="历史图片"
+              aria-label="历史图片"
+              @click="showHistoryGrid"
+            >
+              <Collection aria-hidden="true" />
+              <span>历史图</span>
+            </button>
+          </aside>
+          <div class="reference-main">
+            <div class="reference-main-header">
+              <span class="reference-main-title">历史图片</span>
+              <button
+                type="button"
+                class="fullscreen-toggle"
+                :title="referenceFullscreen ? '退出全屏' : '展开全屏'"
+                :aria-label="referenceFullscreen ? '退出全屏' : '展开全屏'"
+                @click="toggleReferenceFullscreen"
+              >
+                <FullScreen v-if="!referenceFullscreen" aria-hidden="true" />
+                <template v-else>
+                  <Crop aria-hidden="true" />
+                  <span>退出</span>
+                </template>
+              </button>
+            </div>
+            <template v-if="historyImages.length">
+              <div class="history-reference-grid">
+                <button
+                  v-for="item in historyImages"
+                  :key="item.id"
+                  type="button"
+                  class="history-reference-tile"
+                  :class="{ selected: isHistorySelected(item.id) }"
+                  :disabled="referenceAdding || store.loading"
+                  :aria-pressed="isHistorySelected(item.id)"
+                  @click="toggleHistorySelection(item)"
+                >
+                  <el-image :src="historyTileUrl(item)" fit="cover" @error="onHistoryThumbError(item)" />
+                  <span class="history-check" :class="{ checked: isHistorySelected(item.id) }" aria-hidden="true">
+                    <Check v-if="isHistorySelected(item.id)" />
+                  </span>
+                </button>
+              </div>
+            </template>
+            <p v-else class="reference-empty-hint">当前会话还没有历史作品，可先用左侧相机或相册添加。</p>
+          </div>
+        </div>
+        <div class="reference-footer">
+          <el-tooltip
+            v-if="showOriginalCheckbox"
+            content="仅对历史作品生效；本地图片始终为原图"
+            placement="top"
+            :show-after="200"
+          >
+            <label class="reference-original">
+              <input v-model="referenceUseOriginal" type="checkbox">
+              <span>原图</span>
+            </label>
+          </el-tooltip>
+          <div class="reference-preview-strip" aria-label="已选参考图">
+            <template v-if="referencePreviewItems.length">
+              <div
+                v-for="(item, index) in referencePreviewItems"
+                :key="item.id"
+                class="reference-preview-chip"
+              >
+                <el-image :src="item.url" fit="cover" />
+                <em v-if="index === 0 && referenceSelectionCount > 1" class="reference-preview-count">{{ referenceSelectionCount }}</em>
+                <button
+                  type="button"
+                  class="reference-preview-remove"
+                  aria-label="移除已选图片"
+                  @click.stop="removeHistorySelection(item.id)"
+                >
+                  <Close />
+                </button>
+              </div>
+            </template>
+            <span v-else class="reference-preview-empty">未选择图片</span>
+          </div>
+          <button
+            type="button"
+            class="reference-preview-btn"
+            :disabled="!referenceSelectionCount"
+            title="预览已选图片"
+            @click="openReferencePreview"
+          >
+            <View aria-hidden="true" />
+            <span>预览</span>
+          </button>
+          <button
+            type="button"
+            class="reference-add-btn"
+            :class="{ active: canConfirmReference }"
+            :disabled="!canConfirmReference"
+            @click="confirmReferenceSelection"
+          >
+            {{ referenceAdding ? '添加中…' : '添加' }}
+          </button>
+        </div>
+      </div>
     </el-drawer>
 
     <el-drawer v-model="imageActionVisible" direction="btt" size="auto" class="h5-drawer action-drawer" :with-header="false">
